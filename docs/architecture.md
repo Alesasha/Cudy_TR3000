@@ -15,7 +15,7 @@ Users should eventually be able to open a simple local web UI, choose a routing 
    - `awg2`: HostVDS US West.
 4. VPNtype HTTP proxy exits are represented as sing-box TUN interfaces:
    - `proxygb`, `proxyca`, `proxyfr`, `proxyby`, `proxyae`, `proxyhk`, `proxykz`, `proxytr`, `proxyil`, `proxycz`, `proxypl`, `proxyfi`, `proxynl`, `proxyal`, `proxyru`, `proxyus`, `proxyde`.
-5. LokVPN is represented as a sing-box selector interface:
+5. LokVPN is technically represented as one sing-box selector interface, but exposed to users as 12 selectable profiles:
    - `lokvpn` with profiles `smart1`, `de1`, `ru1`, `nl1`, `fr1`, `se1`, `smart2`, `de2`, `ru2`, `nl2`, `fr2`, `se2`.
 
 ## Stage 1

@@ -13,7 +13,7 @@ It contains:
 - user-visible choices, including `Auto`;
 - admin-visible disabled/stale entries;
 - provider, interface, geo, and switch command metadata;
-- LokVPN profile metadata;
+- LokVPN profile metadata and 12 user-visible LokVPN choices;
 - role permissions for the future admin/user UI.
 
 User-visible list:
@@ -64,11 +64,11 @@ The snapshot records:
 
 ## Current Stage 1 Choice Count
 
-The intended user list is 21 choices:
+The intended user list is 32 choices:
 
 - `Auto`;
 - two own exits: Aktau and US West;
-- one LokVPN selector;
+- 12 LokVPN profile exits;
 - 17 VPNtype proxy exits.
 
 Admin mode also sees disabled/stale entries and internal selectors.

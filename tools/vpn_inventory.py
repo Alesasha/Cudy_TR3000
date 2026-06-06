@@ -196,7 +196,7 @@ def validate_inventory(inventory: dict[str, Any]) -> list[str]:
             errors.append(f"{sid}: enabled server is missing interface")
 
         iface = server.get("interface")
-        if iface and server.get("enabled"):
+        if iface and server.get("enabled") and server.get("kind") != "sing-box-profile":
             previous = interfaces.setdefault(iface, sid)
             if previous != sid:
                 errors.append(f"{sid}: interface {iface} is also used by {previous}")
