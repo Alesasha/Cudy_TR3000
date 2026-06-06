@@ -479,7 +479,7 @@ ADMIN_HTML = r"""<!doctype html>
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
     th { color: var(--muted); font-weight: 600; }
-    input[type="text"], select {
+    input[type="text"], input[type="password"], select {
       min-height: 34px;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -500,6 +500,11 @@ ADMIN_HTML = r"""<!doctype html>
     .status.error { color: var(--danger); }
     .status.ok { color: var(--ok); }
     .inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .toolbar { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; margin-bottom: 14px; }
+    .field { display: grid; gap: 4px; }
+    .field label { color: var(--muted); font-size: 12px; }
+    button.secondary { background: #fff; color: var(--accent); border-color: var(--line); }
+    button.danger { background: #fff; color: var(--danger); border-color: #efc0ba; }
   </style>
 </head>
 <body>
@@ -523,15 +528,30 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
     <section>
       <h2>Users</h2>
+      <form id="newUserForm" class="toolbar">
+        <div class="field"><label>ID</label><input id="newUserId" type="text" autocomplete="off"></div>
+        <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
+        <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
+        <div class="field"><label>Password</label><input id="newUserPassword" type="password" autocomplete="new-password"></div>
+        <button type="submit">Create</button>
+      </form>
+      <p id="userStatus" class="status"></p>
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Default</th><th>Enabled</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Default</th><th>Enabled</th><th>Login</th><th>Password</th><th></th></tr></thead>
         <tbody id="usersBody"></tbody>
       </table>
     </section>
     <section>
       <h2>Domain Routes</h2>
+      <form id="adminRouteForm" class="toolbar">
+        <div class="field"><label>User</label><select id="routeUser"></select></div>
+        <div class="field"><label>Domain</label><input id="adminRouteDomain" type="text" placeholder="example.com" autocomplete="off"></div>
+        <div class="field"><label>Server</label><select id="adminRouteServer"></select></div>
+        <button type="submit">Save Route</button>
+      </form>
+      <p id="adminRouteStatus" class="status"></p>
       <table>
-        <thead><tr><th>User</th><th>Domain</th><th>Server</th><th>Enabled</th></tr></thead>
+        <thead><tr><th>User</th><th>Domain</th><th>Server</th><th>Enabled</th><th></th></tr></thead>
         <tbody id="routesBody"></tbody>
       </table>
     </section>
@@ -549,6 +569,9 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function serverOptions(value) {
       return state.servers.map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${s.label}</option>`).join("");
+    }
+    function userOptions(value) {
+      return state.users.map(u => `<option value="${u.id}" ${u.id === value ? "selected" : ""}>${u.id}</option>`).join("");
     }
     function renderServers() {
       const body = document.getElementById("serversBody");
@@ -590,20 +613,83 @@ ADMIN_HTML = r"""<!doctype html>
     function renderUsers() {
       const body = document.getElementById("usersBody");
       body.innerHTML = state.users.map(u => `
-        <tr>
+        <tr data-id="${u.id}">
           <td>${u.id}</td>
-          <td>${u.display_name}</td>
-          <td>${u.role}</td>
-          <td>${u.default_server_id}</td>
-          <td>${u.enabled ? "yes" : "no"}</td>
+          <td><input type="text" data-field="display_name" value="${u.display_name}"></td>
+          <td><select data-field="role"><option value="user" ${u.role === "user" ? "selected" : ""}>user</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>admin</option></select></td>
+          <td><select data-field="default_server_id">${serverOptions(u.default_server_id)}</select></td>
+          <td><input type="checkbox" data-field="enabled" ${u.enabled ? "checked" : ""}></td>
+          <td>${u.has_login ? "yes" : "no"}</td>
+          <td class="inline"><input type="password" data-field="password" placeholder="new password"><button class="secondary" data-password="${u.id}">Set</button></td>
+          <td><button data-save-user="${u.id}">Save</button></td>
         </tr>
       `).join("");
+      body.querySelectorAll("[data-save-user]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const row = button.closest("tr");
+          const status = document.getElementById("userStatus");
+          status.className = "status";
+          try {
+            await api("/api/admin/users", {
+              method: "POST",
+              body: JSON.stringify({
+                id: button.dataset.saveUser,
+                display_name: row.querySelector('[data-field="display_name"]').value,
+                role: row.querySelector('[data-field="role"]').value,
+                default_server_id: row.querySelector('[data-field="default_server_id"]').value,
+                enabled: row.querySelector('[data-field="enabled"]').checked
+              })
+            });
+            status.textContent = "Saved.";
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
+        });
+      });
+      body.querySelectorAll("[data-password]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const row = button.closest("tr");
+          const password = row.querySelector('[data-field="password"]').value;
+          const status = document.getElementById("userStatus");
+          status.className = "status";
+          try {
+            await api("/api/admin/user-password", {
+              method: "POST",
+              body: JSON.stringify({ id: button.dataset.password, password })
+            });
+            row.querySelector('[data-field="password"]').value = "";
+            status.textContent = "Password saved.";
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
+        });
+      });
+      document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
     }
     function renderRoutes() {
       const body = document.getElementById("routesBody");
       body.innerHTML = state.routes.length ? state.routes.map(r => `
-        <tr><td>${r.user_id}</td><td>${r.domain}</td><td>${r.server_id}</td><td>${r.enabled ? "yes" : "no"}</td></tr>
+        <tr>
+          <td>${r.user_id}</td>
+          <td>${r.domain}</td>
+          <td>${r.server_id}</td>
+          <td>${r.enabled ? "yes" : "no"}</td>
+          <td><button class="danger" data-delete-route="${r.user_id}|${r.domain}">Delete</button></td>
+        </tr>
       `).join("") : '<tr><td colspan="4" class="muted">No routes.</td></tr>';
+      body.querySelectorAll("[data-delete-route]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const [userId, domain] = button.dataset.deleteRoute.split("|");
+          await api(`/api/admin/domain-routes?user_id=${encodeURIComponent(userId)}&domain=${encodeURIComponent(domain)}`, { method: "DELETE" });
+          await load();
+        });
+      });
     }
     async function load() {
       const data = await api("/api/admin");
@@ -613,7 +699,56 @@ ADMIN_HTML = r"""<!doctype html>
       renderServers();
       renderUsers();
       renderRoutes();
+      document.getElementById("adminRouteServer").innerHTML = serverOptions(document.getElementById("adminRouteServer").value || "auto");
+      document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
     }
+    document.getElementById("newUserForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("userStatus");
+      status.className = "status";
+      try {
+        await api("/api/admin/users", {
+          method: "POST",
+          body: JSON.stringify({
+            id: document.getElementById("newUserId").value,
+            display_name: document.getElementById("newUserName").value || document.getElementById("newUserId").value,
+            role: document.getElementById("newUserRole").value,
+            default_server_id: "auto",
+            enabled: true,
+            password: document.getElementById("newUserPassword").value
+          })
+        });
+        event.target.reset();
+        status.textContent = "User created.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("adminRouteForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("adminRouteStatus");
+      status.className = "status";
+      try {
+        await api("/api/admin/domain-routes", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: document.getElementById("routeUser").value,
+            domain: document.getElementById("adminRouteDomain").value,
+            server_id: document.getElementById("adminRouteServer").value
+          })
+        });
+        document.getElementById("adminRouteDomain").value = "";
+        status.textContent = "Route saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
     document.getElementById("logoutButton").addEventListener("click", async () => {
       await api("/api/logout", { method: "POST", body: "{}" });
       location.href = "/login";
@@ -1102,6 +1237,18 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/servers":
                 self.require_admin()
                 self.send_json(self.api_update_server(data))
+            elif parsed.path == "/api/admin/users":
+                self.require_admin()
+                self.send_json(self.api_admin_save_user(data))
+            elif parsed.path == "/api/admin/user-password":
+                self.require_admin()
+                self.send_json(self.api_admin_set_password(data))
+            elif parsed.path == "/api/admin/user-default-server":
+                self.require_admin()
+                self.send_json(self.api_admin_set_default_server(data))
+            elif parsed.path == "/api/admin/domain-routes":
+                self.require_admin()
+                self.send_json(self.api_admin_save_domain_route(data))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -1118,6 +1265,14 @@ class Handler(BaseHTTPRequestHandler):
                 domain = normalize_domain(query.get("domain", [""])[0])
                 with self.app.conn() as conn:
                     conn.execute("DELETE FROM user_domain_routes WHERE user_id = ? AND domain = ?", (user["id"], domain))
+                self.send_json({"ok": True})
+            elif parsed.path == "/api/admin/domain-routes":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                user_id = str(query.get("user_id", [""])[0])
+                domain = normalize_domain(query.get("domain", [""])[0])
+                with self.app.conn() as conn:
+                    conn.execute("DELETE FROM user_domain_routes WHERE user_id = ? AND domain = ?", (user_id, domain))
                 self.send_json({"ok": True})
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
@@ -1195,7 +1350,13 @@ class Handler(BaseHTTPRequestHandler):
                 "servers": admin_servers(conn),
                 "users": rows(
                     conn,
-                    "SELECT id, display_name, role, default_server_id, enabled, updated_at FROM users ORDER BY id",
+                    """
+                    SELECT id, display_name, role, default_server_id, enabled,
+                           CASE WHEN password_hash IS NULL THEN 0 ELSE 1 END AS has_login,
+                           updated_at
+                    FROM users
+                    ORDER BY id
+                    """,
                 ),
                 "routes": rows(
                     conn,
@@ -1224,6 +1385,109 @@ class Handler(BaseHTTPRequestHandler):
             if cursor.rowcount != 1:
                 raise ValueError(f"Unknown user: {user_id}")
         return {"ok": True}
+
+    def api_admin_save_user(self, data: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(data.get("id") or "").strip()
+        display_name = str(data.get("display_name") or user_id).strip()
+        role = str(data.get("role") or "user")
+        default_server_id = str(data.get("default_server_id") or "auto")
+        enabled = int(bool(data.get("enabled")))
+        password = data.get("password")
+        if password is not None:
+            password = str(password)
+            if len(password) < 8:
+                raise ValueError("Password must be at least 8 characters")
+        if role not in {"admin", "user"}:
+            raise ValueError("role must be admin or user")
+        if not user_id or not re.match(r"^[A-Za-z0-9_.-]{2,64}$", user_id):
+            raise ValueError("user id must be 2-64 chars: A-Z a-z 0-9 _ . -")
+        if not display_name:
+            raise ValueError("display name is required")
+        timestamp = now()
+        with self.app.conn() as conn:
+            validate_server_id(conn, default_server_id, require_user_visible=True)
+            existing = row(conn, "SELECT id FROM users WHERE id = ?", (user_id,))
+            if existing is None:
+                if not password:
+                    raise ValueError("Password is required for a new user")
+                salt, password_hash = hash_password(password)
+                conn.execute(
+                    """
+                    INSERT INTO users (
+                      id, display_name, role, default_server_id, password_salt,
+                      password_hash, enabled, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (user_id, display_name, role, default_server_id, salt, password_hash, enabled, timestamp, timestamp),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET display_name = ?, role = ?, default_server_id = ?, enabled = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (display_name, role, default_server_id, enabled, timestamp, user_id),
+                )
+                if password:
+                    salt, password_hash = hash_password(password)
+                    conn.execute(
+                        """
+                        UPDATE users
+                        SET password_salt = ?, password_hash = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (salt, password_hash, timestamp, user_id),
+                    )
+        return {"ok": True}
+
+    def api_admin_set_password(self, data: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(data.get("id") or "").strip()
+        password = str(data.get("password") or "")
+        if len(password) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        salt, password_hash = hash_password(password)
+        with self.app.conn() as conn:
+            cursor = conn.execute(
+                "UPDATE users SET password_salt = ?, password_hash = ?, updated_at = ? WHERE id = ?",
+                (salt, password_hash, now(), user_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Unknown user: {user_id}")
+        return {"ok": True}
+
+    def api_admin_set_default_server(self, data: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(data.get("id") or "").strip()
+        server_id = str(data.get("server_id") or "")
+        with self.app.conn() as conn:
+            validate_server_id(conn, server_id, require_user_visible=True)
+            cursor = conn.execute(
+                "UPDATE users SET default_server_id = ?, updated_at = ? WHERE id = ?",
+                (server_id, now(), user_id),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError(f"Unknown user: {user_id}")
+        return {"ok": True}
+
+    def api_admin_save_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
+        user_id = str(data.get("user_id") or "").strip()
+        domain = normalize_domain(str(data.get("domain") or ""))
+        server_id = str(data.get("server_id") or "")
+        timestamp = now()
+        with self.app.conn() as conn:
+            validate_server_id(conn, server_id, require_user_visible=True)
+            if row(conn, "SELECT id FROM users WHERE id = ?", (user_id,)) is None:
+                raise ValueError(f"Unknown user: {user_id}")
+            conn.execute(
+                """
+                INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?)
+                ON CONFLICT(user_id, domain)
+                DO UPDATE SET server_id = excluded.server_id, enabled = 1, updated_at = excluded.updated_at
+                """,
+                (user_id, domain, server_id, timestamp, timestamp),
+            )
+        return {"ok": True, "domain": domain, "server_id": server_id}
 
     def api_save_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = self.require_user()["id"]

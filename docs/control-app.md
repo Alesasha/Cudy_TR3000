@@ -73,7 +73,10 @@ http://127.0.0.1:8765/admin
   - edit server labels;
   - enable/disable servers;
   - control user visibility;
-  - inspect users and domain route table.
+  - create users;
+  - edit user names, roles, status, and default server;
+  - reset user passwords;
+  - add or delete `domain -> server` routes for any user.
 
 ## Not Implemented Yet
 

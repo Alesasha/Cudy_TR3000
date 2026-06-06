@@ -89,6 +89,8 @@ http://127.0.0.1:8765/
 http://127.0.0.1:8765/admin
 ```
 
+The admin page can create normal users, change their passwords, enable or disable them, and edit their domain routes.
+
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.
