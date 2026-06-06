@@ -35,10 +35,12 @@ Use a private repository until all history is checked for secrets. If a secret w
 
 GitHub login passwords must not be embedded into remote URLs, scripts, command history, or CI settings. Use Git Credential Manager, SSH keys, or a fine-grained Personal Access Token.
 
-## Local Web App Authentication
+## Local Web App Identity
 
 The local control app stores only password salts and PBKDF2 password hashes in SQLite.
 
-The app uses `HttpOnly` cookie sessions stored in the local SQLite database. This is enough for the local MVP bound to `127.0.0.1`.
+For ordinary VPN users, the preferred identity source is the AmneziaWG client IP. If a user reaches the panel from `10.77.0.x` and that address is bound to `users.client_ip`, the user is treated as already authenticated by the VPN.
+
+For administrator/local access, the app can also use `HttpOnly` cookie sessions stored in the local SQLite database. This is enough for the local MVP bound to `127.0.0.1`.
 
 Before exposing the app to LAN or the internet, add TLS/reverse proxy hardening, CSRF protection, rate limiting, and a clear deployment boundary.

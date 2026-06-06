@@ -6,6 +6,8 @@ The project turns a Cudy TR3000/OpenWrt router into a managed VPN/proxy routing 
 
 Users should eventually be able to open a simple local web UI, choose a routing exit from the available servers, or use `Auto`. Administrators should be able to inspect and edit all servers, provider profiles, users, and per-user domain routing rules.
 
+AmneziaVPN/AmneziaWG remains the user transport. The control app does not replace the VPN client; it binds a web user to the VPN client IP and decides how Cudy should route that user's traffic.
+
 ## Current Routing Layers
 
 1. Cudy is the central router.
@@ -43,5 +45,12 @@ Stage 2 adds the local database and admin/user model. SQLite is enough at this s
 The first implementation is `tools/vpn_control_app.py`. It stores local choices and provides a simple user/admin UI without changing live Cudy routing.
 
 Stage 3 should connect saved choices to live Cudy routing generation and deployment.
+
+Effective routing is built per user from two layers:
+
+- global admin `domain -> server` routes;
+- user-specific `domain -> server` routes.
+
+If both layers contain the same domain, the user-specific route wins.
 
 Stage 4 should implement `Auto`: benchmark exits per domain, keep a cache of roughly 300 active domains, and refresh cached leaders in the background.

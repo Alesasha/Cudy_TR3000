@@ -73,7 +73,20 @@ python tools\vpn_control_app.py create-user admin --role admin
 Create a normal user:
 
 ```powershell
-python tools\vpn_control_app.py create-user user1 --role user --display-name "User 1"
+python tools\vpn_control_app.py create-user user1 --role user --display-name "User 1" --client-ip 10.77.0.25 --no-password-change
+```
+
+Import existing Cudy AmneziaVPN users:
+
+```powershell
+python tools\vpn_control_app.py import-cudy-clients
+```
+
+Preview effective per-user routing:
+
+```powershell
+python tools\vpn_control_app.py route-plan
+python tools\vpn_control_app.py route-plan --json
 ```
 
 Run the local web UI:
@@ -89,7 +102,7 @@ http://127.0.0.1:8765/
 http://127.0.0.1:8765/admin
 ```
 
-The admin page can create normal users, change their passwords, enable or disable them, and edit their domain routes.
+The admin page can create normal users, bind them to VPN client IPs, change passwords if needed, enable or disable them, edit global routes, and edit per-user domain routes.
 
 ## OpenWrt Deployment Artifacts
 

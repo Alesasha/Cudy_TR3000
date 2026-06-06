@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   default_server_id TEXT NOT NULL DEFAULT 'auto',
+  client_ip TEXT,
   password_salt TEXT,
   password_hash TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
@@ -85,6 +86,16 @@ CREATE TABLE IF NOT EXISTS user_domain_routes (
   updated_at TEXT NOT NULL,
   UNIQUE(user_id, domain),
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(server_id) REFERENCES servers(id)
+);
+
+CREATE TABLE IF NOT EXISTS global_domain_routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  domain TEXT NOT NULL UNIQUE,
+  server_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
   FOREIGN KEY(server_id) REFERENCES servers(id)
 );
 
@@ -532,6 +543,7 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>ID</label><input id="newUserId" type="text" autocomplete="off"></div>
         <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
         <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
+        <div class="field"><label>Client IP</label><input id="newUserClientIp" type="text" placeholder="10.77.0.x" autocomplete="off"></div>
         <div class="field">
           <label>Password</label>
           <div class="inline">
@@ -543,8 +555,21 @@ ADMIN_HTML = r"""<!doctype html>
       </form>
       <p id="userStatus" class="status"></p>
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Default</th><th>Enabled</th><th>Login</th><th>Password</th><th></th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Client IP</th><th>Default</th><th>Enabled</th><th>Login</th><th>Password</th><th></th></tr></thead>
         <tbody id="usersBody"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Global Domain Routes</h2>
+      <form id="globalRouteForm" class="toolbar">
+        <div class="field"><label>Domain</label><input id="globalRouteDomain" type="text" placeholder="example.com" autocomplete="off"></div>
+        <div class="field"><label>Server</label><select id="globalRouteServer"></select></div>
+        <button type="submit">Save Global</button>
+      </form>
+      <p id="globalRouteStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Domain</th><th>Server</th><th>Enabled</th><th></th></tr></thead>
+        <tbody id="globalRoutesBody"></tbody>
       </table>
     </section>
     <section>
@@ -561,9 +586,17 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="routesBody"></tbody>
       </table>
     </section>
+    <section>
+      <h2>Deploy Preview</h2>
+      <div class="toolbar">
+        <button id="refreshPlan" type="button">Refresh Preview</button>
+      </div>
+      <p id="planStatus" class="status"></p>
+      <pre id="routePlan" class="muted"></pre>
+    </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [] };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [] };
     async function api(path, options) {
       const response = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -623,6 +656,7 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${u.id}</td>
           <td><input type="text" data-field="display_name" value="${u.display_name}"></td>
           <td><select data-field="role"><option value="user" ${u.role === "user" ? "selected" : ""}>user</option><option value="admin" ${u.role === "admin" ? "selected" : ""}>admin</option></select></td>
+          <td><input type="text" data-field="client_ip" value="${u.client_ip || ""}" placeholder="10.77.0.x"></td>
           <td><select data-field="default_server_id">${serverOptions(u.default_server_id)}</select></td>
           <td><input type="checkbox" data-field="enabled" ${u.enabled ? "checked" : ""}></td>
           <td>${u.has_login ? "yes" : "no"}</td>
@@ -646,6 +680,7 @@ ADMIN_HTML = r"""<!doctype html>
                 id: button.dataset.saveUser,
                 display_name: row.querySelector('[data-field="display_name"]').value,
                 role: row.querySelector('[data-field="role"]').value,
+                client_ip: row.querySelector('[data-field="client_ip"]').value,
                 default_server_id: row.querySelector('[data-field="default_server_id"]').value,
                 enabled: row.querySelector('[data-field="enabled"]').checked
               })
@@ -690,6 +725,23 @@ ADMIN_HTML = r"""<!doctype html>
       });
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
     }
+    function renderGlobalRoutes() {
+      const body = document.getElementById("globalRoutesBody");
+      body.innerHTML = state.globalRoutes.length ? state.globalRoutes.map(r => `
+        <tr>
+          <td>${r.domain}</td>
+          <td>${r.server_id}</td>
+          <td>${r.enabled ? "yes" : "no"}</td>
+          <td><button class="danger" data-delete-global-route="${r.domain}">Delete</button></td>
+        </tr>
+      `).join("") : '<tr><td colspan="4" class="muted">No global routes.</td></tr>';
+      body.querySelectorAll("[data-delete-global-route]").forEach(button => {
+        button.addEventListener("click", async () => {
+          await api(`/api/admin/global-domain-routes?domain=${encodeURIComponent(button.dataset.deleteGlobalRoute)}`, { method: "DELETE" });
+          await load();
+        });
+      });
+    }
     function renderRoutes() {
       const body = document.getElementById("routesBody");
       body.innerHTML = state.routes.length ? state.routes.map(r => `
@@ -714,10 +766,13 @@ ADMIN_HTML = r"""<!doctype html>
       state.servers = data.servers;
       state.users = data.users;
       state.routes = data.routes;
+      state.globalRoutes = data.global_routes || [];
       renderServers();
       renderUsers();
+      renderGlobalRoutes();
       renderRoutes();
       document.getElementById("adminRouteServer").innerHTML = serverOptions(document.getElementById("adminRouteServer").value || "auto");
+      document.getElementById("globalRouteServer").innerHTML = serverOptions(document.getElementById("globalRouteServer").value || "auto");
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
     }
     document.getElementById("newUserForm").addEventListener("submit", async event => {
@@ -731,6 +786,7 @@ ADMIN_HTML = r"""<!doctype html>
             id: document.getElementById("newUserId").value,
             display_name: document.getElementById("newUserName").value || document.getElementById("newUserId").value,
             role: document.getElementById("newUserRole").value,
+            client_ip: document.getElementById("newUserClientIp").value,
             default_server_id: "auto",
             enabled: true,
             password: document.getElementById("newUserPassword").value
@@ -753,6 +809,27 @@ ADMIN_HTML = r"""<!doctype html>
         button.textContent = visible ? "Show" : "Hide";
       });
     });
+    document.getElementById("globalRouteForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("globalRouteStatus");
+      status.className = "status";
+      try {
+        await api("/api/admin/global-domain-routes", {
+          method: "POST",
+          body: JSON.stringify({
+            domain: document.getElementById("globalRouteDomain").value,
+            server_id: document.getElementById("globalRouteServer").value
+          })
+        });
+        document.getElementById("globalRouteDomain").value = "";
+        status.textContent = "Global route saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
     document.getElementById("adminRouteForm").addEventListener("submit", async event => {
       event.preventDefault();
       const status = document.getElementById("adminRouteStatus");
@@ -770,6 +847,19 @@ ADMIN_HTML = r"""<!doctype html>
         status.textContent = "Route saved.";
         status.className = "status ok";
         await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("refreshPlan").addEventListener("click", async () => {
+      const status = document.getElementById("planStatus");
+      status.className = "status";
+      try {
+        const plan = await api("/api/route-plan");
+        document.getElementById("routePlan").textContent = JSON.stringify(plan, null, 2);
+        status.textContent = `Users: ${plan.summary.users}, effective routes: ${plan.summary.effective_routes}, warnings: ${plan.summary.warnings}`;
+        status.className = plan.summary.warnings ? "status error" : "status ok";
       } catch (error) {
         status.textContent = error.message;
         status.className = "status error";
@@ -818,9 +908,23 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         conn,
         "users",
         {
+            "client_ip": "TEXT",
             "password_salt": "TEXT",
             "password_hash": "TEXT",
         },
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS global_domain_routes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          domain TEXT NOT NULL UNIQUE,
+          server_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(server_id) REFERENCES servers(id)
+        )
+        """
     )
     conn.execute(
         """
@@ -857,6 +961,50 @@ def verify_password(password: str, salt_b64: str | None, hash_b64: str | None) -
     return hmac.compare_digest(expected, hash_b64)
 
 
+def normalize_client_ip(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    raw = raw.split(",", 1)[0].strip()
+    raw = raw[:-3] if raw.endswith("/32") else raw
+    match = re.match(r"^(?:\d{1,3}\.){3}\d{1,3}$", raw)
+    if not match:
+        raise ValueError("client_ip must be an IPv4 address")
+    parts = [int(part) for part in raw.split(".")]
+    if any(part > 255 for part in parts):
+        raise ValueError("client_ip octets must be 0-255")
+    return raw
+
+
+def user_id_from_name(name: str) -> str:
+    base = re.sub(r"[^A-Za-z0-9_.-]+", "-", name.strip())
+    base = re.sub(r"-+", "-", base).strip("-._")
+    return base[:64] or "user"
+
+
+def parse_client_conf(path: Path) -> tuple[str, str] | None:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    match = re.search(r"^Address\s*=\s*([^\s,]+)", text, re.MULTILINE)
+    if not match:
+        return None
+    address = normalize_client_ip(match.group(1))
+    if not address:
+        return None
+    name = path.stem
+    for suffix in ("-linux-awg", "-awg", "-linux"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    return user_id_from_name(name), address
+
+
+def normalize_client_ip_or_none(value: str | None) -> str | None:
+    try:
+        return normalize_client_ip(value)
+    except ValueError:
+        return None
+
+
 def create_or_update_user(
     db_path: Path,
     inventory_path: Path,
@@ -865,7 +1013,9 @@ def create_or_update_user(
     display_name: str,
     role: str,
     password: str | None,
+    client_ip: str | None = None,
     enabled: bool = True,
+    allow_no_password: bool = False,
 ) -> None:
     if role not in {"admin", "user"}:
         raise ValueError("role must be admin or user")
@@ -874,40 +1024,87 @@ def create_or_update_user(
     init_db(db_path, inventory_path)
     timestamp = now()
     salt_hash = hash_password(password) if password is not None else (None, None)
+    normalized_client_ip = normalize_client_ip(client_ip)
     with connect(db_path) as conn:
         existing = row(conn, "SELECT id FROM users WHERE id = ?", (user_id,))
         if existing is None:
-            if password is None:
+            if password is None and not allow_no_password:
                 raise ValueError("password is required for a new user")
             conn.execute(
                 """
                 INSERT INTO users (
-                  id, display_name, role, default_server_id, password_salt,
+                  id, display_name, role, default_server_id, client_ip, password_salt,
                   password_hash, enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, 'auto', ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, 'auto', ?, ?, ?, ?, ?, ?)
                 """,
-                (user_id, display_name, role, salt_hash[0], salt_hash[1], int(enabled), timestamp, timestamp),
+                (
+                    user_id,
+                    display_name,
+                    role,
+                    normalized_client_ip,
+                    salt_hash[0],
+                    salt_hash[1],
+                    int(enabled),
+                    timestamp,
+                    timestamp,
+                ),
             )
         else:
             if password is None:
                 conn.execute(
                     """
                     UPDATE users
-                    SET display_name = ?, role = ?, enabled = ?, updated_at = ?
+                    SET display_name = ?, role = ?, client_ip = ?, enabled = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (display_name, role, int(enabled), timestamp, user_id),
+                    (display_name, role, normalized_client_ip, int(enabled), timestamp, user_id),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE users
-                    SET display_name = ?, role = ?, password_salt = ?, password_hash = ?,
+                    SET display_name = ?, role = ?, client_ip = ?, password_salt = ?, password_hash = ?,
                         enabled = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (display_name, role, salt_hash[0], salt_hash[1], int(enabled), timestamp, user_id),
+                    (
+                        display_name,
+                        role,
+                        normalized_client_ip,
+                        salt_hash[0],
+                        salt_hash[1],
+                        int(enabled),
+                        timestamp,
+                        user_id,
+                    ),
                 )
+
+
+def import_cudy_clients(db_path: Path, inventory_path: Path, source_dir: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    imported: list[dict[str, Any]] = []
+    seen_addresses: set[str] = set()
+    for path in sorted(source_dir.glob("*.conf")):
+        parsed = parse_client_conf(path)
+        if not parsed:
+            continue
+        user_id, client_ip = parsed
+        if client_ip in seen_addresses:
+            continue
+        seen_addresses.add(client_ip)
+        create_or_update_user(
+            db_path,
+            inventory_path,
+            user_id=user_id,
+            display_name=user_id,
+            role="user",
+            password=None,
+            client_ip=client_ip,
+            enabled=True,
+            allow_no_password=True,
+        )
+        imported.append({"id": user_id, "client_ip": client_ip, "source": str(path)})
+    return imported
 
 
 def seed_inventory(conn: sqlite3.Connection, inventory: dict[str, Any], *, reset_from_inventory: bool) -> None:
@@ -1083,6 +1280,138 @@ def admin_servers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     )
 
 
+def server_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    return {
+        item["id"]: item
+        for item in rows(
+            conn,
+            """
+            SELECT id, label, provider, kind, interface, geo_country, geo_region,
+                   endpoint, switch_command, enabled, user_visible, admin_visible,
+                   metadata_json
+            FROM servers
+            """,
+        )
+    }
+
+
+def compact_server(server: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not server:
+        return None
+    metadata: dict[str, Any] = {}
+    try:
+        metadata = json.loads(server.get("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    return {
+        "id": server.get("id"),
+        "label": server.get("label"),
+        "provider": server.get("provider"),
+        "kind": server.get("kind"),
+        "interface": server.get("interface"),
+        "profile": metadata.get("profile"),
+        "profile_command": metadata.get("profile_command"),
+        "switch_command": server.get("switch_command"),
+        "geo_country": server.get("geo_country"),
+        "geo_region": server.get("geo_region"),
+        "enabled": bool(server.get("enabled")),
+    }
+
+
+def build_route_plan(db_path: Path) -> dict[str, Any]:
+    with connect(db_path) as conn:
+        servers = server_map(conn)
+        global_routes = rows(
+            conn,
+            """
+            SELECT domain, server_id, enabled, updated_at
+            FROM global_domain_routes
+            WHERE enabled = 1
+            ORDER BY domain
+            """,
+        )
+        users = rows(
+            conn,
+            """
+            SELECT id, display_name, role, default_server_id, client_ip, enabled
+            FROM users
+            WHERE enabled = 1
+              AND role = 'user'
+              AND (client_ip IS NOT NULL OR password_hash IS NOT NULL)
+            ORDER BY id
+            """,
+        )
+        plan_users: list[dict[str, Any]] = []
+        warnings: list[str] = []
+        for user in users:
+            effective: dict[str, dict[str, Any]] = {}
+            user_warnings: list[str] = []
+            client_ip = normalize_client_ip(user.get("client_ip")) if user.get("client_ip") else None
+            if not client_ip:
+                user_warnings.append("client_ip is missing; Cudy cannot apply individual source-based routing yet")
+            default_server = servers.get(user["default_server_id"])
+            if not default_server:
+                user_warnings.append(f"default server is unknown: {user['default_server_id']}")
+            for route in global_routes:
+                effective[route["domain"]] = {
+                    "domain": route["domain"],
+                    "server_id": route["server_id"],
+                    "source": "global",
+                }
+            user_routes = rows(
+                conn,
+                """
+                SELECT domain, server_id, enabled, updated_at
+                FROM user_domain_routes
+                WHERE user_id = ? AND enabled = 1
+                ORDER BY domain
+                """,
+                (user["id"],),
+            )
+            for route in user_routes:
+                effective[route["domain"]] = {
+                    "domain": route["domain"],
+                    "server_id": route["server_id"],
+                    "source": "user",
+                }
+            route_items: list[dict[str, Any]] = []
+            for route in sorted(effective.values(), key=lambda item: item["domain"]):
+                server = servers.get(route["server_id"])
+                if not server:
+                    user_warnings.append(f"{route['domain']}: unknown server {route['server_id']}")
+                route_items.append(
+                    {
+                        **route,
+                        "server": compact_server(server),
+                    }
+                )
+            for warning in user_warnings:
+                warnings.append(f"{user['id']}: {warning}")
+            plan_users.append(
+                {
+                    "id": user["id"],
+                    "display_name": user["display_name"],
+                    "role": user["role"],
+                    "client_ip": client_ip,
+                    "default_server_id": user["default_server_id"],
+                    "default_server": compact_server(default_server),
+                    "routes": route_items,
+                    "warnings": user_warnings,
+                }
+            )
+    return {
+        "generated_at": now(),
+        "summary": {
+            "users": len(plan_users),
+            "global_routes": len(global_routes),
+            "effective_routes": sum(len(user["routes"]) for user in plan_users),
+            "warnings": len(warnings),
+        },
+        "users": plan_users,
+        "warnings": warnings,
+    }
+
+
 def validate_server_id(conn: sqlite3.Connection, server_id: str, *, require_user_visible: bool) -> None:
     if require_user_visible:
         value = row(conn, "SELECT id FROM servers WHERE id = ? AND enabled = 1 AND user_visible = 1", (server_id,))
@@ -1178,20 +1507,34 @@ class Handler(BaseHTTPRequestHandler):
 
     def current_user(self) -> dict[str, Any] | None:
         token = self.cookie_value(SESSION_COOKIE)
-        if not token:
-            return None
         with self.app.conn() as conn:
             conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
-            return row(
-                conn,
-                """
-                SELECT u.id, u.display_name, u.role, u.default_server_id, u.enabled
-                FROM sessions s
-                JOIN users u ON u.id = s.user_id
-                WHERE s.token = ? AND s.expires_at > ? AND u.enabled = 1
-                """,
-                (token, int(time.time())),
-            )
+            if token:
+                session_user = row(
+                    conn,
+                    """
+                    SELECT u.id, u.display_name, u.role, u.default_server_id, u.client_ip, u.enabled
+                    FROM sessions s
+                    JOIN users u ON u.id = s.user_id
+                    WHERE s.token = ? AND s.expires_at > ? AND u.enabled = 1
+                    """,
+                    (token, int(time.time())),
+                )
+                if session_user is not None:
+                    return session_user
+
+            remote_ip = normalize_client_ip_or_none(self.client_address[0])
+            if remote_ip:
+                return row(
+                    conn,
+                    """
+                    SELECT id, display_name, role, default_server_id, client_ip, enabled
+                    FROM users
+                    WHERE client_ip = ? AND enabled = 1
+                    """,
+                    (remote_ip,),
+                )
+        return None
 
     def require_user(self) -> dict[str, Any]:
         user = self.current_user()
@@ -1237,6 +1580,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin":
                 self.require_admin()
                 self.send_json(self.api_admin())
+            elif parsed.path == "/api/route-plan":
+                self.require_admin()
+                self.send_json(build_route_plan(self.app.db_path))
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
             else:
@@ -1275,6 +1621,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/domain-routes":
                 self.require_admin()
                 self.send_json(self.api_admin_save_domain_route(data))
+            elif parsed.path == "/api/admin/global-domain-routes":
+                self.require_admin()
+                self.send_json(self.api_admin_save_global_domain_route(data))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -1299,6 +1648,13 @@ class Handler(BaseHTTPRequestHandler):
                 domain = normalize_domain(query.get("domain", [""])[0])
                 with self.app.conn() as conn:
                     conn.execute("DELETE FROM user_domain_routes WHERE user_id = ? AND domain = ?", (user_id, domain))
+                self.send_json({"ok": True})
+            elif parsed.path == "/api/admin/global-domain-routes":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                domain = normalize_domain(query.get("domain", [""])[0])
+                with self.app.conn() as conn:
+                    conn.execute("DELETE FROM global_domain_routes WHERE domain = ?", (domain,))
                 self.send_json({"ok": True})
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
@@ -1353,7 +1709,7 @@ class Handler(BaseHTTPRequestHandler):
         with self.app.conn() as conn:
             user = row(
                 conn,
-                "SELECT id, display_name, role, default_server_id, enabled FROM users WHERE id = ?",
+                "SELECT id, display_name, role, default_server_id, client_ip, enabled FROM users WHERE id = ?",
                 (user_id,),
             )
             if user is None:
@@ -1377,7 +1733,7 @@ class Handler(BaseHTTPRequestHandler):
                 "users": rows(
                     conn,
                     """
-                    SELECT id, display_name, role, default_server_id, enabled,
+                    SELECT id, display_name, role, default_server_id, client_ip, enabled,
                            CASE WHEN password_hash IS NULL THEN 0 ELSE 1 END AS has_login,
                            updated_at
                     FROM users
@@ -1390,6 +1746,14 @@ class Handler(BaseHTTPRequestHandler):
                     SELECT user_id, domain, server_id, enabled, updated_at
                     FROM user_domain_routes
                     ORDER BY user_id, domain
+                    """,
+                ),
+                "global_routes": rows(
+                    conn,
+                    """
+                    SELECT domain, server_id, enabled, updated_at
+                    FROM global_domain_routes
+                    ORDER BY domain
                     """,
                 ),
                 "auto_cache": rows(
@@ -1417,6 +1781,7 @@ class Handler(BaseHTTPRequestHandler):
         display_name = str(data.get("display_name") or user_id).strip()
         role = str(data.get("role") or "user")
         default_server_id = str(data.get("default_server_id") or "auto")
+        client_ip = normalize_client_ip(str(data.get("client_ip") or ""))
         enabled = int(bool(data.get("enabled")))
         password = data.get("password")
         if password is not None:
@@ -1440,20 +1805,31 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute(
                     """
                     INSERT INTO users (
-                      id, display_name, role, default_server_id, password_salt,
+                      id, display_name, role, default_server_id, client_ip, password_salt,
                       password_hash, enabled, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (user_id, display_name, role, default_server_id, salt, password_hash, enabled, timestamp, timestamp),
+                    (
+                        user_id,
+                        display_name,
+                        role,
+                        default_server_id,
+                        client_ip,
+                        salt,
+                        password_hash,
+                        enabled,
+                        timestamp,
+                        timestamp,
+                    ),
                 )
             else:
                 conn.execute(
                     """
                     UPDATE users
-                    SET display_name = ?, role = ?, default_server_id = ?, enabled = ?, updated_at = ?
+                    SET display_name = ?, role = ?, default_server_id = ?, client_ip = ?, enabled = ?, updated_at = ?
                     WHERE id = ?
                     """,
-                    (display_name, role, default_server_id, enabled, timestamp, user_id),
+                    (display_name, role, default_server_id, client_ip, enabled, timestamp, user_id),
                 )
                 if password:
                     salt, password_hash = hash_password(password)
@@ -1512,6 +1888,23 @@ class Handler(BaseHTTPRequestHandler):
                 DO UPDATE SET server_id = excluded.server_id, enabled = 1, updated_at = excluded.updated_at
                 """,
                 (user_id, domain, server_id, timestamp, timestamp),
+            )
+        return {"ok": True, "domain": domain, "server_id": server_id}
+
+    def api_admin_save_global_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
+        domain = normalize_domain(str(data.get("domain") or ""))
+        server_id = str(data.get("server_id") or "")
+        timestamp = now()
+        with self.app.conn() as conn:
+            validate_server_id(conn, server_id, require_user_visible=True)
+            conn.execute(
+                """
+                INSERT INTO global_domain_routes (domain, server_id, enabled, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(domain)
+                DO UPDATE SET server_id = excluded.server_id, enabled = 1, updated_at = excluded.updated_at
+                """,
+                (domain, server_id, timestamp, timestamp),
             )
         return {"ok": True, "domain": domain, "server_id": server_id}
 
@@ -1610,9 +2003,21 @@ def build_parser() -> argparse.ArgumentParser:
     create_user_parser.add_argument("user_id")
     create_user_parser.add_argument("--display-name")
     create_user_parser.add_argument("--role", choices=["admin", "user"], default="user")
+    create_user_parser.add_argument("--client-ip")
     create_user_parser.add_argument("--password", help="Prefer interactive prompt or env in normal use.")
     create_user_parser.add_argument("--disabled", action="store_true")
     create_user_parser.add_argument("--no-password-change", action="store_true")
+
+    import_parser = sub.add_parser("import-cudy-clients", help="Import existing cudy-home client .conf files as users.")
+    import_parser.add_argument(
+        "--source-dir",
+        type=Path,
+        default=ROOT / "secrets" / "clients" / "cudy-home",
+        help="Directory with cudy-home client .conf files.",
+    )
+
+    route_plan_parser = sub.add_parser("route-plan", help="Print effective per-user route plan.")
+    route_plan_parser.add_argument("--json", action="store_true", help="Print full JSON plan.")
 
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -1641,9 +2046,39 @@ def main() -> int:
             display_name=args.display_name or args.user_id,
             role=args.role,
             password=password,
+            client_ip=args.client_ip,
             enabled=not args.disabled,
+            allow_no_password=args.no_password_change,
         )
         print(f"User saved: {args.user_id} role={args.role}")
+        return 0
+    if args.command == "import-cudy-clients":
+        imported = import_cudy_clients(args.db, args.inventory, args.source_dir)
+        for item in imported:
+            print(f"{item['id']}\t{item['client_ip']}\t{item['source']}")
+        print(f"Imported/updated users: {len(imported)}")
+        return 0
+    if args.command == "route-plan":
+        init_db(args.db, args.inventory)
+        plan = build_route_plan(args.db)
+        if args.json:
+            print(json.dumps(plan, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"users={plan['summary']['users']} "
+                f"global_routes={plan['summary']['global_routes']} "
+                f"effective_routes={plan['summary']['effective_routes']} "
+                f"warnings={plan['summary']['warnings']}"
+            )
+            for user in plan["users"]:
+                print(
+                    f"{user['id']}\tclient_ip={user['client_ip'] or '-'}\t"
+                    f"default={user['default_server_id']}\troutes={len(user['routes'])}"
+                )
+                for route in user["routes"]:
+                    print(f"  {route['domain']}\t{route['server_id']}\t{route['source']}")
+                for warning in user["warnings"]:
+                    print(f"  WARNING: {warning}")
         return 0
     if args.command == "serve":
         app = App(args.db, args.inventory)

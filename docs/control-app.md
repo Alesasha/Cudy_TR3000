@@ -18,9 +18,15 @@ data/vpn_control.db
 
 The database is ignored by Git.
 
-## Create Users
+## User Identity
 
-Create the first administrator:
+Normal users do not need a web password when they open the panel through AmneziaVPN. The app can identify them by source VPN IP:
+
+```text
+users.client_ip = 10.77.0.x
+```
+
+Create the first administrator for local/admin access:
 
 ```powershell
 python tools\vpn_control_app.py create-user admin --role admin
@@ -28,10 +34,16 @@ python tools\vpn_control_app.py create-user admin --role admin
 
 The command asks for the password interactively and stores only a PBKDF2 hash in SQLite.
 
-Create a normal user:
+Import existing Cudy AmneziaVPN clients from local `.conf` files:
 
 ```powershell
-python tools\vpn_control_app.py create-user alex --role user --display-name "Alex"
+python tools\vpn_control_app.py import-cudy-clients
+```
+
+Create a normal user manually:
+
+```powershell
+python tools\vpn_control_app.py create-user alex --role user --display-name "Alex" --client-ip 10.77.0.25 --no-password-change
 ```
 
 Update an existing user without changing the password:
@@ -74,10 +86,15 @@ http://127.0.0.1:8765/admin
   - enable/disable servers;
   - control user visibility;
   - create users;
-  - edit user names, roles, status, and default server;
+  - edit user names, roles, VPN client IPs, status, and default server;
   - reset user passwords;
   - show or hide newly entered password values before saving;
+  - add global `domain -> server` routes;
   - add or delete `domain -> server` routes for any user.
+- Deploy preview:
+  - combines global admin routes and per-user routes;
+  - per-user route wins when the same domain exists in both layers;
+  - shows the effective plan per VPN client IP.
 
 ## Not Implemented Yet
 
