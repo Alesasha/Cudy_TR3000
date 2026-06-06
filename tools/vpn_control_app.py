@@ -532,7 +532,13 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>ID</label><input id="newUserId" type="text" autocomplete="off"></div>
         <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
         <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
-        <div class="field"><label>Password</label><input id="newUserPassword" type="password" autocomplete="new-password"></div>
+        <div class="field">
+          <label>Password</label>
+          <div class="inline">
+            <input id="newUserPassword" type="password" autocomplete="new-password">
+            <button class="secondary" type="button" data-toggle-password="newUserPassword">Show</button>
+          </div>
+        </div>
         <button type="submit">Create</button>
       </form>
       <p id="userStatus" class="status"></p>
@@ -620,7 +626,11 @@ ADMIN_HTML = r"""<!doctype html>
           <td><select data-field="default_server_id">${serverOptions(u.default_server_id)}</select></td>
           <td><input type="checkbox" data-field="enabled" ${u.enabled ? "checked" : ""}></td>
           <td>${u.has_login ? "yes" : "no"}</td>
-          <td class="inline"><input type="password" data-field="password" placeholder="new password"><button class="secondary" data-password="${u.id}">Set</button></td>
+          <td class="inline">
+            <input type="password" data-field="password" data-password-input="${u.id}" placeholder="new password">
+            <button class="secondary" type="button" data-toggle-row-password="${u.id}">Show</button>
+            <button class="secondary" data-password="${u.id}">Set</button>
+          </td>
           <td><button data-save-user="${u.id}">Save</button></td>
         </tr>
       `).join("");
@@ -668,6 +678,14 @@ ADMIN_HTML = r"""<!doctype html>
             status.textContent = error.message;
             status.className = "status error";
           }
+        });
+      });
+      body.querySelectorAll("[data-toggle-row-password]").forEach(button => {
+        button.addEventListener("click", () => {
+          const input = button.closest("tr").querySelector('[data-field="password"]');
+          const visible = input.type === "text";
+          input.type = visible ? "password" : "text";
+          button.textContent = visible ? "Show" : "Hide";
         });
       });
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
@@ -726,6 +744,14 @@ ADMIN_HTML = r"""<!doctype html>
         status.textContent = error.message;
         status.className = "status error";
       }
+    });
+    document.querySelectorAll("[data-toggle-password]").forEach(button => {
+      button.addEventListener("click", () => {
+        const input = document.getElementById(button.dataset.togglePassword);
+        const visible = input.type === "text";
+        input.type = visible ? "password" : "text";
+        button.textContent = visible ? "Show" : "Hide";
+      });
     });
     document.getElementById("adminRouteForm").addEventListener("submit", async event => {
       event.preventDefault();

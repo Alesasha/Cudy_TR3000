@@ -76,6 +76,7 @@ http://127.0.0.1:8765/admin
   - create users;
   - edit user names, roles, status, and default server;
   - reset user passwords;
+  - show or hide newly entered password values before saving;
   - add or delete `domain -> server` routes for any user.
 
 ## Not Implemented Yet
