@@ -1,0 +1,78 @@
+#!/bin/sh
+
+IFACES="${*:-eth0 awg1 awg2}"
+
+json_value() {
+  key="$1"
+  awk -F'"' -v k="$key" '$2 == k { print $4; exit }'
+}
+
+google_lang_title() {
+  iface="$1"
+  curl --interface "$iface" -4 -s --max-time 20 'https://www.google.com/search?q=gemini&pws=0' 2>/dev/null |
+    sed -n \
+      -e 's/.*<html lang="\([^"]*\)".*/google_html_lang=\1/p' \
+      -e 's/.*<title>\([^<]*\)<\/title>.*/google_title=\1/p' |
+    head -2
+}
+
+gemini_head() {
+  iface="$1"
+  curl --interface "$iface" -4 -L -s -o /dev/null --max-time 20 \
+    -w 'gemini_http=%{http_code} gemini_remote_ip=%{remote_ip} gemini_effective_url=%{url_effective}\n' \
+    'https://gemini.google.com/' 2>/dev/null
+}
+
+one_head() {
+  iface="$1"
+  curl --interface "$iface" -4 -L -s -o /dev/null --max-time 20 \
+    -w 'one_http=%{http_code} one_remote_ip=%{remote_ip} one_effective_url=%{url_effective}\n' \
+    'https://one.google.com/about/plans' 2>/dev/null
+}
+
+printf '== time ==\n'
+date
+
+printf '\n== active pbr target ==\n'
+grep -n '^TARGET_INTERFACE' /usr/share/pbr/pbr.user.opencck-merged-vpn 2>/dev/null || true
+
+printf '\n== interface checks ==\n'
+for iface in $IFACES; do
+  printf '\n-- %s --\n' "$iface"
+
+  ifjson="$(curl --interface "$iface" -4 -s --max-time 20 https://ifconfig.co/json 2>/dev/null)"
+  ipjson="$(curl --interface "$iface" -4 -s --max-time 20 https://ipinfo.io/json 2>/dev/null)"
+
+  if [ -n "$ifjson" ]; then
+    printf 'ifconfig_ip=%s\n' "$(printf '%s\n' "$ifjson" | json_value ip)"
+    printf 'ifconfig_country=%s\n' "$(printf '%s\n' "$ifjson" | json_value country)"
+    printf 'ifconfig_country_iso=%s\n' "$(printf '%s\n' "$ifjson" | json_value country_iso)"
+    printf 'ifconfig_region=%s\n' "$(printf '%s\n' "$ifjson" | json_value region_name)"
+    printf 'ifconfig_city=%s\n' "$(printf '%s\n' "$ifjson" | json_value city)"
+    printf 'ifconfig_asn=%s\n' "$(printf '%s\n' "$ifjson" | json_value asn)"
+    printf 'ifconfig_asn_org=%s\n' "$(printf '%s\n' "$ifjson" | json_value asn_org)"
+  else
+    printf 'ifconfig_error=empty\n'
+  fi
+
+  if [ -n "$ipjson" ]; then
+    printf 'ipinfo_ip=%s\n' "$(printf '%s\n' "$ipjson" | json_value ip)"
+    printf 'ipinfo_country=%s\n' "$(printf '%s\n' "$ipjson" | json_value country)"
+    printf 'ipinfo_region=%s\n' "$(printf '%s\n' "$ipjson" | json_value region)"
+    printf 'ipinfo_city=%s\n' "$(printf '%s\n' "$ipjson" | json_value city)"
+    printf 'ipinfo_org=%s\n' "$(printf '%s\n' "$ipjson" | json_value org)"
+    printf 'ipinfo_timezone=%s\n' "$(printf '%s\n' "$ipjson" | json_value timezone)"
+  else
+    printf 'ipinfo_error=empty\n'
+  fi
+
+  google_lang_title "$iface"
+  gemini_head "$iface"
+  one_head "$iface"
+done
+
+printf '\n== recent google/gemini conntrack from PC ==\n'
+conntrack -L -f ipv4 2>/dev/null |
+  grep 'src=192.168.8.102' |
+  grep -E 'dst=(142\.|172\.217\.|172\.253\.|216\.58\.|64\.233\.|74\.125\.|108\.177\.|209\.85\.|173\.194\.)' |
+  tail -40 || true

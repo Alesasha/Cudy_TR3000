@@ -1,0 +1,11 @@
+# IPv4/CIDR entries that must always go via awg2, regardless of current target.
+
+# Telegram does not work reliably via WAN here and should not use HTTP-proxy TUN.
+91.105.192.0/23
+91.108.4.0/22
+91.108.8.0/22
+91.108.12.0/22
+91.108.16.0/22
+91.108.20.0/22
+91.108.56.0/22
+149.154.160.0/20

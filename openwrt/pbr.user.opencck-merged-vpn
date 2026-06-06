@@ -1,0 +1,237 @@
+#!/bin/sh
+
+TARGET_INTERFACE='awg2'
+TARGET_NFTSET_4="pbr_${TARGET_INTERFACE}_4_dst_ip_user"
+WAN_NFTSET_4='pbr_wan_4_dst_ip_user'
+TARGET_TABLE='inet fw4'
+
+AF_URL='https://antifilter.download/list/allyouneed.lst'
+OPENCCK_URL='https://iplist.opencck.org/ru/?format=text&data=cidr4'
+RU_IP_URL='https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone'
+RU_DOMAIN_URL='https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/category-ru'
+OVERRIDE_DIR='/etc/pbr-overrides'
+
+RAW_AF='/tmp/pbr_allyouneed.raw'
+RAW_OPENCCK='/tmp/pbr_opencck_cidr4.raw'
+RAW_RU_IP='/tmp/pbr_ru_ip.raw'
+RAW_RU_DOMAINS='/tmp/pbr_ru_domains.raw'
+CLEAN='/tmp/pbr_opencck_merged_vpn.clean'
+VPN_DOWNLOADED_CLEAN='/tmp/pbr_vpn_downloaded.clean'
+FORCE_VPN_CLEAN='/tmp/pbr_force_vpn.clean'
+FORCE_WAN_CLEAN='/tmp/pbr_force_wan.clean'
+FORCE_AWG2_CLEAN='/tmp/pbr_force_awg2.clean'
+WAN_RU_CLEAN='/tmp/pbr_wan_ru.clean'
+WAN_CLEAN='/tmp/pbr_wan.clean'
+
+mkdir -p /tmp "$OVERRIDE_DIR"
+
+clean_ipv4_list() {
+  awk '
+  {
+    sub(/#.*/, "")
+    gsub(/\r/, "")
+    gsub(/[[:space:]]/, "")
+    if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+      print $0 "/32"
+    } else if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
+      print $0
+    }
+  }
+  ' "$1" 2>/dev/null | sort -u
+}
+
+clean_domain_list() {
+  awk '
+  {
+    sub(/#.*/, "")
+    gsub(/\r/, "")
+    gsub(/^[[:space:]]+/, "")
+    gsub(/[[:space:]]+$/, "")
+    if ($0 != "") print $0
+  }
+  ' "$1" 2>/dev/null | sort -u
+}
+
+clean_geosite_domain_list() {
+  awk '
+  {
+    sub(/#.*/, "")
+    gsub(/\r/, "")
+    gsub(/^[[:space:]]+/, "")
+    gsub(/[[:space:]]+$/, "")
+    split($0, parts, /[[:space:]]+/)
+    d = parts[1]
+    if (d == "" || d ~ /^include:/ || d ~ /^regexp:/ || d ~ /^keyword:/) next
+    sub(/^domain:/, "", d)
+    sub(/^full:/, "", d)
+    sub(/^\*\./, "", d)
+    if (d ~ /^[A-Za-z0-9][A-Za-z0-9._-]*\.[A-Za-z0-9._-]+$/) print d
+  }
+  ' "$1" 2>/dev/null | sort -u
+}
+
+resolve_domains_to_ipv4() {
+  domain_file="$1"
+  [ -s "$domain_file" ] || return 0
+  clean_domain_list "$domain_file" | while read -r domain; do
+    [ -z "$domain" ] && continue
+    nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | awk '{ print $1 "/32" }'
+  done
+}
+
+resolve_geosite_domains_to_ipv4() {
+  domain_file="$1"
+  [ -s "$domain_file" ] || return 0
+  clean_geosite_domain_list "$domain_file" | while read -r domain; do
+    [ -z "$domain" ] && continue
+    nslookup "$domain" 2>/dev/null | awk '/^Address: / { print $2 }' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | awk '{ print $1 "/32" }'
+  done
+}
+
+download_url() {
+  url="$1"
+  output="$2"
+  label="$3"
+
+  rm -f "$output"
+  uclient-fetch --no-check-certificate -qO "$output" "$url" || logger -t pbr-opencck "WARN: $label download failed"
+}
+
+build_override_list() {
+  ip_file="$1"
+  domain_file="$2"
+  urls_file="$3"
+  output_file="$4"
+  {
+    [ -s "$ip_file" ] && clean_ipv4_list "$ip_file"
+    resolve_domains_to_ipv4 "$domain_file"
+    fetch_url_lists "$urls_file"
+  } | sort -u > "$output_file"
+}
+
+fetch_url_lists() {
+  urls_file="$1"
+  [ -s "$urls_file" ] || return 0
+  clean_domain_list "$urls_file" | while read -r url; do
+    [ -z "$url" ] && continue
+    tmp="/tmp/pbr_url_list.$$"
+    if uclient-fetch --no-check-certificate -qO "$tmp" "$url"; then
+      clean_ipv4_list "$tmp"
+    else
+      logger -t pbr-opencck "WARN: override source download failed: $url"
+    fi
+    rm -f "$tmp"
+  done
+}
+
+add_list_to_nftset() {
+  nftset="$1"
+  file="$2"
+  label="$3"
+  [ -s "$file" ] || {
+    logger -t pbr-opencck "No $label entries for $nftset"
+    return 0
+  }
+
+  n=0
+  params=""
+
+  while read -r p; do
+    [ -z "$p" ] && continue
+    params="${params:+$params, }$p"
+    n=$((n + 1))
+
+    if [ "$n" -ge 200 ]; then
+      nft "add element $TARGET_TABLE $nftset { $params }" || {
+        logger -t pbr-opencck "ERROR: nft add failed for $label into $nftset"
+        return 1
+      }
+      params=""
+      n=0
+    fi
+  done < "$file"
+
+  if [ -n "$params" ]; then
+    nft "add element $TARGET_TABLE $nftset { $params }" || {
+      logger -t pbr-opencck "ERROR: nft add final failed for $label into $nftset"
+      return 1
+    }
+  fi
+
+  logger -t pbr-opencck "Loaded $(wc -l < "$file") $label entries into $nftset"
+}
+
+download_url "$AF_URL" "$RAW_AF" "antifilter"
+download_url "$OPENCCK_URL" "$RAW_OPENCCK" "opencck"
+download_url "$RU_IP_URL" "$RAW_RU_IP" "ru-ip"
+download_url "$RU_DOMAIN_URL" "$RAW_RU_DOMAINS" "ru-domains"
+
+build_override_list "$OVERRIDE_DIR/force-vpn.ips" "$OVERRIDE_DIR/force-vpn.domains" "$OVERRIDE_DIR/force-vpn.urls" "$FORCE_VPN_CLEAN"
+build_override_list "$OVERRIDE_DIR/force-wan.ips" "$OVERRIDE_DIR/force-wan.domains" "$OVERRIDE_DIR/force-wan.urls" "$FORCE_WAN_CLEAN"
+build_override_list "$OVERRIDE_DIR/force-awg2.ips" "$OVERRIDE_DIR/force-awg2.domains" "$OVERRIDE_DIR/force-awg2.urls" "$FORCE_AWG2_CLEAN"
+
+{
+  [ -s "$RAW_RU_IP" ] && clean_ipv4_list "$RAW_RU_IP"
+  resolve_geosite_domains_to_ipv4 "$RAW_RU_DOMAINS"
+} | sort -u > "$WAN_RU_CLEAN"
+
+{
+  [ -s "$WAN_RU_CLEAN" ] && cat "$WAN_RU_CLEAN"
+  [ -s "$FORCE_WAN_CLEAN" ] && cat "$FORCE_WAN_CLEAN"
+} | sort -u > "$WAN_CLEAN"
+
+{
+  [ -s "$RAW_AF" ] && cat "$RAW_AF"
+  [ -s "$RAW_OPENCCK" ] && cat "$RAW_OPENCCK"
+  cat <<'TG'
+91.108.4.0/22
+91.108.8.0/22
+91.108.12.0/22
+91.108.16.0/22
+91.108.20.0/22
+91.108.56.0/22
+91.105.192.0/23
+149.154.160.0/20
+TG
+} | sed 's/\r$//' | awk '
+/^[[:space:]]*#/ { next }
+{
+  gsub(/[[:space:]]/, "", $0)
+  if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/) {
+    print $0 "/32"
+  } else if ($0 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) {
+    print $0
+  }
+}
+' | sort -u > "$VPN_DOWNLOADED_CLEAN"
+
+if [ -s "$WAN_CLEAN" ]; then
+  grep -vxF -f "$WAN_CLEAN" "$VPN_DOWNLOADED_CLEAN" > "$CLEAN.tmp" || true
+else
+  cp "$VPN_DOWNLOADED_CLEAN" "$CLEAN.tmp"
+fi
+
+{
+  [ -s "$CLEAN.tmp" ] && cat "$CLEAN.tmp"
+  [ -s "$FORCE_VPN_CLEAN" ] && cat "$FORCE_VPN_CLEAN"
+} | sort -u > "$CLEAN"
+rm -f "$CLEAN.tmp"
+
+[ -s "$CLEAN" ] || {
+  logger -t pbr-opencck "ERROR: clean list is empty"
+  return 1
+}
+
+add_list_to_nftset "$WAN_NFTSET_4" "$WAN_CLEAN" "wan"
+add_list_to_nftset "pbr_awg2_4_dst_ip_user" "$FORCE_AWG2_CLEAN" "force-awg2"
+add_list_to_nftset "$TARGET_NFTSET_4" "$CLEAN" "vpn"
+
+force_wan_count=0
+force_awg2_count=0
+wan_ru_count=0
+[ -s "$WAN_CLEAN" ] && force_wan_count=$(wc -l < "$WAN_CLEAN")
+[ -s "$FORCE_AWG2_CLEAN" ] && force_awg2_count=$(wc -l < "$FORCE_AWG2_CLEAN")
+[ -s "$WAN_RU_CLEAN" ] && wan_ru_count=$(wc -l < "$WAN_RU_CLEAN")
+logger -t pbr-opencck "Loaded $(wc -l < "$CLEAN") IPv4/CIDR entries into $TARGET_NFTSET_4; wan $force_wan_count entries; force-awg2 $force_awg2_count entries; generated-wan-ru $wan_ru_count entries"
+
+return 0

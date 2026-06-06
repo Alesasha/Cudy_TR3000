@@ -1,0 +1,63 @@
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "lokvpn-tun",
+      "interface_name": "lokvpn",
+      "address": [
+        "172.38.0.1/30"
+      ],
+      "mtu": 1400,
+      "auto_route": false,
+      "strict_route": false,
+      "stack": "gvisor"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy-out",
+      "server": "example.invalid",
+      "server_port": 443,
+      "uuid": "00000000-0000-0000-0000-000000000000",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "example.invalid",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "<public-key>",
+          "short_id": "<short-id>"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "rules": [
+      {
+        "ip_cidr": [
+          "203.0.113.10/32"
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "final": "proxy-out"
+  }
+}

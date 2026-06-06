@@ -1,0 +1,22 @@
+# Force direct WAN for sites that dislike VPN egress
+vseinstrumenti.ru
+www.vseinstrumenti.ru
+rutube.ru
+www.rutube.ru
+static.rutube.ru
+pic.rutube.ru
+cdn.rutube.ru
+mail.ru
+www.mail.ru
+e.mail.ru
+imap.mail.ru
+smtp.mail.ru
+pop.mail.ru
+oauth.mail.ru
+o2.mail.ru
+list.ru
+www.list.ru
+img.mail.ru
+auth.mail.ru
+account.mail.ru
+cloud.mail.ru

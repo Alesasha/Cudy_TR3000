@@ -1,0 +1,2 @@
+# Optional URL sources for IPv4/CIDR entries that must go directly via WAN.
+# One URL per line. The downloaded content must contain IPv4 or IPv4/CIDR entries.

@@ -1,0 +1,36 @@
+# Security
+
+## Do Not Commit
+
+Never commit:
+
+- `secrets/`;
+- `.env` or any real provider credential file;
+- private SSH keys;
+- AmneziaWG private keys and preshared keys;
+- generated client `.conf`, `.vpn`, QR, or PNG files;
+- live runtime snapshots if they include local operational details;
+- provider subscription URLs containing `pass=`, tokens, UUIDs, or authorization strings.
+- generated provider configs such as `openwrt/lokvpn.json`.
+
+The repository includes `.env.example` with placeholders. Real values should stay in `.env` or on the target router/server.
+
+## Provider Scripts
+
+Scripts under `openwrt/` must read credentials from environment variables or target-machine files. They should not contain real defaults.
+
+Current expected variables:
+
+- `CUDY_SSH_PASSWORD`;
+- `AWG_SSH_PASSWORD_CUDY_HOME`;
+- `AWG_SSH_PASSWORD_HOSTVDS_USWEST`;
+- `AWG_SSH_PASSWORD_MEGAHOST_AKTAU`;
+- `VPNTYPE_AUTH_DEFAULT`;
+- `VPNTYPE_UUID_DEFAULT`;
+- `SUB_URL`.
+
+## GitHub
+
+Use a private repository until all history is checked for secrets. If a secret was committed by mistake, assume it is compromised and rotate it.
+
+GitHub login passwords must not be embedded into remote URLs, scripts, command history, or CI settings. Use Git Credential Manager, SSH keys, or a fine-grained Personal Access Token.

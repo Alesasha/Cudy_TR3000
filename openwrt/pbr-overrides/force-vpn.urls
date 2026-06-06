@@ -1,0 +1,4 @@
+# Optional URL sources for IPv4/CIDR entries that must go via the active tunnel.
+# One URL per line. The downloaded content must contain IPv4 or IPv4/CIDR entries.
+#
+# Do not put broad OpenCCK all-data URLs here. Prefer explicit site/group URLs.

@@ -1,0 +1,14 @@
+#!/bin/sh
+set -u
+
+PROFILE="${1:-${LOKVPN_PROFILE:-fr2}}"
+
+/usr/bin/lokvpn-refresh "$PROFILE" || exit 1
+printf '%s\n' "$PROFILE" > /etc/lokvpn-profile
+/etc/init.d/sing-box-lokvpn restart || exit 1
+sleep 2
+/usr/bin/vpn-switch lokvpn || exit 1
+sleep 1
+ip route flush table pbr_lokvpn 2>/dev/null || true
+ip route add default dev lokvpn table pbr_lokvpn 2>/dev/null || \
+  ip route replace default dev lokvpn table pbr_lokvpn 2>/dev/null || true

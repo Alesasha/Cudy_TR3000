@@ -1,0 +1,259 @@
+#!/bin/sh
+set -eu
+
+IFACE='awg_in'
+PEER_TYPE='amneziawg_awg_in'
+CLIENT_DIR='/root/awg_clients'
+DEFAULT_ENDPOINT='195.170.35.108:51830'
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  friend-list
+  friend-add NAME [endpoint:port]
+  friend-revoke NAME
+  friend-show NAME
+  friend-qr NAME
+  friend-conf NAME
+EOF
+  exit 2
+}
+
+valid_name() {
+  [ -n "$1" ] || return 1
+  case "$1" in
+    *[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_.-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+peer_indices() {
+  uci show network | sed -n "s/^network\.@${PEER_TYPE}\[\([0-9][0-9]*\)\]=${PEER_TYPE}$/\1/p"
+}
+
+peer_index_by_name() {
+  lookup_name="$1"
+  for peer_i in $(peer_indices); do
+    peer_name="$(uci -q get network.@${PEER_TYPE}[$peer_i].name || true)"
+    [ "$peer_name" = "$lookup_name" ] && echo "$peer_i" && return 0
+  done
+  return 1
+}
+
+client_conf_path() {
+  client_name="$1"
+  if [ -f "$CLIENT_DIR/$client_name-awg.conf" ]; then
+    echo "$CLIENT_DIR/$client_name-awg.conf"
+  else
+    echo "$CLIENT_DIR/$client_name.conf"
+  fi
+}
+
+client_qr_path() {
+  client_name="$1"
+  if [ -f "$CLIENT_DIR/$client_name-awg.qr.txt" ]; then
+    echo "$CLIENT_DIR/$client_name-awg.qr.txt"
+  else
+    echo "$CLIENT_DIR/$client_name.qr.txt"
+  fi
+}
+
+next_ip() {
+  used="$(uci show network | sed -n "s/^network\.@${PEER_TYPE}\[[0-9][0-9]*\]\.allowed_ips='10\.77\.0\.\([0-9][0-9]*\)\/32'.*/\1/p" | sort -n)"
+  n=2
+  while [ "$n" -le 254 ]; do
+    if ! echo "$used" | grep -qx "$n"; then
+      echo "10.77.0.$n"
+      return 0
+    fi
+    n=$((n + 1))
+  done
+  echo "No free 10.77.0.x address" >&2
+  exit 1
+}
+
+server_public_key() {
+  uci -q get network.${IFACE}.private_key | awg pubkey
+}
+
+awg_param() {
+  opt="$1"
+  uci -q get network.${IFACE}.${opt}
+}
+
+show_stats_for_pub() {
+  pub="$1"
+  awg show "$IFACE" dump 2>/dev/null | awk -v pub="$pub" -F '\t' '
+    $1 == pub {
+      printf "%s\t%s\t%s\t%s\t%s\n", $3, $5, $6, $7, $8
+      found=1
+    }
+    END {
+      if (!found) printf "-\t0\t0\t0\t-\n"
+    }
+  '
+}
+
+cmd="${1:-}"
+shift || true
+mkdir -p "$CLIENT_DIR"
+
+case "$cmd" in
+  list)
+    printf "%-22s %-15s %-9s %-22s %-12s %-16s %-16s\n" "name" "ip" "enabled" "endpoint" "handshake" "from_peer_bytes" "to_peer_bytes"
+    for i in $(peer_indices); do
+      name="$(uci -q get network.@${PEER_TYPE}[$i].name || echo "-")"
+      pub="$(uci -q get network.@${PEER_TYPE}[$i].public_key || true)"
+      ips="$(uci -q get network.@${PEER_TYPE}[$i].allowed_ips || echo "-")"
+      disabled="$(uci -q get network.@${PEER_TYPE}[$i].disabled || echo 0)"
+      enabled="yes"
+      [ "$disabled" = "1" ] && enabled="no"
+      stats="$(show_stats_for_pub "$pub")"
+      endpoint="$(echo "$stats" | awk '{print $1}')"
+      handshake="$(echo "$stats" | awk '{print $2}')"
+      rx="$(echo "$stats" | awk '{print $3}')"
+      tx="$(echo "$stats" | awk '{print $4}')"
+      if [ "$handshake" = "0" ] || [ "$handshake" = "-" ]; then
+        handshake="never"
+      else
+        now="$(date +%s)"
+        handshake="$((now - handshake))s ago"
+      fi
+      printf "%-22s %-15s %-9s %-22s %-12s %-16s %-16s\n" "$name" "${ips%/32}" "$enabled" "$endpoint" "$handshake" "$rx" "$tx"
+    done
+    ;;
+  add)
+    name="${1:-}"
+    endpoint="${2:-$DEFAULT_ENDPOINT}"
+    [ -n "$name" ] || usage
+    valid_name "$name" || { echo "Use only A-Z a-z 0-9 _ . - in NAME" >&2; exit 2; }
+    if peer_index_by_name "$name" >/dev/null 2>&1; then
+      echo "Peer already exists: $name" >&2
+      exit 1
+    fi
+
+    ip="$(next_ip)"
+    ts="$(date +%Y%m%d-%H%M%S)"
+    client_key="$(awg genkey)"
+    client_pub="$(printf '%s\n' "$client_key" | awg pubkey)"
+    psk="$(awg genpsk)"
+    server_pub="$(server_public_key)"
+    conf="$CLIENT_DIR/$name-awg.conf"
+    qr="$CLIENT_DIR/$name-awg.qr.txt"
+    psk_file="/tmp/friend-$name.psk.$$"
+
+    cat > "$conf" <<EOF
+[Interface]
+PrivateKey = $client_key
+Address = $ip/32
+DNS = 10.77.0.1
+MTU = $(uci -q get network.${IFACE}.mtu || echo 1280)
+Jc = $(awg_param awg_jc)
+Jmin = $(awg_param awg_jmin)
+Jmax = $(awg_param awg_jmax)
+S1 = $(awg_param awg_s1)
+S2 = $(awg_param awg_s2)
+S3 = $(awg_param awg_s3)
+S4 = $(awg_param awg_s4)
+H1 = $(awg_param awg_h1)
+H2 = $(awg_param awg_h2)
+H3 = $(awg_param awg_h3)
+H4 = $(awg_param awg_h4)
+
+[Peer]
+PublicKey = $server_pub
+PresharedKey = $psk
+Endpoint = $endpoint
+AllowedIPs = 0.0.0.0/0
+PersistentKeepalive = 25
+EOF
+    chmod 600 "$conf"
+    qrencode -t ansiutf8 < "$conf" > "$qr" || true
+
+    sec="$(uci add network "$PEER_TYPE")"
+    uci set network.$sec.name="$name"
+    uci set network.$sec.public_key="$client_pub"
+    uci set network.$sec.preshared_key="$psk"
+    uci set network.$sec.allowed_ips="$ip/32"
+    uci set network.$sec.route_allowed_ips='1'
+    uci set network.$sec.persistent_keepalive='25'
+    uci set network.$sec.created="$ts"
+    uci commit network
+
+    printf '%s\n' "$psk" > "$psk_file"
+    chmod 600 "$psk_file"
+    awg set "$IFACE" peer "$client_pub" preshared-key "$psk_file" allowed-ips "$ip/32" persistent-keepalive 25
+    rm -f "$psk_file"
+    ip -4 route replace "$ip/32" dev "$IFACE"
+
+    echo "Created peer: $name"
+    echo "Address: $ip/32"
+    echo "Config: $conf"
+    echo "QR: $qr"
+    ;;
+  revoke)
+    name="${1:-}"
+    [ -n "$name" ] || usage
+    idx="$(peer_index_by_name "$name" || true)"
+    [ -n "$idx" ] || { echo "No such peer: $name" >&2; exit 1; }
+    pub="$(uci -q get network.@${PEER_TYPE}[$idx].public_key || true)"
+    ip="$(uci -q get network.@${PEER_TYPE}[$idx].allowed_ips || true)"
+    ts="$(date +%Y%m%d-%H%M%S)"
+    mkdir -p "$CLIENT_DIR/revoked"
+    [ -f "$CLIENT_DIR/$name.conf" ] && mv "$CLIENT_DIR/$name.conf" "$CLIENT_DIR/revoked/$name.$ts.conf"
+    [ -f "$CLIENT_DIR/$name.qr.txt" ] && mv "$CLIENT_DIR/$name.qr.txt" "$CLIENT_DIR/revoked/$name.$ts.qr.txt"
+    [ -f "$CLIENT_DIR/$name-awg.conf" ] && mv "$CLIENT_DIR/$name-awg.conf" "$CLIENT_DIR/revoked/$name-awg.$ts.conf"
+    [ -f "$CLIENT_DIR/$name-awg.qr.txt" ] && mv "$CLIENT_DIR/$name-awg.qr.txt" "$CLIENT_DIR/revoked/$name-awg.$ts.qr.txt"
+    uci delete network.@${PEER_TYPE}[$idx]
+    uci commit network
+    [ -n "$pub" ] && awg set "$IFACE" peer "$pub" remove || true
+    [ -n "$ip" ] && ip -4 route del "${ip%/32}/32" dev "$IFACE" 2>/dev/null || true
+    echo "Revoked peer: $name"
+    ;;
+  show)
+    name="${1:-}"
+    [ -n "$name" ] || usage
+    idx="$(peer_index_by_name "$name" || true)"
+    [ -n "$idx" ] || { echo "No such peer: $name" >&2; exit 1; }
+    uci show network.@${PEER_TYPE}[$idx] | sed -e "s/preshared_key='.*/preshared_key='<hidden>'/"
+    pub="$(uci -q get network.@${PEER_TYPE}[$idx].public_key || true)"
+    stats="$(show_stats_for_pub "$pub")"
+    endpoint="$(echo "$stats" | awk '{print $1}')"
+    handshake="$(echo "$stats" | awk '{print $2}')"
+    rx="$(echo "$stats" | awk '{print $3}')"
+    tx="$(echo "$stats" | awk '{print $4}')"
+    keepalive="$(echo "$stats" | awk '{print $5}')"
+    if [ "$handshake" = "0" ] || [ "$handshake" = "-" ]; then
+      handshake_age="never"
+    else
+      handshake_age="$(($(date +%s) - handshake))s ago"
+    fi
+    echo "--- stats ---"
+    echo "endpoint=$endpoint"
+    echo "handshake=$handshake_age"
+    echo "from_peer_bytes=$rx"
+    echo "to_peer_bytes=$tx"
+    echo "keepalive=$keepalive"
+    echo "--- files ---"
+    ls -l "$(client_conf_path "$name")" "$(client_qr_path "$name")" 2>/dev/null || true
+    ;;
+  qr)
+    name="${1:-}"
+    [ -n "$name" ] || usage
+    qr="$(client_qr_path "$name")"
+    conf="$(client_conf_path "$name")"
+    [ -f "$qr" ] || { echo "No QR for peer: $name" >&2; exit 1; }
+    echo "WARNING: AmneziaVPN does not scan QR for AmneziaWG native .conf format. Use friend-conf NAME or import $conf instead." >&2
+    cat "$qr"
+    ;;
+  conf)
+    name="${1:-}"
+    [ -n "$name" ] || usage
+    conf="$(client_conf_path "$name")"
+    [ -f "$conf" ] || { echo "No config for peer: $name" >&2; exit 1; }
+    cat "$conf"
+    ;;
+  *)
+    usage
+    ;;
+esac

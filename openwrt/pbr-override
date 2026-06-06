@@ -1,0 +1,83 @@
+#!/bin/sh
+set -eu
+
+DIR='/etc/pbr-overrides'
+
+usage() {
+  cat >&2 <<'EOF'
+Usage:
+  pbr-override list
+  pbr-override edit {force-wan.domains|force-wan.ips|force-vpn.domains|force-vpn.ips}
+  pbr-override add {wan|vpn} {domain|ip} VALUE
+  pbr-override del {wan|vpn} {domain|ip} VALUE
+  pbr-override apply
+EOF
+  exit 2
+}
+
+file_for() {
+  mode="$1"
+  kind="$2"
+  case "$mode:$kind" in
+    wan:domain) echo "$DIR/force-wan.domains" ;;
+    wan:ip) echo "$DIR/force-wan.ips" ;;
+    vpn:domain) echo "$DIR/force-vpn.domains" ;;
+    vpn:ip) echo "$DIR/force-vpn.ips" ;;
+    *) usage ;;
+  esac
+}
+
+apply_pbr() {
+  /etc/init.d/pbr restart
+}
+
+mkdir -p "$DIR"
+cmd="${1:-}"
+shift || true
+
+case "$cmd" in
+  list)
+    for f in force-wan.domains force-wan.ips force-vpn.domains force-vpn.ips; do
+      touch "$DIR/$f"
+      echo "### $DIR/$f"
+      sed -n '1,200p' "$DIR/$f"
+      echo
+    done
+    ;;
+  edit)
+    f="${1:-}"
+    case "$f" in
+      force-wan.domains|force-wan.ips|force-vpn.domains|force-vpn.ips) ;;
+      *) usage ;;
+    esac
+    touch "$DIR/$f"
+    vi "$DIR/$f"
+    apply_pbr
+    ;;
+  add)
+    [ "$#" -eq 3 ] || usage
+    f="$(file_for "$1" "$2")"
+    value="$3"
+    touch "$f"
+    if ! grep -qxF "$value" "$f"; then
+      echo "$value" >> "$f"
+    fi
+    apply_pbr
+    ;;
+  del)
+    [ "$#" -eq 3 ] || usage
+    f="$(file_for "$1" "$2")"
+    value="$3"
+    touch "$f"
+    tmp="/tmp/pbr-override-del.$$"
+    grep -vxF "$value" "$f" > "$tmp" || true
+    mv "$tmp" "$f"
+    apply_pbr
+    ;;
+  apply)
+    apply_pbr
+    ;;
+  *)
+    usage
+    ;;
+esac

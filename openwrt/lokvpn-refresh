@@ -1,0 +1,132 @@
+#!/bin/sh
+set -eu
+
+SUB_URL="${SUB_URL:-}"
+CONFIG="${CONFIG:-/etc/sing-box/lokvpn.json}"
+SUB_CACHE="${SUB_CACHE:-/tmp/lokvpn-subscription.json}"
+PROFILE="${1:-${LOKVPN_PROFILE:-fr2}}"
+
+[ -n "$SUB_URL" ] || {
+  echo "SUB_URL is required, e.g. export SUB_URL='https://pf.lok-vpn.ru/?profil_id=...&pass=...'" >&2
+  exit 2
+}
+
+case "$PROFILE" in
+  smart1) IDX=0; OB=1 ;;
+  de1) IDX=1; OB=0 ;;
+  ru1) IDX=2; OB=0 ;;
+  nl1) IDX=3; OB=0 ;;
+  fr1) IDX=4; OB=0 ;;
+  se1) IDX=5; OB=0 ;;
+  smart2) IDX=6; OB=1 ;;
+  de2) IDX=7; OB=0 ;;
+  ru2) IDX=8; OB=0 ;;
+  nl2) IDX=9; OB=0 ;;
+  fr2) IDX=10; OB=0 ;;
+  se2) IDX=11; OB=0 ;;
+  *)
+    echo "usage: lokvpn-refresh [smart1|de1|ru1|nl1|fr1|se1|smart2|de2|ru2|nl2|fr2|se2]" >&2
+    exit 2
+    ;;
+esac
+
+TMP_SUB="$(mktemp /tmp/lokvpn-sub.XXXXXX)"
+TMP_CONFIG="$(mktemp /tmp/lokvpn-json.XXXXXX)"
+cleanup() {
+  rm -f "$TMP_SUB" "$TMP_CONFIG"
+}
+trap cleanup EXIT
+
+curl -fsS --connect-timeout 15 --max-time 60 \
+  -H 'X-App-Version: 2.7.0' \
+  -H 'X-Device-Locale: RU' \
+  -H 'X-Device-OS: Windows' \
+  -H 'X-Device-model: Ryzen7Pro4750G_x86_64' \
+  -H 'X-HWID: 3dadf61c-af37-4ea7-a8d3-ce044ce069d7' \
+  -H 'X-Ver-OS: 11_10.0.26200' \
+  "$SUB_URL" > "$TMP_SUB"
+
+SERVER="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].settings.vnext[0].address")"
+PORT="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].settings.vnext[0].port")"
+UUID="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].settings.vnext[0].users[0].id")"
+FLOW="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].settings.vnext[0].users[0].flow")"
+SNI="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].streamSettings.realitySettings.serverName")"
+PUBLIC_KEY="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].streamSettings.realitySettings.publicKey")"
+SHORT_ID="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].streamSettings.realitySettings.shortId")"
+
+if [ -z "$SERVER" ] || [ -z "$PORT" ] || [ -z "$UUID" ] || [ -z "$FLOW" ] || [ -z "$SNI" ] || [ -z "$PUBLIC_KEY" ] || [ -z "$SHORT_ID" ]; then
+  echo "failed to parse LokVPN subscription profile=$PROFILE idx=$IDX outbound=$OB" >&2
+  exit 1
+fi
+
+cat > "$TMP_CONFIG" <<EOF
+{
+  "log": {
+    "level": "info",
+    "timestamp": true
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "lokvpn-tun",
+      "interface_name": "lokvpn",
+      "address": [
+        "172.38.0.1/30"
+      ],
+      "mtu": 1400,
+      "auto_route": false,
+      "strict_route": false,
+      "stack": "gvisor"
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "proxy-out",
+      "server": "$SERVER",
+      "server_port": $PORT,
+      "uuid": "$UUID",
+      "flow": "$FLOW",
+      "tls": {
+        "enabled": true,
+        "server_name": "$SNI",
+        "utls": {
+          "enabled": true,
+          "fingerprint": "chrome"
+        },
+        "reality": {
+          "enabled": true,
+          "public_key": "$PUBLIC_KEY",
+          "short_id": "$SHORT_ID"
+        }
+      }
+    },
+    {
+      "type": "direct",
+      "tag": "direct"
+    },
+    {
+      "type": "block",
+      "tag": "block"
+    }
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "rules": [
+      {
+        "ip_cidr": [
+          "$SERVER/32"
+        ],
+        "outbound": "direct"
+      }
+    ],
+    "final": "proxy-out"
+  }
+}
+EOF
+
+sing-box check -c "$TMP_CONFIG" >/dev/null
+cp "$TMP_SUB" "$SUB_CACHE"
+cp "$TMP_CONFIG" "$CONFIG"
+
+echo "LokVPN profile $PROFILE -> $SERVER:$PORT"

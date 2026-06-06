@@ -1,0 +1,25 @@
+# PBR override lists
+
+These files are loaded by `/usr/share/pbr/pbr.user.opencck-merged-vpn` during every PBR restart.
+
+Priority:
+
+1. Generated WAN-RU list -> `pbr_wan_4_dst_ip_user`.
+   - IPv4/CIDR source: `https://www.ipdeny.com/ipblocks/data/aggregated/ru-aggregated.zone`
+   - Domain source: `https://raw.githubusercontent.com/v2fly/domain-list-community/master/data/category-ru`
+2. `force-wan.*` -> `pbr_wan_4_dst_ip_user`.
+3. Downloaded VPN list:
+   - `https://antifilter.download/list/allyouneed.lst`
+   - `https://iplist.opencck.org/ru/?format=text&data=cidr4`
+4. `force-vpn.*` -> current `TARGET_INTERFACE` set, currently `awg2` unless `vpn1`/`vpn2` changes it.
+
+Files:
+
+- `force-wan.domains`: domains that must go directly via WAN.
+- `force-wan.ips`: IPv4/CIDR entries that must go directly via WAN.
+- `force-wan.urls`: URL sources for IPv4/CIDR entries that must go directly via WAN.
+- `force-vpn.domains`: domains that must go via the current tunnel.
+- `force-vpn.ips`: IPv4/CIDR entries that must go via the current tunnel.
+- `force-vpn.urls`: URL sources for IPv4/CIDR entries that must go via the current tunnel.
+
+One entry per line. Comments start with `#`.

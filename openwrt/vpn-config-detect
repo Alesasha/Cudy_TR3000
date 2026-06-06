@@ -1,0 +1,99 @@
+#!/bin/sh
+set -eu
+
+usage() {
+  echo "Usage: vpn-config-detect [config-or-link-file]" >&2
+  echo "Reads stdin when no file is provided. Prints only detected type and next step." >&2
+}
+
+input_file="${1:-}"
+tmp=''
+
+if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
+  usage
+  exit 0
+fi
+
+cleanup() {
+  [ -n "$tmp" ] && rm -f "$tmp"
+}
+trap cleanup EXIT INT TERM
+
+if [ -n "$input_file" ]; then
+  [ -f "$input_file" ] || { echo "File not found: $input_file" >&2; exit 1; }
+  source_file="$input_file"
+else
+  tmp="/tmp/vpn-config-detect.$$"
+  umask 077
+  cat > "$tmp"
+  source_file="$tmp"
+fi
+
+first_token="$(
+  sed -n 's/^[[:space:]]*//; /^[[:space:]]*$/d; p; q' "$source_file" \
+    | sed 's/[[:space:]].*$//'
+)"
+scheme="$(printf '%s' "$first_token" | sed -n 's/^\([A-Za-z][A-Za-z0-9+.-]*\):\/\/.*/\1/p' | tr 'A-Z' 'a-z')"
+
+has_section() {
+  grep -qi "^\[$1\]" "$source_file"
+}
+
+has_json_key() {
+  grep -Eq "\"$1\"[[:space:]]*:" "$source_file"
+}
+
+if has_section Interface && has_section Peer; then
+  if grep -Eq '^[[:space:]]*(Jc|Jmin|Jmax|S1|S2|H1|H2|H3|H4)[[:space:]]*=' "$source_file"; then
+    echo "type=amneziawg-config"
+    echo "openwrt_client=amneziawg"
+    echo "recommended_interface=lokvpn_or_vpntype"
+  else
+    echo "type=wireguard-config"
+    echo "openwrt_client=wireguard"
+    echo "recommended_interface=lokvpn_or_vpntype"
+  fi
+  exit 0
+fi
+
+case "$scheme" in
+  vless|vmess|trojan|ss|socks|hy2|hysteria2)
+    echo "type=${scheme}-link"
+    echo "openwrt_client=sing-box"
+    echo "recommended_mode=tun-interface"
+    exit 0
+    ;;
+  happ)
+    if printf '%s' "$first_token" | grep -Eq '^happ://crypt(o|[0-9]+)'; then
+      echo "type=happ-encrypted-subscription"
+      echo "openwrt_client=not-directly-importable"
+      echo "next_step=share_single_server_or_standard_subscription_from_Happ_or_provider"
+    else
+      echo "type=happ-link"
+      echo "openwrt_client=unknown"
+      echo "next_step=export_JSON_or_copy_standard_protocol_link"
+    fi
+    exit 0
+    ;;
+  http|https)
+    echo "type=subscription-url"
+    echo "openwrt_client=sing-box_or_xray_after_fetching_content"
+    echo "next_step=download_privately_and_detect_inner_links"
+    exit 0
+    ;;
+esac
+
+if has_json_key outbounds || has_json_key inbounds || has_json_key protocol || has_json_key server; then
+  if grep -Eq '"(vless|vmess|trojan|shadowsocks|hysteria2|socks)"' "$source_file"; then
+    echo "type=xray-or-sing-box-json"
+    echo "openwrt_client=sing-box_or_xray"
+  else
+    echo "type=json-unknown"
+    echo "openwrt_client=manual-inspection-needed"
+  fi
+  exit 0
+fi
+
+echo "type=unknown"
+echo "next_step=provide_prefix_or_export_format_without_secrets"
+exit 3

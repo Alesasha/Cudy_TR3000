@@ -1,0 +1,52 @@
+#!/bin/sh
+set -eu
+
+PROFILE_FILE="${PROFILE_FILE:-/etc/lokvpn-profile}"
+PROFILE="${1:-$(cat "$PROFILE_FILE" 2>/dev/null || echo fr2)}"
+CONFIG="${CONFIG:-/etc/sing-box/lokvpn.json}"
+LOCK=/tmp/lokvpn-refresh-current.lock
+
+if ! mkdir "$LOCK" 2>/dev/null; then
+  echo "lokvpn refresh already running" >&2
+  exit 0
+fi
+trap 'rmdir "$LOCK"' EXIT
+
+checksum() {
+  [ -f "$CONFIG" ] && md5sum "$CONFIG" | awk '{ print $1 }' || true
+}
+
+service_running() {
+  /etc/init.d/sing-box-lokvpn status 2>/dev/null | grep -q running
+}
+
+active_target() {
+  grep -q "^TARGET_INTERFACE='lokvpn'" /usr/share/pbr/pbr.user.opencck-merged-vpn 2>/dev/null
+}
+
+fix_route() {
+  ip route flush table pbr_lokvpn 2>/dev/null || true
+  ip route add default dev lokvpn table pbr_lokvpn 2>/dev/null || \
+    ip route replace default dev lokvpn table pbr_lokvpn 2>/dev/null || true
+}
+
+old_sum="$(checksum)"
+/usr/bin/lokvpn-refresh "$PROFILE"
+printf '%s\n' "$PROFILE" > "$PROFILE_FILE"
+new_sum="$(checksum)"
+
+if [ "$old_sum" != "$new_sum" ]; then
+  if service_running || active_target; then
+    /etc/init.d/sing-box-lokvpn restart
+    sleep 2
+    fix_route
+  fi
+  echo "LokVPN refreshed profile=$PROFILE changed=1"
+else
+  if active_target; then
+    /etc/init.d/sing-box-lokvpn start || true
+    sleep 1
+    fix_route
+  fi
+  echo "LokVPN refreshed profile=$PROFILE changed=0"
+fi

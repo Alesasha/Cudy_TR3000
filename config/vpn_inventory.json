@@ -1,0 +1,380 @@
+{
+  "schema_version": 1,
+  "updated_at": "2026-06-06",
+  "notes": [
+    "Stage 1 inventory: static routing choices and provider profile metadata.",
+    "Runtime state is collected separately by tools/vpn_inventory.py refresh-cudy."
+  ],
+  "auto_choice": {
+    "id": "auto",
+    "label": "Auto",
+    "kind": "virtual",
+    "enabled": true,
+    "user_visible": true,
+    "description": "Automatic domain-to-server selection; implementation starts after inventory and admin foundations."
+  },
+  "servers": [
+    {
+      "id": "aktau",
+      "label": "Aktau",
+      "provider": "megahost",
+      "kind": "own-awg",
+      "interface": "awg1",
+      "geo": {
+        "country": "KZ",
+        "region": "Aktau"
+      },
+      "endpoint": "45.136.59.135:45646",
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn1",
+      "client_registry_id": "megahost-aktau",
+      "health_check": {
+        "mode": "interface-curl",
+        "interface": "awg1"
+      }
+    },
+    {
+      "id": "uswest",
+      "label": "US West",
+      "provider": "hostvds",
+      "kind": "own-awg",
+      "interface": "awg2",
+      "geo": {
+        "country": "US",
+        "region": "West"
+      },
+      "endpoint": "95.182.91.203:30184",
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn2",
+      "client_registry_id": "hostvds-uswest",
+      "health_check": {
+        "mode": "interface-curl",
+        "interface": "awg2"
+      }
+    },
+    {
+      "id": "hostvds-old",
+      "label": "HostVDS old",
+      "provider": "hostvds",
+      "kind": "own-awg",
+      "interface": "awg4",
+      "geo": {
+        "country": "US",
+        "region": "old"
+      },
+      "endpoint": "45.39.33.103:30184",
+      "enabled": false,
+      "user_visible": false,
+      "admin_visible": true,
+      "switch_command": "vpn4",
+      "client_registry_id": null,
+      "health_check": {
+        "mode": "disabled"
+      }
+    },
+    {
+      "id": "lokvpn",
+      "label": "LokVPN",
+      "provider": "lokvpn",
+      "kind": "sing-box-selector",
+      "interface": "lokvpn",
+      "geo": {
+        "country": "multi",
+        "region": "profiles"
+      },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-lokvpn",
+      "profile_command": "lokvpn-refresh",
+      "default_profile": "fr2",
+      "profiles": [
+        { "id": "smart1", "label": "Smart 1", "country": "auto" },
+        { "id": "de1", "label": "Germany 1", "country": "DE" },
+        { "id": "ru1", "label": "Russia 1", "country": "RU" },
+        { "id": "nl1", "label": "Netherlands 1", "country": "NL" },
+        { "id": "fr1", "label": "France 1", "country": "FR" },
+        { "id": "se1", "label": "Sweden 1", "country": "SE" },
+        { "id": "smart2", "label": "Smart 2", "country": "auto" },
+        { "id": "de2", "label": "Germany 2", "country": "DE" },
+        { "id": "ru2", "label": "Russia 2", "country": "RU" },
+        { "id": "nl2", "label": "Netherlands 2", "country": "NL" },
+        { "id": "fr2", "label": "France 2", "country": "FR" },
+        { "id": "se2", "label": "Sweden 2", "country": "SE" }
+      ],
+      "health_check": {
+        "mode": "interface-curl",
+        "interface": "lokvpn"
+      }
+    },
+    {
+      "id": "vpntype",
+      "label": "VPNtype selector",
+      "provider": "vpntype",
+      "kind": "sing-box-selector",
+      "interface": "vpntype",
+      "geo": {
+        "country": "multi",
+        "region": "subscription"
+      },
+      "enabled": true,
+      "user_visible": false,
+      "admin_visible": true,
+      "switch_command": "vpn-vpntype",
+      "profile_command": "vpntype-server",
+      "health_check": {
+        "mode": "interface-curl",
+        "interface": "vpntype"
+      }
+    },
+    {
+      "id": "proxygb",
+      "label": "VPNtype GB",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxygb",
+      "geo": { "country": "GB" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxygb",
+      "refresh_command": "proxygb-refresh"
+    },
+    {
+      "id": "proxyca",
+      "label": "VPNtype CA",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyca",
+      "geo": { "country": "CA" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyca",
+      "refresh_command": "proxyca-refresh"
+    },
+    {
+      "id": "proxyfr",
+      "label": "VPNtype FR",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyfr",
+      "geo": { "country": "FR" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyfr",
+      "refresh_command": "proxyfr-refresh"
+    },
+    {
+      "id": "proxyby",
+      "label": "VPNtype BY",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyby",
+      "geo": { "country": "BY" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyby",
+      "refresh_command": "proxyby-refresh"
+    },
+    {
+      "id": "proxyae",
+      "label": "VPNtype AE",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyae",
+      "geo": { "country": "AE" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyae",
+      "refresh_command": "proxyae-refresh"
+    },
+    {
+      "id": "proxyhk",
+      "label": "VPNtype HK",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyhk",
+      "geo": { "country": "HK" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyhk",
+      "refresh_command": "proxyhk-refresh"
+    },
+    {
+      "id": "proxykz",
+      "label": "VPNtype KZ",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxykz",
+      "geo": { "country": "KZ" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxykz",
+      "refresh_command": "proxykz-refresh"
+    },
+    {
+      "id": "proxytr",
+      "label": "VPNtype TR",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxytr",
+      "geo": { "country": "TR" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxytr",
+      "refresh_command": "proxytr-refresh"
+    },
+    {
+      "id": "proxyil",
+      "label": "VPNtype IL",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyil",
+      "geo": { "country": "IL" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyil",
+      "refresh_command": "proxyil-refresh"
+    },
+    {
+      "id": "proxycz",
+      "label": "VPNtype CZ",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxycz",
+      "geo": { "country": "CZ" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxycz",
+      "refresh_command": "proxycz-refresh"
+    },
+    {
+      "id": "proxypl",
+      "label": "VPNtype PL",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxypl",
+      "geo": { "country": "PL" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxypl",
+      "refresh_command": "proxypl-refresh"
+    },
+    {
+      "id": "proxyfi",
+      "label": "VPNtype FI",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyfi",
+      "geo": { "country": "FI" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyfi",
+      "refresh_command": "proxyfi-refresh"
+    },
+    {
+      "id": "proxynl",
+      "label": "VPNtype NL",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxynl",
+      "geo": { "country": "NL" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxynl",
+      "refresh_command": "proxynl-refresh"
+    },
+    {
+      "id": "proxyal",
+      "label": "VPNtype AL",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyal",
+      "geo": { "country": "AL" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyal",
+      "refresh_command": "proxyal-refresh"
+    },
+    {
+      "id": "proxyru",
+      "label": "VPNtype RU",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyru",
+      "geo": { "country": "RU" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyru",
+      "refresh_command": "proxyru-refresh"
+    },
+    {
+      "id": "proxyus",
+      "label": "VPNtype US",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyus",
+      "geo": { "country": "US" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyus",
+      "refresh_command": "proxyus-refresh"
+    },
+    {
+      "id": "proxyde",
+      "label": "VPNtype DE",
+      "provider": "vpntype",
+      "kind": "http-proxy-tun",
+      "interface": "proxyde",
+      "geo": { "country": "DE" },
+      "enabled": true,
+      "user_visible": true,
+      "admin_visible": true,
+      "switch_command": "vpn-proxyde",
+      "refresh_command": "proxyde-refresh"
+    }
+  ],
+  "roles": [
+    {
+      "id": "admin",
+      "permissions": [
+        "view_all_servers",
+        "edit_server_inventory",
+        "view_all_users",
+        "edit_user_routes",
+        "refresh_runtime_state"
+      ]
+    },
+    {
+      "id": "user",
+      "permissions": [
+        "view_enabled_user_servers",
+        "edit_own_domain_routes"
+      ]
+    }
+  ],
+  "domain_routing": {
+    "cache_limit": 300,
+    "default_choice": "auto",
+    "user_override_table": []
+  }
+}
