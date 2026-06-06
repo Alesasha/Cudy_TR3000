@@ -27,6 +27,7 @@ python tools\vpn_inventory.py validate
 python tools\vpn_inventory.py list
 python tools\vpn_inventory.py admin-list --include-disabled
 python tools\vpn_control_app.py init-db
+python tools\vpn_control_app.py create-user admin --role admin
 python -m py_compile tools\vpn_inventory.py tools\awg_client_add.py
 ```
 

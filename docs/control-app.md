@@ -18,6 +18,28 @@ data/vpn_control.db
 
 The database is ignored by Git.
 
+## Create Users
+
+Create the first administrator:
+
+```powershell
+python tools\vpn_control_app.py create-user admin --role admin
+```
+
+The command asks for the password interactively and stores only a PBKDF2 hash in SQLite.
+
+Create a normal user:
+
+```powershell
+python tools\vpn_control_app.py create-user alex --role user --display-name "Alex"
+```
+
+Update an existing user without changing the password:
+
+```powershell
+python tools\vpn_control_app.py create-user alex --role user --display-name "Alex" --no-password-change
+```
+
 ## Run
 
 ```powershell
@@ -38,6 +60,10 @@ http://127.0.0.1:8765/admin
 
 ## Current Features
 
+- Login page:
+  - username/password authentication;
+  - `HttpOnly` cookie sessions;
+  - PBKDF2 password hashing.
 - User page:
   - choose default server;
   - add or delete `domain -> server` routes;
@@ -51,7 +77,6 @@ http://127.0.0.1:8765/admin
 
 ## Not Implemented Yet
 
-- authentication;
 - writing live PBR/OpenWrt rules;
 - automatic best-server benchmarking;
 - multi-user invitation or remote sync.

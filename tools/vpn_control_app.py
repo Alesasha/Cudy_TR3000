@@ -10,11 +10,16 @@ routing yet.
 from __future__ import annotations
 
 import argparse
-import html
+import base64
+import getpass
+import hashlib
+import hmac
 import json
 import re
+import secrets
 import sqlite3
 import sys
+import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -27,6 +32,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "config" / "vpn_inventory.json"
 DEFAULT_DB = ROOT / "data" / "vpn_control.db"
 DEFAULT_USER_ID = "default"
+SESSION_COOKIE = "vpn_session"
+SESSION_TTL_SECONDS = 12 * 60 * 60
+PASSWORD_ITERATIONS = 210_000
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
 )
@@ -59,6 +67,8 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   role TEXT NOT NULL DEFAULT 'user',
   default_server_id TEXT NOT NULL DEFAULT 'auto',
+  password_salt TEXT,
+  password_hash TEXT,
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -87,6 +97,112 @@ CREATE TABLE IF NOT EXISTS domain_auto_cache (
   metadata_json TEXT NOT NULL DEFAULT '{}',
   FOREIGN KEY(selected_server_id) REFERENCES servers(id)
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+  token TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at INTEGER NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+"""
+
+
+LOGIN_HTML = r"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cudy VPN Login</title>
+  <style>
+    :root {
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --text: #172033;
+      --muted: #647084;
+      --line: #d9dee8;
+      --accent: #1769e0;
+      --danger: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+    }
+    main {
+      width: min(420px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 22px;
+    }
+    h1 { font-size: 20px; margin: 0 0 18px; }
+    label { display: block; margin: 12px 0 6px; color: var(--muted); }
+    input {
+      width: 100%;
+      min-height: 38px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 8px 10px;
+    }
+    button {
+      width: 100%;
+      min-height: 38px;
+      margin-top: 16px;
+      border: 1px solid #145bbf;
+      border-radius: 6px;
+      background: var(--accent);
+      color: #fff;
+      cursor: pointer;
+    }
+    .status { min-height: 20px; margin-top: 12px; color: var(--muted); }
+    .error { color: var(--danger); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Cudy VPN Login</h1>
+    <form id="loginForm">
+      <label for="username">User</label>
+      <input id="username" name="username" autocomplete="username" required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button type="submit">Sign in</button>
+    </form>
+    <p id="status" class="status"></p>
+  </main>
+  <script>
+    const nextUrl = new URLSearchParams(location.search).get("next") || "/";
+    document.getElementById("loginForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("status");
+      status.className = "status";
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || response.statusText);
+        location.href = nextUrl;
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+  </script>
+</body>
+</html>
 """
 
 
@@ -185,7 +301,10 @@ USER_HTML = r"""<!doctype html>
 <body>
   <header>
     <h1>Cudy VPN</h1>
-    <a href="/admin">Admin</a>
+    <div class="row">
+      <a href="/admin">Admin</a>
+      <button id="logoutButton" class="secondary" type="button">Logout</button>
+    </div>
   </header>
   <main>
     <section>
@@ -265,6 +384,11 @@ USER_HTML = r"""<!doctype html>
       fillServerSelect(document.getElementById("routeServer"), "auto");
       renderRoutes();
     }
+
+    document.getElementById("logoutButton").addEventListener("click", async () => {
+      await api("/api/logout", { method: "POST", body: "{}" });
+      location.href = "/login";
+    });
 
     document.getElementById("saveDefault").addEventListener("click", async () => {
       const status = document.getElementById("defaultStatus");
@@ -381,7 +505,10 @@ ADMIN_HTML = r"""<!doctype html>
 <body>
   <header>
     <h1>Cudy VPN Admin</h1>
-    <a href="/">User</a>
+    <div class="inline">
+      <a href="/">User</a>
+      <button id="logoutButton" type="button">Logout</button>
+    </div>
   </header>
   <main>
     <section>
@@ -487,6 +614,10 @@ ADMIN_HTML = r"""<!doctype html>
       renderUsers();
       renderRoutes();
     }
+    document.getElementById("logoutButton").addEventListener("click", async () => {
+      await api("/api/logout", { method: "POST", body: "{}" });
+      location.href = "/login";
+    });
     load().catch(error => {
       document.getElementById("serverStatus").textContent = error.message;
       document.getElementById("serverStatus").className = "status error";
@@ -514,12 +645,108 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def ensure_columns(conn: sqlite3.Connection, table: str, columns: dict[str, str]) -> None:
+    existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    for name, definition in columns.items():
+        if name not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {definition}")
+
+
+def migrate_db(conn: sqlite3.Connection) -> None:
+    ensure_columns(
+        conn,
+        "users",
+        {
+            "password_salt": "TEXT",
+            "password_hash": "TEXT",
+        },
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+          token TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
 def init_db(db_path: Path, inventory_path: Path, *, reset_from_inventory: bool = False) -> None:
     inventory = load_inventory(inventory_path)
     with connect(db_path) as conn:
         conn.executescript(SCHEMA)
+        migrate_db(conn)
         seed_inventory(conn, inventory, reset_from_inventory=reset_from_inventory)
         ensure_default_user(conn)
+
+
+def hash_password(password: str, salt_b64: str | None = None) -> tuple[str, str]:
+    salt = base64.b64decode(salt_b64) if salt_b64 else secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS)
+    return base64.b64encode(salt).decode("ascii"), base64.b64encode(digest).decode("ascii")
+
+
+def verify_password(password: str, salt_b64: str | None, hash_b64: str | None) -> bool:
+    if not salt_b64 or not hash_b64:
+        return False
+    _, expected = hash_password(password, salt_b64)
+    return hmac.compare_digest(expected, hash_b64)
+
+
+def create_or_update_user(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    display_name: str,
+    role: str,
+    password: str | None,
+    enabled: bool = True,
+) -> None:
+    if role not in {"admin", "user"}:
+        raise ValueError("role must be admin or user")
+    if not user_id or not re.match(r"^[A-Za-z0-9_.-]{2,64}$", user_id):
+        raise ValueError("user id must be 2-64 chars: A-Z a-z 0-9 _ . -")
+    init_db(db_path, inventory_path)
+    timestamp = now()
+    salt_hash = hash_password(password) if password is not None else (None, None)
+    with connect(db_path) as conn:
+        existing = row(conn, "SELECT id FROM users WHERE id = ?", (user_id,))
+        if existing is None:
+            if password is None:
+                raise ValueError("password is required for a new user")
+            conn.execute(
+                """
+                INSERT INTO users (
+                  id, display_name, role, default_server_id, password_salt,
+                  password_hash, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, 'auto', ?, ?, ?, ?, ?)
+                """,
+                (user_id, display_name, role, salt_hash[0], salt_hash[1], int(enabled), timestamp, timestamp),
+            )
+        else:
+            if password is None:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET display_name = ?, role = ?, enabled = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (display_name, role, int(enabled), timestamp, user_id),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE users
+                    SET display_name = ?, role = ?, password_salt = ?, password_hash = ?,
+                        enabled = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (display_name, role, salt_hash[0], salt_hash[1], int(enabled), timestamp, user_id),
+                )
 
 
 def seed_inventory(conn: sqlite3.Connection, inventory: dict[str, Any], *, reset_from_inventory: bool) -> None:
@@ -752,11 +979,19 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
-    def send_json(self, data: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
+    def send_json(
+        self,
+        data: Any,
+        status: HTTPStatus = HTTPStatus.OK,
+        *,
+        extra_headers: list[tuple[str, str]] | None = None,
+    ) -> None:
         payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("cache-control", "no-store")
+        for name, value in extra_headers or []:
+            self.send_header(name, value)
         self.send_header("content-length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
@@ -764,23 +999,89 @@ class Handler(BaseHTTPRequestHandler):
     def send_error_json(self, error: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
         self.send_json({"error": error}, status)
 
+    def send_redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.FOUND)
+        self.send_header("location", location)
+        self.send_header("content-length", "0")
+        self.end_headers()
+
+    def cookie_value(self, name: str) -> str | None:
+        raw = self.headers.get("cookie", "")
+        for item in raw.split(";"):
+            if "=" not in item:
+                continue
+            key, value = item.strip().split("=", 1)
+            if key == name:
+                return value
+        return None
+
+    def current_user(self) -> dict[str, Any] | None:
+        token = self.cookie_value(SESSION_COOKIE)
+        if not token:
+            return None
+        with self.app.conn() as conn:
+            conn.execute("DELETE FROM sessions WHERE expires_at <= ?", (int(time.time()),))
+            return row(
+                conn,
+                """
+                SELECT u.id, u.display_name, u.role, u.default_server_id, u.enabled
+                FROM sessions s
+                JOIN users u ON u.id = s.user_id
+                WHERE s.token = ? AND s.expires_at > ? AND u.enabled = 1
+                """,
+                (token, int(time.time())),
+            )
+
+    def require_user(self) -> dict[str, Any]:
+        user = self.current_user()
+        if user is None:
+            raise PermissionError("Authentication required")
+        return user
+
+    def require_admin(self) -> dict[str, Any]:
+        user = self.require_user()
+        if user.get("role") != "admin":
+            raise PermissionError("Admin role required")
+        return user
+
+    def auth_error(self, exc: Exception, *, html_redirect: bool = False, next_path: str = "/") -> None:
+        if html_redirect:
+            self.send_redirect(f"/login?next={next_path}")
+            return
+        status = HTTPStatus.FORBIDDEN if "Admin role" in str(exc) else HTTPStatus.UNAUTHORIZED
+        self.send_error_json(str(exc), status)
+
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/":
+                try:
+                    self.require_user()
+                except PermissionError as exc:
+                    self.auth_error(exc, html_redirect=True, next_path="/")
+                    return
                 self.send_html(USER_HTML)
             elif parsed.path == "/admin":
+                try:
+                    self.require_admin()
+                except PermissionError as exc:
+                    self.auth_error(exc, html_redirect=True, next_path="/admin")
+                    return
                 self.send_html(ADMIN_HTML)
+            elif parsed.path == "/login":
+                self.send_html(LOGIN_HTML)
             elif parsed.path == "/api/bootstrap":
-                query = parse_qs(parsed.query)
-                user_id = query.get("user_id", [DEFAULT_USER_ID])[0]
-                self.send_json(self.api_bootstrap(user_id))
+                user = self.require_user()
+                self.send_json(self.api_bootstrap(user["id"]))
             elif parsed.path == "/api/admin":
+                self.require_admin()
                 self.send_json(self.api_admin())
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+        except PermissionError as exc:
+            self.auth_error(exc)
         except Exception as exc:
             self.send_error_json(str(exc))
 
@@ -788,14 +1089,23 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             data = self.read_json()
-            if parsed.path == "/api/user/default-server":
+            if parsed.path == "/api/login":
+                self.api_login(data)
+            elif parsed.path == "/api/logout":
+                self.api_logout()
+            elif parsed.path == "/api/user/default-server":
+                self.require_user()
                 self.send_json(self.api_set_default_server(data))
             elif parsed.path == "/api/domain-routes":
+                self.require_user()
                 self.send_json(self.api_save_domain_route(data))
             elif parsed.path == "/api/admin/servers":
+                self.require_admin()
                 self.send_json(self.api_update_server(data))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+        except PermissionError as exc:
+            self.auth_error(exc)
         except Exception as exc:
             self.send_error_json(str(exc))
 
@@ -803,16 +1113,60 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/api/domain-routes":
+                user = self.require_user()
                 query = parse_qs(parsed.query)
-                user_id = query.get("user_id", [DEFAULT_USER_ID])[0]
                 domain = normalize_domain(query.get("domain", [""])[0])
                 with self.app.conn() as conn:
-                    conn.execute("DELETE FROM user_domain_routes WHERE user_id = ? AND domain = ?", (user_id, domain))
+                    conn.execute("DELETE FROM user_domain_routes WHERE user_id = ? AND domain = ?", (user["id"], domain))
                 self.send_json({"ok": True})
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+        except PermissionError as exc:
+            self.auth_error(exc)
         except Exception as exc:
             self.send_error_json(str(exc))
+
+    def api_login(self, data: dict[str, Any]) -> None:
+        username = str(data.get("username") or "").strip()
+        password = str(data.get("password") or "")
+        if not username or not password:
+            raise ValueError("User and password are required")
+        with self.app.conn() as conn:
+            user = row(
+                conn,
+                """
+                SELECT id, display_name, role, password_salt, password_hash, enabled
+                FROM users
+                WHERE id = ?
+                """,
+                (username,),
+            )
+            if user is None or not user.get("enabled"):
+                raise PermissionError("Invalid user or password")
+            if not verify_password(password, user.get("password_salt"), user.get("password_hash")):
+                raise PermissionError("Invalid user or password")
+            token = secrets.token_urlsafe(32)
+            expires_at = int(time.time()) + SESSION_TTL_SECONDS
+            conn.execute(
+                "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (token, user["id"], now(), expires_at),
+            )
+        cookie = (
+            f"{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; "
+            f"Max-Age={SESSION_TTL_SECONDS}"
+        )
+        self.send_json(
+            {"ok": True, "user": {"id": user["id"], "display_name": user["display_name"], "role": user["role"]}},
+            extra_headers=[("set-cookie", cookie)],
+        )
+
+    def api_logout(self) -> None:
+        token = self.cookie_value(SESSION_COOKIE)
+        if token:
+            with self.app.conn() as conn:
+                conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
+        expired = f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
+        self.send_json({"ok": True}, extra_headers=[("set-cookie", expired)])
 
     def api_bootstrap(self, user_id: str) -> dict[str, Any]:
         with self.app.conn() as conn:
@@ -858,7 +1212,7 @@ class Handler(BaseHTTPRequestHandler):
             }
 
     def api_set_default_server(self, data: dict[str, Any]) -> dict[str, Any]:
-        user_id = str(data.get("user_id") or DEFAULT_USER_ID)
+        user_id = self.require_user()["id"]
         server_id = str(data.get("server_id") or "")
         timestamp = now()
         with self.app.conn() as conn:
@@ -872,7 +1226,7 @@ class Handler(BaseHTTPRequestHandler):
         return {"ok": True}
 
     def api_save_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
-        user_id = str(data.get("user_id") or DEFAULT_USER_ID)
+        user_id = self.require_user()["id"]
         domain = normalize_domain(str(data.get("domain") or ""))
         server_id = str(data.get("server_id") or "")
         timestamp = now()
@@ -932,11 +1286,23 @@ def print_db_summary(db_path: Path) -> None:
             "SELECT count(*) FROM servers WHERE enabled = 1 AND user_visible = 1"
         ).fetchone()[0]
         user_count = conn.execute("SELECT count(*) FROM users").fetchone()[0]
+        login_user_count = conn.execute("SELECT count(*) FROM users WHERE password_hash IS NOT NULL").fetchone()[0]
         route_count = conn.execute("SELECT count(*) FROM user_domain_routes").fetchone()[0]
     print(f"DB: {db_path}")
     print(f"Servers: {server_count} total, {user_server_count} user-visible")
-    print(f"Users: {user_count}")
+    print(f"Users: {user_count} total, {login_user_count} with login")
     print(f"Domain routes: {route_count}")
+
+
+def read_password_arg(value: str | None, *, confirm: bool) -> str:
+    if value is not None:
+        return value
+    first = getpass.getpass("Password: ")
+    if confirm:
+        second = getpass.getpass("Confirm password: ")
+        if first != second:
+            raise ValueError("Passwords do not match")
+    return first
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -949,6 +1315,14 @@ def build_parser() -> argparse.ArgumentParser:
     init_parser.add_argument("--reset-from-inventory", action="store_true")
 
     summary_parser = sub.add_parser("summary", help="Print database summary.")
+
+    create_user_parser = sub.add_parser("create-user", help="Create or update a login user.")
+    create_user_parser.add_argument("user_id")
+    create_user_parser.add_argument("--display-name")
+    create_user_parser.add_argument("--role", choices=["admin", "user"], default="user")
+    create_user_parser.add_argument("--password", help="Prefer interactive prompt or env in normal use.")
+    create_user_parser.add_argument("--disabled", action="store_true")
+    create_user_parser.add_argument("--no-password-change", action="store_true")
 
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
@@ -967,6 +1341,19 @@ def main() -> int:
     if args.command == "summary":
         init_db(args.db, args.inventory)
         print_db_summary(args.db)
+        return 0
+    if args.command == "create-user":
+        password = None if args.no_password_change else read_password_arg(args.password, confirm=args.password is None)
+        create_or_update_user(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            display_name=args.display_name or args.user_id,
+            role=args.role,
+            password=password,
+            enabled=not args.disabled,
+        )
+        print(f"User saved: {args.user_id} role={args.role}")
         return 0
     if args.command == "serve":
         app = App(args.db, args.inventory)

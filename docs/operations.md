@@ -64,6 +64,18 @@ Initialize local SQLite state:
 python tools\vpn_control_app.py init-db
 ```
 
+Create the first administrator:
+
+```powershell
+python tools\vpn_control_app.py create-user admin --role admin
+```
+
+Create a normal user:
+
+```powershell
+python tools\vpn_control_app.py create-user user1 --role user --display-name "User 1"
+```
+
 Run the local web UI:
 
 ```powershell
