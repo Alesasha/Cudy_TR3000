@@ -14,6 +14,7 @@
 - PBR override-списки для принудительного WAN/VPN.
 - CLI для создания клиентов и статистики: `tools/awg_client_add.py`.
 - Stage 1 inventory: `config/vpn_inventory.json` и `tools/vpn_inventory.py`.
+- Локальная web-панель MVP: `tools/vpn_control_app.py`.
 
 ## Быстрый Старт Для Разработчика
 
@@ -25,6 +26,7 @@ python -m pip install -r requirements.txt
 python tools\vpn_inventory.py validate
 python tools\vpn_inventory.py list
 python tools\vpn_inventory.py admin-list --include-disabled
+python tools\vpn_control_app.py init-db
 python -m py_compile tools\vpn_inventory.py tools\awg_client_add.py
 ```
 
@@ -49,6 +51,7 @@ Remove-Item Env:CUDY_SSH_PASSWORD
 - [Architecture](docs/architecture.md)
 - [Inventory](docs/inventory.md)
 - [Operations](docs/operations.md)
+- [Local control app](docs/control-app.md)
 - [Security](docs/security.md)
 - [GitHub publishing](docs/github.md)
 

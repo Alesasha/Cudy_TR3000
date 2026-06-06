@@ -9,6 +9,7 @@
 .env.example text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
+.gitkeep text eol=lf
 
 openwrt/* text eol=lf
 openwrt/**/*.ps1 text eol=crlf

@@ -56,6 +56,27 @@ python tools\vpn_inventory.py refresh-cudy
 Remove-Item Env:CUDY_SSH_PASSWORD
 ```
 
+## Local Control App
+
+Initialize local SQLite state:
+
+```powershell
+python tools\vpn_control_app.py init-db
+```
+
+Run the local web UI:
+
+```powershell
+python tools\vpn_control_app.py serve --host 127.0.0.1 --port 8765
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765/
+http://127.0.0.1:8765/admin
+```
+
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.

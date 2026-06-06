@@ -6,6 +6,11 @@ secrets/
 config/cudy-runtime.json
 config/*runtime*.json
 openwrt/lokvpn.json
+data/*.db
+data/*.db-*
+data/*.sqlite
+data/*.sqlite-*
+data/*.pid
 
 .playwright-cli/
 .tmp-amnezia-client/

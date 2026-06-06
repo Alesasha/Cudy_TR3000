@@ -31,7 +31,7 @@ This gives the next stages a clean source of truth instead of embedding provider
 
 ## Next Stages
 
-Stage 2 should add the local database and admin/user model. SQLite is enough at this scale:
+Stage 2 adds the local database and admin/user model. SQLite is enough at this scale:
 
 - `servers`;
 - `provider_profiles`;
@@ -40,6 +40,8 @@ Stage 2 should add the local database and admin/user model. SQLite is enough at 
 - `domain_auto_cache`;
 - `health_checks`.
 
-Stage 3 should add the web UI and API.
+The first implementation is `tools/vpn_control_app.py`. It stores local choices and provides a simple user/admin UI without changing live Cudy routing.
+
+Stage 3 should connect saved choices to live Cudy routing generation and deployment.
 
 Stage 4 should implement `Auto`: benchmark exits per domain, keep a cache of roughly 300 active domains, and refresh cached leaders in the background.
