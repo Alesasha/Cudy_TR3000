@@ -36,12 +36,15 @@ DEFAULT_INVENTORY = ROOT / "config" / "vpn_inventory.json"
 DEFAULT_DB = ROOT / "data" / "vpn_control.db"
 DEFAULT_USER_ID = "default"
 DEFAULT_PBR_EXPORT_DIR = ROOT / "build" / "pbr-overrides"
+DEFAULT_USER_ROUTES_EXPORT_DIR = ROOT / "build" / "user-routes"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
 REMOTE_PBR_DIR = "/etc/pbr-overrides"
+REMOTE_USER_ROUTES_DIR = "/etc/cudy-user-routes"
 REMOTE_PBR_SCRIPT = "/usr/share/pbr/pbr.user.opencck-merged-vpn"
 LOCAL_PBR_SCRIPT = ROOT / "openwrt" / "pbr.user.opencck-merged-vpn"
 LOCAL_SWITCHER_INSTALLER = ROOT / "openwrt" / "install-vpn-switchers.sh"
+LOCAL_USER_ROUTES_APPLY = ROOT / "openwrt" / "cudy-user-routes-apply"
 SESSION_COOKIE = "vpn_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 210_000
@@ -1506,6 +1509,90 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
     return manifest
 
 
+def safe_route_group(index: int, iface: str) -> str:
+    safe_iface = re.sub(r"[^A-Za-z0-9_.-]", "_", iface)
+    return f"u{index:03d}_{safe_iface}"
+
+
+def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with connect(db_path) as conn:
+        servers = server_map(conn)
+        route_rows = rows(
+            conn,
+            """
+            SELECT r.domain, r.server_id, u.id AS user_id, u.display_name, u.client_ip
+            FROM user_domain_routes r
+            JOIN users u ON u.id = r.user_id
+            WHERE r.enabled = 1 AND u.enabled = 1 AND u.role = 'user'
+            ORDER BY u.id, r.server_id, r.domain
+            """,
+        )
+
+    warnings: list[str] = []
+    group_map: dict[tuple[str, str], str] = {}
+    exported_routes: list[dict[str, Any]] = []
+    tsv_lines = ["# group\tuser_id\tclient_ip\tinterface\tdomain\n"]
+
+    for route in route_rows:
+        user_id = route["user_id"]
+        client_ip = normalize_client_ip(route["client_ip"]) if route["client_ip"] else None
+        domain = route["domain"]
+        server_id = route["server_id"]
+        if not client_ip:
+            warnings.append(f"{user_id}/{domain}: missing client_ip; skipped")
+            continue
+        server = servers.get(server_id)
+        if not server:
+            warnings.append(f"{user_id}/{domain}: unknown server {server_id}; skipped")
+            continue
+        if not server.get("enabled"):
+            warnings.append(f"{user_id}/{domain}: server {server_id} is disabled; skipped")
+            continue
+        iface = safe_interface_name(server.get("interface"))
+        if not iface:
+            warnings.append(f"{user_id}/{domain}: server {server_id} has no safe interface; skipped")
+            continue
+        if server.get("kind") == "sing-box-profile":
+            warnings.append(
+                f"{user_id}/{domain}: {server_id} is a profile on shared interface {iface}; "
+                "source routing can only select the currently active profile"
+            )
+        group_key = (client_ip, iface)
+        group = group_map.get(group_key)
+        if not group:
+            group = safe_route_group(len(group_map) + 1, iface)
+            group_map[group_key] = group
+        tsv_lines.append(f"{group}\t{user_id}\t{client_ip}\t{iface}\t{domain}\n")
+        exported_routes.append(
+            {
+                "group": group,
+                "user_id": user_id,
+                "client_ip": client_ip,
+                "domain": domain,
+                "server_id": server_id,
+                "interface": iface,
+            }
+        )
+
+    routes_path = output_dir / "routes.tsv"
+    routes_path.write_text("".join(tsv_lines), encoding="utf-8", newline="\n")
+    manifest = {
+        "generated_at": now(),
+        "output_dir": str(output_dir),
+        "mode": "user-source-ip-routes",
+        "route_count": len(exported_routes),
+        "group_count": len(group_map),
+        "routes_file": str(routes_path),
+        "exported_routes": exported_routes,
+        "warnings": warnings,
+    }
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return manifest
+
+
 def build_pbr_deploy_plan(
     manifest: dict[str, Any],
     *,
@@ -1655,6 +1742,107 @@ printf '%s\n' "$backup"
             "backup_dir": backup_dir,
             "plan": plan,
             "output": apply_output.strip(),
+        }
+    finally:
+        client.close()
+
+
+def build_user_routes_deploy_plan(
+    manifest: dict[str, Any],
+    *,
+    ssh_host: str,
+    remote_dir: str,
+    install_script: bool,
+    run_apply: bool,
+) -> dict[str, Any]:
+    uploads = [
+        {
+            "local": manifest["routes_file"],
+            "remote": f"{remote_dir.rstrip('/')}/routes.tsv",
+        },
+        {
+            "local": str(Path(manifest["output_dir"]) / "manifest.json"),
+            "remote": f"{remote_dir.rstrip('/')}/manifest.json",
+        },
+    ]
+    warnings = list(manifest.get("warnings") or [])
+    if not install_script:
+        warnings.append("remote user-route apply script is not updated unless --install-script is used")
+    return {
+        "ssh_host": ssh_host,
+        "remote_dir": remote_dir,
+        "route_count": manifest.get("route_count", 0),
+        "group_count": manifest.get("group_count", 0),
+        "upload_count": len(uploads),
+        "uploads": uploads,
+        "install_script": install_script,
+        "run_apply": run_apply,
+        "warnings": warnings,
+    }
+
+
+def deploy_user_routes(
+    manifest: dict[str, Any],
+    *,
+    ssh_host: str,
+    ssh_user: str,
+    ssh_password: str,
+    ssh_timeout: int,
+    remote_dir: str,
+    install_script: bool,
+    run_apply: bool,
+) -> dict[str, Any]:
+    plan = build_user_routes_deploy_plan(
+        manifest,
+        ssh_host=ssh_host,
+        remote_dir=remote_dir,
+        install_script=install_script,
+        run_apply=run_apply,
+    )
+    client = ssh_connect(ssh_host, ssh_user, ssh_password, ssh_timeout)
+    try:
+        backup_output = ssh_exec_checked(
+            client,
+            """
+set -eu
+backup="/root/backup-cudy-user-routes/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$backup"
+[ -d /etc/cudy-user-routes ] && cp -a /etc/cudy-user-routes "$backup/" || true
+[ -f /usr/bin/cudy-user-routes-apply ] && cp /usr/bin/cudy-user-routes-apply "$backup/" || true
+mkdir -p /etc/cudy-user-routes
+printf '%s\n' "$backup"
+""",
+            ssh_timeout,
+        )
+        backup_dir = backup_output.strip().splitlines()[-1]
+        sftp = client.open_sftp()
+        try:
+            for upload in plan["uploads"]:
+                sftp.put(upload["local"], upload["remote"])
+            if install_script:
+                sftp.put(str(LOCAL_USER_ROUTES_APPLY), "/usr/bin/cudy-user-routes-apply")
+        finally:
+            sftp.close()
+
+        commands = [
+            "chmod 644 /etc/cudy-user-routes/routes.tsv /etc/cudy-user-routes/manifest.json 2>/dev/null || true",
+        ]
+        if install_script:
+            commands.extend(
+                [
+                    "sh -n /usr/bin/cudy-user-routes-apply",
+                    "chmod +x /usr/bin/cudy-user-routes-apply",
+                ]
+            )
+        if run_apply:
+            commands.append("/usr/bin/cudy-user-routes-apply")
+            commands.append("nft list table inet cudy_user_routes 2>/dev/null | sed -n '1,120p' || true")
+        output = ssh_exec_checked(client, "set -eu\n" + "\n".join(commands) + "\n", ssh_timeout * 3)
+        return {
+            "ok": True,
+            "backup_dir": backup_dir,
+            "plan": plan,
+            "output": output.strip(),
         }
     finally:
         client.close()
@@ -2291,6 +2479,29 @@ def build_parser() -> argparse.ArgumentParser:
     deploy_parser.add_argument("--apply", action="store_true", help="Actually upload/apply on Cudy. Default is dry-run.")
     deploy_parser.add_argument("--json", action="store_true", help="Print JSON plan/result.")
 
+    user_export_parser = sub.add_parser(
+        "export-user-routes",
+        help="Export per-user domain routes as source-IP route input for Cudy.",
+    )
+    user_export_parser.add_argument("--output-dir", type=Path, default=DEFAULT_USER_ROUTES_EXPORT_DIR)
+    user_export_parser.add_argument("--json", action="store_true", help="Print full export manifest.")
+
+    user_deploy_parser = sub.add_parser(
+        "deploy-user-routes",
+        help="Export and optionally deploy per-user source-IP routes to Cudy.",
+    )
+    user_deploy_parser.add_argument("--output-dir", type=Path, default=DEFAULT_USER_ROUTES_EXPORT_DIR)
+    user_deploy_parser.add_argument("--remote-dir", default=REMOTE_USER_ROUTES_DIR)
+    user_deploy_parser.add_argument("--ssh-host", default=DEFAULT_CUDY_HOST)
+    user_deploy_parser.add_argument("--ssh-user", default=DEFAULT_CUDY_USER)
+    user_deploy_parser.add_argument("--ssh-password")
+    user_deploy_parser.add_argument("--ssh-timeout", type=int, default=60)
+    user_deploy_parser.add_argument("--install-script", action="store_true", help="Install /usr/bin/cudy-user-routes-apply.")
+    user_deploy_parser.add_argument("--no-run-apply", action="store_true", help="Upload files but do not run the apply script.")
+    user_deploy_parser.add_argument("--allow-empty", action="store_true", help="Allow apply when there are zero user routes.")
+    user_deploy_parser.add_argument("--apply", action="store_true", help="Actually upload/apply on Cudy. Default is dry-run.")
+    user_deploy_parser.add_argument("--json", action="store_true", help="Print JSON plan/result.")
+
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
@@ -2422,6 +2633,75 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(f"Applied PBR overrides to {args.ssh_host}")
+            print(f"Backup: {result['backup_dir']}")
+            if result["output"]:
+                print(result["output"])
+        return 0
+    if args.command == "export-user-routes":
+        manifest = export_user_routes(args.db, args.inventory, args.output_dir)
+        if args.json:
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        else:
+            print(f"Exported user routes: {manifest['route_count']}")
+            print(f"Groups: {manifest['group_count']}")
+            print(f"Output: {manifest['output_dir']}")
+            print(f"Routes file: {manifest['routes_file']}")
+            for warning in manifest["warnings"]:
+                print(f"WARNING: {warning}")
+        return 0
+    if args.command == "deploy-user-routes":
+        manifest = export_user_routes(args.db, args.inventory, args.output_dir)
+        plan = build_user_routes_deploy_plan(
+            manifest,
+            ssh_host=args.ssh_host,
+            remote_dir=args.remote_dir,
+            install_script=args.install_script,
+            run_apply=not args.no_run_apply,
+        )
+        if not args.apply:
+            payload = {"apply": False, "manifest": manifest, "plan": plan}
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print("Dry run. Use --apply to deploy to Cudy.")
+                print(f"User routes: {plan['route_count']}")
+                print(f"Groups: {plan['group_count']}")
+                print(f"Remote: {args.ssh_user}@{args.ssh_host}:{args.remote_dir}")
+                print(f"Uploads: {plan['upload_count']}")
+                print(f"Install script: {bool(args.install_script)}")
+                print(f"Run apply: {not args.no_run_apply}")
+                for upload in plan["uploads"]:
+                    print(f"  {upload['local']} -> {upload['remote']}")
+                for warning in plan["warnings"]:
+                    print(f"WARNING: {warning}")
+            return 0
+        if plan["route_count"] == 0 and not args.allow_empty:
+            print(
+                "ERROR: refusing to apply zero user routes without --allow-empty",
+                file=sys.stderr,
+            )
+            return 2
+        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        if not password:
+            password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
+        try:
+            result = deploy_user_routes(
+                manifest,
+                ssh_host=args.ssh_host,
+                ssh_user=args.ssh_user,
+                ssh_password=password,
+                ssh_timeout=args.ssh_timeout,
+                remote_dir=args.remote_dir,
+                install_script=args.install_script,
+                run_apply=not args.no_run_apply,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Applied user routes to {args.ssh_host}")
             print(f"Backup: {result['backup_dir']}")
             if result["output"]:
                 print(result["output"])

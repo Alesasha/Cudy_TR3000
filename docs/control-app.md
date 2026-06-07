@@ -102,11 +102,14 @@ http://127.0.0.1:8765/admin
   - previews upload/apply actions by default;
   - creates a Cudy backup before `--apply`;
   - can install the updated PBR and `vpn-switch` scripts with `--install-scripts`.
+- User-route deploy:
+  - exports enabled per-user routes to `build/user-routes/routes.tsv`;
+  - applies source-IP nft rules through `/usr/bin/cudy-user-routes-apply`;
+  - derives PBR marks from existing `ip rule show` output on Cudy.
 
 ## Not Implemented Yet
 
 - writing live PBR/OpenWrt rules;
-- source-IP deploy for per-user route overrides;
 - automatic best-server benchmarking;
 - multi-user invitation or remote sync.
 

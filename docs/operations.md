@@ -134,6 +134,23 @@ Remove-Item Env:CUDY_SSH_PASSWORD
 
 The deploy command creates a backup under `/root/backup-pbr-overrides/` before uploading files. By default it uploads only non-empty generated `force-<interface>.domains` files and `manifest.json`; add `--prune-empty` only when empty generated files should clear older generated routes. If there are zero global routes, `--apply` requires `--allow-empty`.
 
+Export and preview per-user source-IP routes:
+
+```powershell
+python tools\vpn_control_app.py export-user-routes
+python tools\vpn_control_app.py deploy-user-routes --install-script
+```
+
+Apply per-user source-IP routes to Cudy:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = '<router password>'
+python tools\vpn_control_app.py deploy-user-routes --apply --install-script
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
+This creates `/etc/cudy-user-routes/routes.tsv` and installs `/usr/bin/cudy-user-routes-apply`. The apply script reads PBR marks from `ip rule show`, creates nft rules matching `ip saddr <client_ip> ip daddr <resolved-domain-ip>`, and sets the corresponding PBR mark. If there are zero user routes, `--apply` requires `--allow-empty`.
+
 Run the local web UI:
 
 ```powershell
