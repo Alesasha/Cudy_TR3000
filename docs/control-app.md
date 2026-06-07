@@ -114,7 +114,8 @@ http://127.0.0.1:8765/admin
   - derives PBR marks from existing `ip rule show` output on Cudy;
   - exposes deployed nft counters through `status-user-routes`.
 - Combined deploy:
-  - `deploy-routes` previews or applies both global and per-user route layers in order.
+  - `deploy-routes` previews or applies both global and per-user route layers in order;
+  - the admin page can apply the same combined route deployment when the web server has a local Cudy SSH password.
 
 ## Not Implemented Yet
 

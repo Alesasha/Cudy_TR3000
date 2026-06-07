@@ -38,6 +38,7 @@ DEFAULT_DB = ROOT / "data" / "vpn_control.db"
 DEFAULT_USER_ID = "default"
 DEFAULT_PBR_EXPORT_DIR = ROOT / "build" / "pbr-overrides"
 DEFAULT_USER_ROUTES_EXPORT_DIR = ROOT / "build" / "user-routes"
+DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
 REMOTE_PBR_DIR = "/etc/pbr-overrides"
@@ -621,6 +622,8 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="toolbar">
         <button id="refreshPlan" type="button">Refresh Route Plan</button>
         <button id="refreshDeployPlan" class="secondary" type="button">Refresh Deploy Plan</button>
+        <button id="applyDeployPlan" class="danger" type="button">Apply Routes</button>
+        <label class="inline muted"><input id="applyInstallScripts" type="checkbox"> Install scripts</label>
       </div>
       <p id="planStatus" class="status"></p>
       <pre id="routePlan" class="muted"></pre>
@@ -958,6 +961,28 @@ ADMIN_HTML = r"""<!doctype html>
         document.getElementById("deployPlan").textContent = JSON.stringify(plan, null, 2);
         status.textContent = `Global routes: ${plan.summary.global_routes} apply=${plan.summary.apply_global}; user routes: ${plan.summary.user_routes} apply=${plan.summary.apply_user}; warnings: ${plan.summary.warnings}`;
         status.className = plan.summary.warnings ? "status error" : "status ok";
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("applyDeployPlan").addEventListener("click", async () => {
+      const status = document.getElementById("planStatus");
+      const installScripts = document.getElementById("applyInstallScripts").checked;
+      const message = installScripts
+        ? "Apply routes and reinstall OpenWrt scripts now?"
+        : "Apply routes to Cudy now?";
+      if (!confirm(message)) return;
+      status.className = "status";
+      status.textContent = "Applying routes...";
+      try {
+        const result = await api("/api/admin/deploy-routes", {
+          method: "POST",
+          body: JSON.stringify({ install_scripts: installScripts })
+        });
+        document.getElementById("deployPlan").textContent = JSON.stringify(result, null, 2);
+        status.textContent = `Applied. PBR=${result.results.pbr ? "yes" : "skipped"}, user routes=${result.results.user_routes ? "yes" : "skipped"}`;
+        status.className = "status ok";
       } catch (error) {
         status.textContent = error.message;
         status.className = "status error";
@@ -1687,6 +1712,89 @@ def build_combined_deploy_preview(
         "pbr": {"manifest": pbr_manifest, "plan": pbr_plan, "will_apply": should_apply_pbr},
         "user_routes": {"manifest": user_manifest, "plan": user_plan, "will_apply": should_apply_user},
         "warnings": warnings,
+    }
+
+
+def load_cudy_ssh_password(explicit_password: str | None = None) -> str | None:
+    if explicit_password:
+        return explicit_password
+    env_password = os.environ.get("CUDY_SSH_PASSWORD")
+    if env_password:
+        return env_password
+    if DEFAULT_CUDY_PASSWORD_FILE.exists():
+        password = DEFAULT_CUDY_PASSWORD_FILE.read_text(encoding="utf-8-sig").strip()
+        if password:
+            return password
+    return None
+
+
+def apply_combined_route_deploy(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    ssh_host: str = DEFAULT_CUDY_HOST,
+    ssh_user: str = DEFAULT_CUDY_USER,
+    ssh_password: str,
+    ssh_timeout: int = 60,
+    pbr_output_dir: Path = DEFAULT_PBR_EXPORT_DIR,
+    user_output_dir: Path = DEFAULT_USER_ROUTES_EXPORT_DIR,
+    pbr_remote_dir: str = REMOTE_PBR_DIR,
+    user_remote_dir: str = REMOTE_USER_ROUTES_DIR,
+    install_scripts: bool = False,
+    restart_pbr: bool = True,
+    run_user_apply: bool = True,
+    prune_empty: bool = False,
+    allow_empty: bool = False,
+) -> dict[str, Any]:
+    preview = build_combined_deploy_preview(
+        db_path,
+        inventory_path,
+        pbr_output_dir=pbr_output_dir,
+        user_output_dir=user_output_dir,
+        pbr_remote_dir=pbr_remote_dir,
+        user_remote_dir=user_remote_dir,
+        ssh_host=ssh_host,
+        install_scripts=install_scripts,
+        restart_pbr=restart_pbr,
+        run_user_apply=run_user_apply,
+        prune_empty=prune_empty,
+        allow_empty=allow_empty,
+    )
+    should_apply_pbr = bool(preview["pbr"]["will_apply"])
+    should_apply_user = bool(preview["user_routes"]["will_apply"])
+    if not should_apply_pbr and not should_apply_user:
+        raise ValueError("refusing to apply zero routes without allow_empty")
+
+    results: dict[str, Any] = {"pbr": None, "user_routes": None}
+    if should_apply_pbr:
+        results["pbr"] = deploy_pbr_overrides(
+            preview["pbr"]["manifest"],
+            ssh_host=ssh_host,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
+            ssh_timeout=ssh_timeout,
+            remote_dir=pbr_remote_dir,
+            install_scripts=install_scripts,
+            restart_pbr=restart_pbr,
+            prune_empty=prune_empty,
+        )
+    if should_apply_user:
+        results["user_routes"] = deploy_user_routes(
+            preview["user_routes"]["manifest"],
+            ssh_host=ssh_host,
+            ssh_user=ssh_user,
+            ssh_password=ssh_password,
+            ssh_timeout=ssh_timeout,
+            remote_dir=user_remote_dir,
+            install_script=install_scripts,
+            run_apply=run_user_apply,
+        )
+    return {
+        "ok": True,
+        "applied_at": now(),
+        "ssh_host": ssh_host,
+        "preview": preview,
+        "results": results,
     }
 
 
@@ -2421,6 +2529,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/auto-cache":
                 self.require_admin()
                 self.send_json(self.api_admin_save_auto_cache(data))
+            elif parsed.path == "/api/admin/deploy-routes":
+                self.require_admin()
+                self.send_json(self.api_admin_deploy_routes(data))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -2720,6 +2831,23 @@ class Handler(BaseHTTPRequestHandler):
             selected_server_id=str(data.get("selected_server_id") or ""),
             score_ms=score_ms,
             status=str(data.get("status") or "manual"),
+        )
+
+    def api_admin_deploy_routes(self, data: dict[str, Any]) -> dict[str, Any]:
+        password = load_cudy_ssh_password()
+        if not password:
+            raise ValueError(
+                "Cudy SSH password is not configured. Set CUDY_SSH_PASSWORD or create secrets/cudy_ssh_password.txt"
+            )
+        return apply_combined_route_deploy(
+            self.app.db_path,
+            self.app.inventory_path,
+            ssh_password=password,
+            install_scripts=bool(data.get("install_scripts")),
+            restart_pbr=not bool(data.get("no_restart_pbr")),
+            run_user_apply=not bool(data.get("no_run_user_apply")),
+            prune_empty=bool(data.get("prune_empty")),
+            allow_empty=bool(data.get("allow_empty")),
         )
 
     def api_save_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -3076,7 +3204,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        password = load_cudy_ssh_password(args.ssh_password)
         if not password:
             password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
         try:
@@ -3146,7 +3274,7 @@ def main() -> int:
                 file=sys.stderr,
             )
             return 2
-        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        password = load_cudy_ssh_password(args.ssh_password)
         if not password:
             password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
         try:
@@ -3172,7 +3300,7 @@ def main() -> int:
                 print(result["output"])
         return 0
     if args.command == "status-user-routes":
-        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        password = load_cudy_ssh_password(args.ssh_password)
         if not password:
             password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
         try:
@@ -3253,7 +3381,7 @@ def main() -> int:
         if not should_apply_pbr and not should_apply_user:
             print("ERROR: refusing to apply zero routes without --allow-empty", file=sys.stderr)
             return 2
-        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        password = load_cudy_ssh_password(args.ssh_password)
         if not password:
             password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
         results: dict[str, Any] = {"pbr": None, "user_routes": None}

@@ -29,6 +29,8 @@ Current expected variables:
 - `VPNTYPE_UUID_DEFAULT`;
 - `SUB_URL`.
 
+The local web app can also read the Cudy SSH password from `secrets/cudy_ssh_password.txt`. The `secrets/` directory is ignored by git; keep that file local to the operator machine.
+
 ## GitHub
 
 Use a private repository until all history is checked for secrets. If a secret was committed by mistake, assume it is compromised and rotate it.

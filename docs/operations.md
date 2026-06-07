@@ -167,7 +167,7 @@ Deploy all route layers together:
 python tools\vpn_control_app.py deploy-routes
 ```
 
-Apply all route layers:
+Apply all route layers from PowerShell:
 
 ```powershell
 $env:CUDY_SSH_PASSWORD = '<router password>'
@@ -176,6 +176,8 @@ Remove-Item Env:CUDY_SSH_PASSWORD
 ```
 
 `deploy-routes` is the preferred operator command after editing routes in the panel. It applies the global PBR layer only when needed, then applies the per-user source-IP layer. Add `--install-scripts` after changing the OpenWrt scripts in this repository. The separate `deploy-pbr-overrides` and `deploy-user-routes` commands remain available for targeted maintenance.
+
+The same deployment can also be launched from the admin panel with `Apply Routes`. The web server reads the Cudy SSH password from `CUDY_SSH_PASSWORD` or from the ignored local file `secrets/cudy_ssh_password.txt`. The browser never receives the password.
 
 Run the local web UI:
 
@@ -192,7 +194,7 @@ http://127.0.0.1:8765/admin
 
 The admin page can create normal users, bind them to VPN client IPs, change passwords if needed, enable or disable them, edit global routes, and edit per-user domain routes.
 
-The admin `Deploy Preview` block is read-only. It can refresh the effective route plan and the combined deploy dry-run plan, but it does not run SSH commands or apply changes to Cudy. Apply changes from PowerShell with `deploy-routes --apply`.
+The admin `Deploy Preview` block can refresh the effective route plan, refresh the combined deploy dry-run plan, and apply the current plan to Cudy.
 
 Manage cached `Auto` choices:
 
