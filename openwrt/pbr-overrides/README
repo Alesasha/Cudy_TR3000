@@ -12,6 +12,7 @@ Priority:
    - `https://antifilter.download/list/allyouneed.lst`
    - `https://iplist.opencck.org/ru/?format=text&data=cidr4`
 4. `force-vpn.*` -> current `TARGET_INTERFACE` set, currently `awg2` unless `vpn1`/`vpn2` changes it.
+5. `force-<interface>.*` -> matching `pbr_<interface>_4_dst_ip_user` set.
 
 Files:
 
@@ -21,5 +22,14 @@ Files:
 - `force-vpn.domains`: domains that must go via the current tunnel.
 - `force-vpn.ips`: IPv4/CIDR entries that must go via the current tunnel.
 - `force-vpn.urls`: URL sources for IPv4/CIDR entries that must go via the current tunnel.
+- `force-awg1.domains`, `force-proxyde.domains`, etc.: domains that must go via a specific PBR interface.
 
 One entry per line. Comments start with `#`.
+
+Local export from the control app:
+
+```powershell
+python tools\vpn_control_app.py export-pbr-overrides
+```
+
+The export currently includes global admin routes only. Per-user routes need source-IP matching and are intentionally not emitted into these global PBR sets.

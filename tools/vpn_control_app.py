@@ -32,12 +32,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "config" / "vpn_inventory.json"
 DEFAULT_DB = ROOT / "data" / "vpn_control.db"
 DEFAULT_USER_ID = "default"
+DEFAULT_PBR_EXPORT_DIR = ROOT / "build" / "pbr-overrides"
 SESSION_COOKIE = "vpn_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 210_000
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
 )
+SAFE_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 SCHEMA = """
@@ -1412,6 +1414,89 @@ def build_route_plan(db_path: Path) -> dict[str, Any]:
     }
 
 
+def safe_interface_name(value: str | None) -> str | None:
+    if not value:
+        return None
+    if not SAFE_INTERFACE_RE.match(value):
+        return None
+    return value
+
+
+def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with connect(db_path) as conn:
+        servers = server_map(conn)
+        enabled_interfaces: set[str] = set()
+        for server in servers.values():
+            iface = safe_interface_name(server.get("interface"))
+            if iface and iface != "wan" and bool(server.get("enabled")):
+                enabled_interfaces.add(iface)
+        global_routes = rows(
+            conn,
+            """
+            SELECT domain, server_id
+            FROM global_domain_routes
+            WHERE enabled = 1
+            ORDER BY domain
+            """,
+        )
+        user_route_count = conn.execute(
+            "SELECT count(*) FROM user_domain_routes WHERE enabled = 1"
+        ).fetchone()[0]
+
+    grouped: dict[str, set[str]] = {iface: set() for iface in enabled_interfaces}
+    exported_routes: list[dict[str, str]] = []
+    warnings: list[str] = []
+    for route in global_routes:
+        domain = route["domain"]
+        server_id = route["server_id"]
+        server = servers.get(server_id)
+        if not server:
+            warnings.append(f"{domain}: unknown server {server_id}; skipped")
+            continue
+        if not server.get("enabled"):
+            warnings.append(f"{domain}: server {server_id} is disabled; skipped")
+            continue
+        iface = safe_interface_name(server.get("interface"))
+        if not iface:
+            warnings.append(f"{domain}: server {server_id} has no safe interface; skipped")
+            continue
+        kind = server.get("kind")
+        if kind == "sing-box-profile":
+            warnings.append(
+                f"{domain}: {server_id} is a profile on shared interface {iface}; "
+                "PBR export can only route to the current interface profile"
+            )
+        grouped.setdefault(iface, set()).add(domain)
+        exported_routes.append({"domain": domain, "server_id": server_id, "interface": iface})
+
+    files: list[dict[str, Any]] = []
+    for iface in sorted(grouped):
+        path = output_dir / f"force-{iface}.domains"
+        domains = sorted(grouped[iface])
+        path.write_text("".join(f"{domain}\n" for domain in domains), encoding="utf-8", newline="\n")
+        files.append({"path": str(path), "name": path.name, "interface": iface, "domains": len(domains)})
+
+    if user_route_count:
+        warnings.append(
+            f"{user_route_count} enabled user-specific routes are not exported yet; "
+            "source-IP routing needs the next deploy layer"
+        )
+
+    manifest = {
+        "generated_at": now(),
+        "output_dir": str(output_dir),
+        "mode": "global-pbr-overrides",
+        "exported_routes": exported_routes,
+        "files": files,
+        "warnings": warnings,
+    }
+    manifest_path = output_dir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8", newline="\n")
+    return manifest
+
+
 def validate_server_id(conn: sqlite3.Connection, server_id: str, *, require_user_visible: bool) -> None:
     if require_user_visible:
         value = row(conn, "SELECT id FROM servers WHERE id = ? AND enabled = 1 AND user_visible = 1", (server_id,))
@@ -2019,6 +2104,13 @@ def build_parser() -> argparse.ArgumentParser:
     route_plan_parser = sub.add_parser("route-plan", help="Print effective per-user route plan.")
     route_plan_parser.add_argument("--json", action="store_true", help="Print full JSON plan.")
 
+    export_parser = sub.add_parser(
+        "export-pbr-overrides",
+        help="Export global admin routes as OpenWrt /etc/pbr-overrides force-<interface>.domains files.",
+    )
+    export_parser.add_argument("--output-dir", type=Path, default=DEFAULT_PBR_EXPORT_DIR)
+    export_parser.add_argument("--json", action="store_true", help="Print full export manifest.")
+
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
@@ -2079,6 +2171,21 @@ def main() -> int:
                     print(f"  {route['domain']}\t{route['server_id']}\t{route['source']}")
                 for warning in user["warnings"]:
                     print(f"  WARNING: {warning}")
+        return 0
+    if args.command == "export-pbr-overrides":
+        manifest = export_pbr_overrides(args.db, args.inventory, args.output_dir)
+        if args.json:
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        else:
+            route_count = len(manifest["exported_routes"])
+            non_empty = [item for item in manifest["files"] if item["domains"]]
+            print(f"Exported global routes: {route_count}")
+            print(f"Output: {manifest['output_dir']}")
+            print(f"Files: {len(manifest['files'])} total, {len(non_empty)} non-empty")
+            for item in non_empty:
+                print(f"  {item['name']}\tdomains={item['domains']}")
+            for warning in manifest["warnings"]:
+                print(f"WARNING: {warning}")
         return 0
     if args.command == "serve":
         app = App(args.db, args.inventory)

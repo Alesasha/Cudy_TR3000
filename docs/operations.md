@@ -108,6 +108,15 @@ python tools\vpn_control_app.py route-plan
 python tools\vpn_control_app.py route-plan --json
 ```
 
+Export global admin routes into PBR override files:
+
+```powershell
+python tools\vpn_control_app.py export-pbr-overrides
+python tools\vpn_control_app.py export-pbr-overrides --json
+```
+
+The files are written under `build/pbr-overrides/` and are intended for `/etc/pbr-overrides/` on Cudy. This export only includes global admin routes; per-user routes require source-IP nft/PBR rules and are handled in the next deploy layer.
+
 Run the local web UI:
 
 ```powershell

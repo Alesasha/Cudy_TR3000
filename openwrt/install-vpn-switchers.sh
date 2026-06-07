@@ -27,6 +27,7 @@ TARGET_TABLE="${TARGET_TABLE:-inet fw4}"
 CLEAN="${CLEAN:-/tmp/pbr_opencck_merged_vpn.clean}"
 WAN_CLEAN="${WAN_CLEAN:-/tmp/pbr_wan.clean}"
 FORCE_AWG2_CLEAN="${FORCE_AWG2_CLEAN:-/tmp/pbr_force_awg2.clean}"
+INTERFACE_FORCE_PREFIX="${INTERFACE_FORCE_PREFIX:-/tmp/pbr_force_}"
 LAN_SUBNETS="${LAN_SUBNETS:-192.168.8.0/24 10.77.0.0/24}"
 DEFAULT_CHANNELS="${DEFAULT_CHANNELS:-awg1 awg2 lokvpn vpntype}"
 TARGET_INTERFACE="${1:-}"
@@ -120,6 +121,23 @@ append_nft_add_elements() {
     [ -z "$params" ] || echo "add element $TARGET_TABLE $nftset { $params }" >> "$batch"
 }
 
+append_interface_overrides() {
+    batch="$1"
+    for file in "${INTERFACE_FORCE_PREFIX}"*.clean; do
+        [ -s "$file" ] || continue
+        name="${file##*/}"
+        iface="${name#pbr_force_}"
+        iface="${iface%.clean}"
+        case "$iface" in
+            wan|vpn|awg2) continue ;;
+        esac
+        is_safe_iface "$iface" || continue
+        set_name="pbr_${iface}_4_dst_ip_user"
+        nft list set $TARGET_TABLE "$set_name" >/dev/null 2>&1 || continue
+        append_nft_add_elements "$set_name" "$file" "$batch"
+    done
+}
+
 flush_client_conntrack() {
     if command -v conntrack >/dev/null 2>&1; then
         for subnet in $LAN_SUBNETS; do
@@ -148,6 +166,7 @@ if [ -s "$CLEAN" ] && nft list set $TARGET_TABLE "$target_set" >/dev/null 2>&1; 
         && nft list set $TARGET_TABLE pbr_awg2_4_dst_ip_user >/dev/null 2>&1; then
         append_nft_add_elements pbr_awg2_4_dst_ip_user "$FORCE_AWG2_CLEAN" "$batch"
     fi
+    append_interface_overrides "$batch"
     if ! nft -f "$batch"; then
         rm -f "$batch"
         echo "Fast nft switch failed; falling back to full pbr restart" >&2

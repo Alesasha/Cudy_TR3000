@@ -124,6 +124,39 @@ fetch_url_lists() {
   done
 }
 
+safe_interface_name() {
+  case "$1" in
+    ''|*[!A-Za-z0-9_.-]*) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
+interface_override_names() {
+  for f in "$OVERRIDE_DIR"/force-*.domains "$OVERRIDE_DIR"/force-*.ips "$OVERRIDE_DIR"/force-*.urls; do
+    [ -e "$f" ] || continue
+    name="${f##*/}"
+    iface="${name#force-}"
+    iface="${iface%.*}"
+    case "$iface" in
+      wan|vpn|awg2) continue ;;
+    esac
+    safe_interface_name "$iface" && printf '%s\n' "$iface"
+  done | sort -u
+}
+
+add_interface_overrides() {
+  for iface in $(interface_override_names); do
+    output="/tmp/pbr_force_${iface}.clean"
+    build_override_list "$OVERRIDE_DIR/force-$iface.ips" "$OVERRIDE_DIR/force-$iface.domains" "$OVERRIDE_DIR/force-$iface.urls" "$output"
+    nftset="pbr_${iface}_4_dst_ip_user"
+    if nft list set "$TARGET_TABLE" "$nftset" >/dev/null 2>&1; then
+      add_list_to_nftset "$nftset" "$output" "force-$iface"
+    elif [ -s "$output" ]; then
+      logger -t pbr-opencck "WARN: force-$iface entries exist but nft set is missing: $nftset"
+    fi
+  done
+}
+
 add_list_to_nftset() {
   nftset="$1"
   file="$2"
@@ -225,6 +258,7 @@ rm -f "$CLEAN.tmp"
 add_list_to_nftset "$WAN_NFTSET_4" "$WAN_CLEAN" "wan"
 add_list_to_nftset "pbr_awg2_4_dst_ip_user" "$FORCE_AWG2_CLEAN" "force-awg2"
 add_list_to_nftset "$TARGET_NFTSET_4" "$CLEAN" "vpn"
+add_interface_overrides
 
 force_wan_count=0
 force_awg2_count=0
