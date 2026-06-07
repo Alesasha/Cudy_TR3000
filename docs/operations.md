@@ -117,6 +117,23 @@ python tools\vpn_control_app.py export-pbr-overrides --json
 
 The files are written under `build/pbr-overrides/` and are intended for `/etc/pbr-overrides/` on Cudy. This export only includes global admin routes; per-user routes require source-IP nft/PBR rules and are handled in the next deploy layer.
 
+Preview deploy to Cudy:
+
+```powershell
+python tools\vpn_control_app.py deploy-pbr-overrides
+python tools\vpn_control_app.py deploy-pbr-overrides --install-scripts
+```
+
+Apply deploy to Cudy:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = '<router password>'
+python tools\vpn_control_app.py deploy-pbr-overrides --apply --install-scripts
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
+The deploy command creates a backup under `/root/backup-pbr-overrides/` before uploading files. By default it uploads only non-empty generated `force-<interface>.domains` files and `manifest.json`; add `--prune-empty` only when empty generated files should clear older generated routes. If there are zero global routes, `--apply` requires `--allow-empty`.
+
 Run the local web UI:
 
 ```powershell

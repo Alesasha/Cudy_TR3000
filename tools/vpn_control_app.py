@@ -15,6 +15,7 @@ import getpass
 import hashlib
 import hmac
 import json
+import os
 import re
 import secrets
 import sqlite3
@@ -27,12 +28,20 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import paramiko
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_INVENTORY = ROOT / "config" / "vpn_inventory.json"
 DEFAULT_DB = ROOT / "data" / "vpn_control.db"
 DEFAULT_USER_ID = "default"
 DEFAULT_PBR_EXPORT_DIR = ROOT / "build" / "pbr-overrides"
+DEFAULT_CUDY_HOST = "192.168.8.1"
+DEFAULT_CUDY_USER = "root"
+REMOTE_PBR_DIR = "/etc/pbr-overrides"
+REMOTE_PBR_SCRIPT = "/usr/share/pbr/pbr.user.opencck-merged-vpn"
+LOCAL_PBR_SCRIPT = ROOT / "openwrt" / "pbr.user.opencck-merged-vpn"
+LOCAL_SWITCHER_INSTALLER = ROOT / "openwrt" / "install-vpn-switchers.sh"
 SESSION_COOKIE = "vpn_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 210_000
@@ -1497,6 +1506,160 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
     return manifest
 
 
+def build_pbr_deploy_plan(
+    manifest: dict[str, Any],
+    *,
+    ssh_host: str,
+    remote_dir: str,
+    install_scripts: bool,
+    restart_pbr: bool,
+    prune_empty: bool,
+) -> dict[str, Any]:
+    files = [
+        item
+        for item in manifest.get("files", [])
+        if str(item.get("name", "")).endswith(".domains") and (prune_empty or int(item.get("domains") or 0) > 0)
+    ]
+    uploads = [
+        {
+            "local": item["path"],
+            "remote": f"{remote_dir.rstrip('/')}/{item['name']}",
+            "domains": item.get("domains", 0),
+        }
+        for item in files
+    ]
+    uploads.append(
+        {
+            "local": str(Path(manifest["output_dir"]) / "manifest.json"),
+            "remote": f"{remote_dir.rstrip('/')}/manifest.json",
+            "domains": None,
+        }
+    )
+    warnings = list(manifest.get("warnings") or [])
+    warnings.append(
+        "deploy-pbr-overrides can write generated force-<interface>.domains files; "
+        "existing force-wan/force-vpn/force-*.ips/force-*.urls are not modified"
+    )
+    if not prune_empty:
+        warnings.append("empty generated domain files are not uploaded unless --prune-empty is used")
+    if not install_scripts:
+        warnings.append("remote PBR script is not updated unless --install-scripts is used")
+    return {
+        "ssh_host": ssh_host,
+        "remote_dir": remote_dir,
+        "route_count": len(manifest.get("exported_routes") or []),
+        "upload_count": len(uploads),
+        "uploads": uploads,
+        "install_scripts": install_scripts,
+        "restart_pbr": restart_pbr,
+        "prune_empty": prune_empty,
+        "warnings": warnings,
+    }
+
+
+def ssh_connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHClient:
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        host,
+        username=user,
+        password=password,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    return client
+
+
+def ssh_exec_checked(client: paramiko.SSHClient, command: str, timeout: int) -> str:
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    stdin.channel.shutdown_write()
+    out = stdout.read().decode("utf-8", "replace")
+    err = stderr.read().decode("utf-8", "replace")
+    rc = stdout.channel.recv_exit_status()
+    if rc:
+        raise RuntimeError(f"remote command failed rc={rc}: {command}\nSTDOUT:\n{out}\nSTDERR:\n{err}")
+    if err.strip():
+        out += "\nSTDERR:\n" + err
+    return out
+
+
+def deploy_pbr_overrides(
+    manifest: dict[str, Any],
+    *,
+    ssh_host: str,
+    ssh_user: str,
+    ssh_password: str,
+    ssh_timeout: int,
+    remote_dir: str,
+    install_scripts: bool,
+    restart_pbr: bool,
+    prune_empty: bool,
+) -> dict[str, Any]:
+    plan = build_pbr_deploy_plan(
+        manifest,
+        ssh_host=ssh_host,
+        remote_dir=remote_dir,
+        install_scripts=install_scripts,
+        restart_pbr=restart_pbr,
+        prune_empty=prune_empty,
+    )
+    client = ssh_connect(ssh_host, ssh_user, ssh_password, ssh_timeout)
+    try:
+        backup_output = ssh_exec_checked(
+            client,
+            """
+set -eu
+backup="/root/backup-pbr-overrides/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$backup"
+[ -d /etc/pbr-overrides ] && cp -a /etc/pbr-overrides "$backup/" || true
+[ -f /usr/share/pbr/pbr.user.opencck-merged-vpn ] && cp /usr/share/pbr/pbr.user.opencck-merged-vpn "$backup/" || true
+mkdir -p /etc/pbr-overrides /root/install
+printf '%s\n' "$backup"
+""",
+            ssh_timeout,
+        )
+        backup_dir = backup_output.strip().splitlines()[-1]
+        sftp = client.open_sftp()
+        try:
+            for upload in plan["uploads"]:
+                sftp.put(upload["local"], upload["remote"])
+            if install_scripts:
+                sftp.put(str(LOCAL_PBR_SCRIPT), "/tmp/cudy-tr3000-pbr.user.opencck-merged-vpn")
+                sftp.put(str(LOCAL_SWITCHER_INSTALLER), "/root/install/install-vpn-switchers.sh")
+        finally:
+            sftp.close()
+
+        commands = [
+            "chmod 644 /etc/pbr-overrides/*.domains /etc/pbr-overrides/manifest.json 2>/dev/null || true",
+        ]
+        if install_scripts:
+            commands.extend(
+                [
+                    "sh -n /tmp/cudy-tr3000-pbr.user.opencck-merged-vpn",
+                    "cp /tmp/cudy-tr3000-pbr.user.opencck-merged-vpn /usr/share/pbr/pbr.user.opencck-merged-vpn",
+                    "chmod +x /usr/share/pbr/pbr.user.opencck-merged-vpn",
+                    "sh -n /root/install/install-vpn-switchers.sh",
+                    "chmod +x /root/install/install-vpn-switchers.sh",
+                    "/root/install/install-vpn-switchers.sh",
+                ]
+            )
+        if restart_pbr:
+            commands.append("/etc/init.d/pbr restart")
+            commands.append("/etc/init.d/pbr status 2>/dev/null | head -20 || true")
+        apply_output = ssh_exec_checked(client, "set -eu\n" + "\n".join(commands) + "\n", ssh_timeout * 3)
+        return {
+            "ok": True,
+            "backup_dir": backup_dir,
+            "plan": plan,
+            "output": apply_output.strip(),
+        }
+    finally:
+        client.close()
+
+
 def validate_server_id(conn: sqlite3.Connection, server_id: str, *, require_user_visible: bool) -> None:
     if require_user_visible:
         value = row(conn, "SELECT id FROM servers WHERE id = ? AND enabled = 1 AND user_visible = 1", (server_id,))
@@ -2111,6 +2274,23 @@ def build_parser() -> argparse.ArgumentParser:
     export_parser.add_argument("--output-dir", type=Path, default=DEFAULT_PBR_EXPORT_DIR)
     export_parser.add_argument("--json", action="store_true", help="Print full export manifest.")
 
+    deploy_parser = sub.add_parser(
+        "deploy-pbr-overrides",
+        help="Export global PBR overrides and optionally deploy them to Cudy over SSH.",
+    )
+    deploy_parser.add_argument("--output-dir", type=Path, default=DEFAULT_PBR_EXPORT_DIR)
+    deploy_parser.add_argument("--remote-dir", default=REMOTE_PBR_DIR)
+    deploy_parser.add_argument("--ssh-host", default=DEFAULT_CUDY_HOST)
+    deploy_parser.add_argument("--ssh-user", default=DEFAULT_CUDY_USER)
+    deploy_parser.add_argument("--ssh-password")
+    deploy_parser.add_argument("--ssh-timeout", type=int, default=60)
+    deploy_parser.add_argument("--install-scripts", action="store_true", help="Install updated PBR and vpn-switch scripts.")
+    deploy_parser.add_argument("--no-restart-pbr", action="store_true", help="Upload files but do not restart PBR.")
+    deploy_parser.add_argument("--prune-empty", action="store_true", help="Upload empty generated files to clear old generated routes.")
+    deploy_parser.add_argument("--allow-empty", action="store_true", help="Allow apply when there are zero global routes.")
+    deploy_parser.add_argument("--apply", action="store_true", help="Actually upload/apply on Cudy. Default is dry-run.")
+    deploy_parser.add_argument("--json", action="store_true", help="Print JSON plan/result.")
+
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
@@ -2186,6 +2366,65 @@ def main() -> int:
                 print(f"  {item['name']}\tdomains={item['domains']}")
             for warning in manifest["warnings"]:
                 print(f"WARNING: {warning}")
+        return 0
+    if args.command == "deploy-pbr-overrides":
+        manifest = export_pbr_overrides(args.db, args.inventory, args.output_dir)
+        plan = build_pbr_deploy_plan(
+            manifest,
+            ssh_host=args.ssh_host,
+            remote_dir=args.remote_dir,
+            install_scripts=args.install_scripts,
+            restart_pbr=not args.no_restart_pbr,
+            prune_empty=args.prune_empty,
+        )
+        if not args.apply:
+            payload = {"apply": False, "manifest": manifest, "plan": plan}
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print("Dry run. Use --apply to deploy to Cudy.")
+                print(f"Global routes: {plan['route_count']}")
+                print(f"Remote: {args.ssh_user}@{args.ssh_host}:{args.remote_dir}")
+                print(f"Uploads: {plan['upload_count']}")
+                print(f"Install scripts: {bool(args.install_scripts)}")
+                print(f"Restart PBR: {not args.no_restart_pbr}")
+                print(f"Prune empty files: {bool(args.prune_empty)}")
+                for upload in plan["uploads"]:
+                    print(f"  {upload['local']} -> {upload['remote']}")
+                for warning in plan["warnings"]:
+                    print(f"WARNING: {warning}")
+            return 0
+        if plan["route_count"] == 0 and not args.allow_empty:
+            print(
+                "ERROR: refusing to apply zero global routes without --allow-empty",
+                file=sys.stderr,
+            )
+            return 2
+        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        if not password:
+            password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
+        try:
+            result = deploy_pbr_overrides(
+                manifest,
+                ssh_host=args.ssh_host,
+                ssh_user=args.ssh_user,
+                ssh_password=password,
+                ssh_timeout=args.ssh_timeout,
+                remote_dir=args.remote_dir,
+                install_scripts=args.install_scripts,
+                restart_pbr=not args.no_restart_pbr,
+                prune_empty=args.prune_empty,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Applied PBR overrides to {args.ssh_host}")
+            print(f"Backup: {result['backup_dir']}")
+            if result["output"]:
+                print(result["output"])
         return 0
     if args.command == "serve":
         app = App(args.db, args.inventory)

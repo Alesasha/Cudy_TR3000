@@ -55,6 +55,8 @@ If both layers contain the same domain, the user-specific route wins.
 
 The first deploy artifact is intentionally narrower: global admin routes can be exported as `/etc/pbr-overrides/force-<interface>.domains` files because they map cleanly to existing destination-IP PBR sets. User-specific routes need source-IP matching and should not be collapsed into global destination sets.
 
+The local deploy command is conservative: it previews by default, backs up `/etc/pbr-overrides` and the PBR user script before apply, and uploads only non-empty generated domain files unless `--prune-empty` is specified.
+
 Provider endpoint refresh stays on Cudy during this stage. LokVPN and VPNtype keep using their existing router-side scripts and cron jobs, while the local project inventories them and can trigger them over SSH through `tools/vpn_inventory.py refresh-provider --apply`.
 
 Stage 4 should implement `Auto`: benchmark exits per domain, keep a cache of roughly 300 active domains, and refresh cached leaders in the background.

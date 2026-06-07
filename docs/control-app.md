@@ -98,11 +98,15 @@ http://127.0.0.1:8765/admin
 - PBR export:
   - writes global admin routes to `build/pbr-overrides/force-<interface>.domains`;
   - does not export per-user routes yet because those need source-IP matching on Cudy.
+- PBR deploy:
+  - previews upload/apply actions by default;
+  - creates a Cudy backup before `--apply`;
+  - can install the updated PBR and `vpn-switch` scripts with `--install-scripts`.
 
 ## Not Implemented Yet
 
 - writing live PBR/OpenWrt rules;
-- applying exported PBR override files to Cudy;
+- source-IP deploy for per-user route overrides;
 - automatic best-server benchmarking;
 - multi-user invitation or remote sync.
 
