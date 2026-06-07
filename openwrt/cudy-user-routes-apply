@@ -117,7 +117,7 @@ for domain_file in "$WORK_DIR"/*.domains; do
 
   echo "add set $NFT_FAMILY $NFT_TABLE $set_name { type ipv4_addr; flags interval; auto-merge; }" >> "$batch"
   append_nft_elements "$set_name" "$ip_file" "$batch"
-  echo "add rule $NFT_FAMILY $NFT_TABLE $NFT_CHAIN ip saddr $client_ip ip daddr @$set_name meta mark set $mark comment \"cudy-user-routes $group $iface\"" >> "$batch"
+  echo "add rule $NFT_FAMILY $NFT_TABLE $NFT_CHAIN ip saddr $client_ip ip daddr @$set_name counter meta mark set $mark comment \"cudy-user-routes $group $iface\"" >> "$batch"
   groups=$((groups + 1))
   rules=$((rules + 1))
 done

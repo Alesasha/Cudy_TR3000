@@ -1861,6 +1861,48 @@ printf '%s\n' "$backup"
         client.close()
 
 
+def collect_user_routes_status(
+    *,
+    ssh_host: str,
+    ssh_user: str,
+    ssh_password: str,
+    ssh_timeout: int,
+) -> dict[str, Any]:
+    command = r"""
+set -eu
+printf '@@SECTION:routes_tsv@@\n'
+sed -n '1,200p' /etc/cudy-user-routes/routes.tsv 2>/dev/null || true
+printf '@@SECTION:manifest@@\n'
+sed -n '1,240p' /etc/cudy-user-routes/manifest.json 2>/dev/null || true
+printf '@@SECTION:nft_table@@\n'
+nft list table inet cudy_user_routes 2>/dev/null || true
+printf '@@SECTION:ip_rules@@\n'
+ip rule show 2>/dev/null | grep 'lookup pbr_' || true
+"""
+    client = ssh_connect(ssh_host, ssh_user, ssh_password, ssh_timeout)
+    try:
+        raw = ssh_exec_checked(client, command, ssh_timeout)
+    finally:
+        client.close()
+
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in raw.splitlines():
+        if line.startswith("@@SECTION:") and line.endswith("@@"):
+            current = line[len("@@SECTION:") : -2]
+            sections.setdefault(current, [])
+            continue
+        if current:
+            sections[current].append(line)
+    return {
+        "ssh_host": ssh_host,
+        "routes_tsv": "\n".join(sections.get("routes_tsv", [])).strip(),
+        "manifest": "\n".join(sections.get("manifest", [])).strip(),
+        "nft_table": "\n".join(sections.get("nft_table", [])).strip(),
+        "ip_rules": "\n".join(sections.get("ip_rules", [])).strip(),
+    }
+
+
 def validate_server_id(conn: sqlite3.Connection, server_id: str, *, require_user_visible: bool) -> None:
     if require_user_visible:
         value = row(conn, "SELECT id FROM servers WHERE id = ? AND enabled = 1 AND user_visible = 1", (server_id,))
@@ -2515,6 +2557,16 @@ def build_parser() -> argparse.ArgumentParser:
     user_deploy_parser.add_argument("--apply", action="store_true", help="Actually upload/apply on Cudy. Default is dry-run.")
     user_deploy_parser.add_argument("--json", action="store_true", help="Print JSON plan/result.")
 
+    user_status_parser = sub.add_parser(
+        "status-user-routes",
+        help="Read deployed per-user source-IP route status from Cudy.",
+    )
+    user_status_parser.add_argument("--ssh-host", default=DEFAULT_CUDY_HOST)
+    user_status_parser.add_argument("--ssh-user", default=DEFAULT_CUDY_USER)
+    user_status_parser.add_argument("--ssh-password")
+    user_status_parser.add_argument("--ssh-timeout", type=int, default=30)
+    user_status_parser.add_argument("--json", action="store_true", help="Print JSON status.")
+
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
@@ -2718,6 +2770,28 @@ def main() -> int:
             print(f"Backup: {result['backup_dir']}")
             if result["output"]:
                 print(result["output"])
+        return 0
+    if args.command == "status-user-routes":
+        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        if not password:
+            password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
+        try:
+            status = collect_user_routes_status(
+                ssh_host=args.ssh_host,
+                ssh_user=args.ssh_user,
+                ssh_password=password,
+                ssh_timeout=args.ssh_timeout,
+            )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        else:
+            print("== routes.tsv ==")
+            print(status["routes_tsv"] or "(missing)")
+            print("\n== nft table ==")
+            print(status["nft_table"] or "(missing)")
         return 0
     if args.command == "serve":
         app = App(args.db, args.inventory)

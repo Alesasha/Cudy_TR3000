@@ -151,6 +151,16 @@ Remove-Item Env:CUDY_SSH_PASSWORD
 
 This creates `/etc/cudy-user-routes/routes.tsv` and installs `/usr/bin/cudy-user-routes-apply`. The apply script reads PBR marks from `ip rule show`, creates nft rules matching `ip saddr <client_ip> ip daddr <resolved-domain-ip>`, and sets the corresponding PBR mark. If there are zero user routes, `--apply` requires `--allow-empty`.
 
+Check deployed per-user route counters:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = '<router password>'
+python tools\vpn_control_app.py status-user-routes
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
+After the matching user opens the test domain, the nft rule should show `counter packets ... bytes ...`.
+
 Run the local web UI:
 
 ```powershell
