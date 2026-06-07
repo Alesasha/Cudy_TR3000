@@ -94,7 +94,8 @@ http://127.0.0.1:8765/admin
 - Deploy preview:
   - combines global admin routes and per-user routes;
   - per-user route wins when the same domain exists in both layers;
-  - shows the effective plan per VPN client IP.
+  - shows the effective plan per VPN client IP;
+  - shows a read-only combined deploy preview for the global PBR and per-user source-IP layers.
 - PBR export:
   - writes global admin routes to `build/pbr-overrides/force-<interface>.domains`;
   - does not export per-user routes yet because those need source-IP matching on Cudy.
@@ -112,7 +113,6 @@ http://127.0.0.1:8765/admin
 
 ## Not Implemented Yet
 
-- writing live PBR/OpenWrt rules;
 - automatic best-server benchmarking;
 - multi-user invitation or remote sync.
 

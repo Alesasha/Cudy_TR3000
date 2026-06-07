@@ -604,10 +604,12 @@ ADMIN_HTML = r"""<!doctype html>
     <section>
       <h2>Deploy Preview</h2>
       <div class="toolbar">
-        <button id="refreshPlan" type="button">Refresh Preview</button>
+        <button id="refreshPlan" type="button">Refresh Route Plan</button>
+        <button id="refreshDeployPlan" class="secondary" type="button">Refresh Deploy Plan</button>
       </div>
       <p id="planStatus" class="status"></p>
       <pre id="routePlan" class="muted"></pre>
+      <pre id="deployPlan" class="muted"></pre>
     </section>
   </main>
   <script>
@@ -874,6 +876,19 @@ ADMIN_HTML = r"""<!doctype html>
         const plan = await api("/api/route-plan");
         document.getElementById("routePlan").textContent = JSON.stringify(plan, null, 2);
         status.textContent = `Users: ${plan.summary.users}, effective routes: ${plan.summary.effective_routes}, warnings: ${plan.summary.warnings}`;
+        status.className = plan.summary.warnings ? "status error" : "status ok";
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("refreshDeployPlan").addEventListener("click", async () => {
+      const status = document.getElementById("planStatus");
+      status.className = "status";
+      try {
+        const plan = await api("/api/admin/deploy-preview");
+        document.getElementById("deployPlan").textContent = JSON.stringify(plan, null, 2);
+        status.textContent = `Global routes: ${plan.summary.global_routes} apply=${plan.summary.apply_global}; user routes: ${plan.summary.user_routes} apply=${plan.summary.apply_user}; warnings: ${plan.summary.warnings}`;
         status.className = plan.summary.warnings ? "status error" : "status ok";
       } catch (error) {
         status.textContent = error.message;
@@ -1423,6 +1438,75 @@ def build_route_plan(db_path: Path) -> dict[str, Any]:
             "warnings": len(warnings),
         },
         "users": plan_users,
+        "warnings": warnings,
+    }
+
+
+def build_combined_deploy_preview(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    pbr_output_dir: Path = DEFAULT_PBR_EXPORT_DIR,
+    user_output_dir: Path = DEFAULT_USER_ROUTES_EXPORT_DIR,
+    pbr_remote_dir: str = REMOTE_PBR_DIR,
+    user_remote_dir: str = REMOTE_USER_ROUTES_DIR,
+    ssh_host: str = DEFAULT_CUDY_HOST,
+    install_scripts: bool = False,
+    restart_pbr: bool = True,
+    run_user_apply: bool = True,
+    prune_empty: bool = False,
+    allow_empty: bool = False,
+) -> dict[str, Any]:
+    pbr_manifest = export_pbr_overrides(db_path, inventory_path, pbr_output_dir)
+    user_manifest = export_user_routes(db_path, inventory_path, user_output_dir)
+    pbr_plan = build_pbr_deploy_plan(
+        pbr_manifest,
+        ssh_host=ssh_host,
+        remote_dir=pbr_remote_dir,
+        install_scripts=install_scripts,
+        restart_pbr=restart_pbr,
+        prune_empty=prune_empty,
+    )
+    user_plan = build_user_routes_deploy_plan(
+        user_manifest,
+        ssh_host=ssh_host,
+        remote_dir=user_remote_dir,
+        install_script=install_scripts,
+        run_apply=run_user_apply,
+    )
+    should_apply_pbr = (
+        pbr_plan["route_count"] > 0
+        or prune_empty
+        or install_scripts
+        or allow_empty
+    )
+    should_apply_user = user_plan["route_count"] > 0 or allow_empty
+    warnings: list[str] = []
+    if should_apply_pbr:
+        warnings.extend(pbr_plan["warnings"])
+    if should_apply_user:
+        warnings.extend(
+            warning
+            for warning in user_plan["warnings"]
+            if "remote user-route apply script is not updated" not in warning
+        )
+    if not install_scripts and should_apply_user:
+        warnings.append("use --install-scripts after changing OpenWrt scripts")
+    return {
+        "generated_at": now(),
+        "apply": False,
+        "summary": {
+            "global_routes": pbr_plan["route_count"],
+            "user_routes": user_plan["route_count"],
+            "apply_global": should_apply_pbr,
+            "apply_user": should_apply_user,
+            "pbr_uploads": pbr_plan["upload_count"],
+            "user_uploads": user_plan["upload_count"],
+            "warnings": len(warnings),
+        },
+        "operator_command": "python tools\\vpn_control_app.py deploy-routes --apply",
+        "pbr": {"manifest": pbr_manifest, "plan": pbr_plan, "will_apply": should_apply_pbr},
+        "user_routes": {"manifest": user_manifest, "plan": user_plan, "will_apply": should_apply_user},
         "warnings": warnings,
     }
 
@@ -2074,6 +2158,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/route-plan":
                 self.require_admin()
                 self.send_json(build_route_plan(self.app.db_path))
+            elif parsed.path == "/api/admin/deploy-preview":
+                self.require_admin()
+                self.send_json(build_combined_deploy_preview(self.app.db_path, self.app.inventory_path))
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
             else:

@@ -192,6 +192,8 @@ http://127.0.0.1:8765/admin
 
 The admin page can create normal users, bind them to VPN client IPs, change passwords if needed, enable or disable them, edit global routes, and edit per-user domain routes.
 
+The admin `Deploy Preview` block is read-only. It can refresh the effective route plan and the combined deploy dry-run plan, but it does not run SSH commands or apply changes to Cudy. Apply changes from PowerShell with `deploy-routes --apply`.
+
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.
