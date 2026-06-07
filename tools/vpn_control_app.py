@@ -1494,7 +1494,7 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
     if user_route_count:
         warnings.append(
             f"{user_route_count} enabled user-specific routes are not exported yet; "
-            "source-IP routing needs the next deploy layer"
+            "they belong to the separate source-IP user-route layer"
         )
 
     manifest = {
@@ -2567,6 +2567,26 @@ def build_parser() -> argparse.ArgumentParser:
     user_status_parser.add_argument("--ssh-timeout", type=int, default=30)
     user_status_parser.add_argument("--json", action="store_true", help="Print JSON status.")
 
+    full_deploy_parser = sub.add_parser(
+        "deploy-routes",
+        help="Export and optionally deploy global and per-user routes to Cudy.",
+    )
+    full_deploy_parser.add_argument("--pbr-output-dir", type=Path, default=DEFAULT_PBR_EXPORT_DIR)
+    full_deploy_parser.add_argument("--user-output-dir", type=Path, default=DEFAULT_USER_ROUTES_EXPORT_DIR)
+    full_deploy_parser.add_argument("--pbr-remote-dir", default=REMOTE_PBR_DIR)
+    full_deploy_parser.add_argument("--user-remote-dir", default=REMOTE_USER_ROUTES_DIR)
+    full_deploy_parser.add_argument("--ssh-host", default=DEFAULT_CUDY_HOST)
+    full_deploy_parser.add_argument("--ssh-user", default=DEFAULT_CUDY_USER)
+    full_deploy_parser.add_argument("--ssh-password")
+    full_deploy_parser.add_argument("--ssh-timeout", type=int, default=60)
+    full_deploy_parser.add_argument("--install-scripts", action="store_true", help="Install PBR, vpn-switch, and user-route scripts.")
+    full_deploy_parser.add_argument("--no-restart-pbr", action="store_true", help="Upload global PBR files but do not restart PBR.")
+    full_deploy_parser.add_argument("--no-run-user-apply", action="store_true", help="Upload user route files but do not run the apply script.")
+    full_deploy_parser.add_argument("--prune-empty", action="store_true", help="Upload empty generated global PBR files to clear old generated routes.")
+    full_deploy_parser.add_argument("--allow-empty", action="store_true", help="Allow apply when a route layer has zero routes.")
+    full_deploy_parser.add_argument("--apply", action="store_true", help="Actually upload/apply on Cudy. Default is dry-run.")
+    full_deploy_parser.add_argument("--json", action="store_true", help="Print JSON plan/result.")
+
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
@@ -2792,6 +2812,112 @@ def main() -> int:
             print(status["routes_tsv"] or "(missing)")
             print("\n== nft table ==")
             print(status["nft_table"] or "(missing)")
+        return 0
+    if args.command == "deploy-routes":
+        pbr_manifest = export_pbr_overrides(args.db, args.inventory, args.pbr_output_dir)
+        user_manifest = export_user_routes(args.db, args.inventory, args.user_output_dir)
+        pbr_plan = build_pbr_deploy_plan(
+            pbr_manifest,
+            ssh_host=args.ssh_host,
+            remote_dir=args.pbr_remote_dir,
+            install_scripts=args.install_scripts,
+            restart_pbr=not args.no_restart_pbr,
+            prune_empty=args.prune_empty,
+        )
+        user_plan = build_user_routes_deploy_plan(
+            user_manifest,
+            ssh_host=args.ssh_host,
+            remote_dir=args.user_remote_dir,
+            install_script=args.install_scripts,
+            run_apply=not args.no_run_user_apply,
+        )
+        should_apply_pbr = (
+            pbr_plan["route_count"] > 0
+            or args.prune_empty
+            or args.install_scripts
+            or args.allow_empty
+        )
+        should_apply_user = user_plan["route_count"] > 0 or args.allow_empty
+        payload = {
+            "apply": bool(args.apply),
+            "pbr": {"manifest": pbr_manifest, "plan": pbr_plan, "will_apply": should_apply_pbr},
+            "user_routes": {"manifest": user_manifest, "plan": user_plan, "will_apply": should_apply_user},
+        }
+        if not args.apply:
+            if args.json:
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+            else:
+                print("Dry run. Use --apply to deploy to Cudy.")
+                print(f"Global routes: {pbr_plan['route_count']} apply={should_apply_pbr}")
+                print(f"User routes: {user_plan['route_count']} apply={should_apply_user}")
+                print(f"Remote: {args.ssh_user}@{args.ssh_host}")
+                print(f"Install scripts: {bool(args.install_scripts)}")
+                print(f"Restart PBR: {not args.no_restart_pbr}")
+                print(f"Run user apply: {not args.no_run_user_apply}")
+                print(f"PBR uploads: {pbr_plan['upload_count']}")
+                print(f"User uploads: {user_plan['upload_count']}")
+                text_warnings: list[str] = []
+                if should_apply_pbr:
+                    text_warnings.extend(pbr_plan["warnings"])
+                if should_apply_user:
+                    text_warnings.extend(
+                        warning
+                        for warning in user_plan["warnings"]
+                        if "remote user-route apply script is not updated" not in warning
+                    )
+                if not args.install_scripts and should_apply_user:
+                    text_warnings.append("use --install-scripts after changing OpenWrt scripts")
+                for warning in text_warnings:
+                    print(f"WARNING: {warning}")
+            return 0
+        if not should_apply_pbr and not should_apply_user:
+            print("ERROR: refusing to apply zero routes without --allow-empty", file=sys.stderr)
+            return 2
+        password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+        if not password:
+            password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
+        results: dict[str, Any] = {"pbr": None, "user_routes": None}
+        try:
+            if should_apply_pbr:
+                results["pbr"] = deploy_pbr_overrides(
+                    pbr_manifest,
+                    ssh_host=args.ssh_host,
+                    ssh_user=args.ssh_user,
+                    ssh_password=password,
+                    ssh_timeout=args.ssh_timeout,
+                    remote_dir=args.pbr_remote_dir,
+                    install_scripts=args.install_scripts,
+                    restart_pbr=not args.no_restart_pbr,
+                    prune_empty=args.prune_empty,
+                )
+            if should_apply_user:
+                results["user_routes"] = deploy_user_routes(
+                    user_manifest,
+                    ssh_host=args.ssh_host,
+                    ssh_user=args.ssh_user,
+                    ssh_password=password,
+                    ssh_timeout=args.ssh_timeout,
+                    remote_dir=args.user_remote_dir,
+                    install_script=args.install_scripts,
+                    run_apply=not args.no_run_user_apply,
+                )
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps({"ok": True, "results": results}, ensure_ascii=False, indent=2))
+        else:
+            print(f"Applied route deployment to {args.ssh_host}")
+            if results["pbr"]:
+                print(f"PBR backup: {results['pbr']['backup_dir']}")
+            else:
+                print("PBR layer skipped")
+            if results["user_routes"]:
+                print(f"User routes backup: {results['user_routes']['backup_dir']}")
+                if results["user_routes"]["output"]:
+                    print(results["user_routes"]["output"])
+            else:
+                print("User route layer skipped")
         return 0
     if args.command == "serve":
         app = App(args.db, args.inventory)

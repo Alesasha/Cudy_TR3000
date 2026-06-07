@@ -107,6 +107,8 @@ http://127.0.0.1:8765/admin
   - applies source-IP nft rules through `/usr/bin/cudy-user-routes-apply`;
   - derives PBR marks from existing `ip rule show` output on Cudy;
   - exposes deployed nft counters through `status-user-routes`.
+- Combined deploy:
+  - `deploy-routes` previews or applies both global and per-user route layers in order.
 
 ## Not Implemented Yet
 

@@ -161,6 +161,22 @@ Remove-Item Env:CUDY_SSH_PASSWORD
 
 After the matching user opens the test domain, the nft rule should show `counter packets ... bytes ...`.
 
+Deploy all route layers together:
+
+```powershell
+python tools\vpn_control_app.py deploy-routes
+```
+
+Apply all route layers:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = '<router password>'
+python tools\vpn_control_app.py deploy-routes --apply
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
+`deploy-routes` is the preferred operator command after editing routes in the panel. It applies the global PBR layer only when needed, then applies the per-user source-IP layer. Add `--install-scripts` after changing the OpenWrt scripts in this repository. The separate `deploy-pbr-overrides` and `deploy-user-routes` commands remain available for targeted maintenance.
+
 Run the local web UI:
 
 ```powershell
