@@ -90,7 +90,12 @@ http://127.0.0.1:8765/admin
   - reset user passwords;
   - show or hide newly entered password values before saving;
   - add global `domain -> server` routes;
-  - add or delete `domain -> server` routes for any user.
+  - add or delete `domain -> server` routes for any user;
+  - inspect and edit cached `Auto` choices.
+- Auto cache:
+  - stores `domain -> selected server` decisions in `domain_auto_cache`;
+  - lets `Auto` routes resolve to a real interface during route plan/export;
+  - can be edited from the admin UI or the `auto-cache-*` CLI commands.
 - Deploy preview:
   - combines global admin routes and per-user routes;
   - per-user route wins when the same domain exists in both layers;
@@ -114,6 +119,7 @@ http://127.0.0.1:8765/admin
 ## Not Implemented Yet
 
 - automatic best-server benchmarking;
+- background refresh of cached `Auto` choices;
 - multi-user invitation or remote sync.
 
 Those should be implemented after the local data model stabilizes.

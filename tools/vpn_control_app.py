@@ -602,6 +602,21 @@ ADMIN_HTML = r"""<!doctype html>
       </table>
     </section>
     <section>
+      <h2>Auto Cache</h2>
+      <form id="autoCacheForm" class="toolbar">
+        <div class="field"><label>Domain</label><input id="autoCacheDomain" type="text" placeholder="example.com" autocomplete="off"></div>
+        <div class="field"><label>Selected Server</label><select id="autoCacheServer"></select></div>
+        <div class="field"><label>Score ms</label><input id="autoCacheScore" type="number" min="0" step="1" placeholder="optional"></div>
+        <div class="field"><label>Status</label><input id="autoCacheStatusInput" type="text" value="manual" autocomplete="off"></div>
+        <button type="submit">Save Auto</button>
+      </form>
+      <p id="autoCacheStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Domain</th><th>Selected Server</th><th>Score</th><th>Status</th><th>Checked</th><th></th></tr></thead>
+        <tbody id="autoCacheBody"></tbody>
+      </table>
+    </section>
+    <section>
       <h2>Deploy Preview</h2>
       <div class="toolbar">
         <button id="refreshPlan" type="button">Refresh Route Plan</button>
@@ -613,7 +628,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [] };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [] };
     async function api(path, options) {
       const response = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -625,6 +640,12 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function serverOptions(value) {
       return state.servers.map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${s.label}</option>`).join("");
+    }
+    function physicalServerOptions(value) {
+      return state.servers
+        .filter(s => s.id !== "auto" && s.enabled && s.user_visible)
+        .map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${s.label}</option>`)
+        .join("");
     }
     function userOptions(value) {
       return state.users.map(u => `<option value="${u.id}" ${u.id === value ? "selected" : ""}>${u.id}</option>`).join("");
@@ -778,18 +799,40 @@ ADMIN_HTML = r"""<!doctype html>
         });
       });
     }
+    function renderAutoCache() {
+      const body = document.getElementById("autoCacheBody");
+      body.innerHTML = state.autoCache.length ? state.autoCache.map(r => `
+        <tr>
+          <td>${r.domain}</td>
+          <td>${r.selected_server_id || ""}</td>
+          <td>${r.score_ms ?? ""}</td>
+          <td>${r.status}</td>
+          <td>${r.checked_at || ""}</td>
+          <td><button class="danger" data-delete-auto-cache="${r.domain}">Delete</button></td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No cached Auto choices.</td></tr>';
+      body.querySelectorAll("[data-delete-auto-cache]").forEach(button => {
+        button.addEventListener("click", async () => {
+          await api(`/api/admin/auto-cache?domain=${encodeURIComponent(button.dataset.deleteAutoCache)}`, { method: "DELETE" });
+          await load();
+        });
+      });
+    }
     async function load() {
       const data = await api("/api/admin");
       state.servers = data.servers;
       state.users = data.users;
       state.routes = data.routes;
       state.globalRoutes = data.global_routes || [];
+      state.autoCache = data.auto_cache || [];
       renderServers();
       renderUsers();
       renderGlobalRoutes();
       renderRoutes();
+      renderAutoCache();
       document.getElementById("adminRouteServer").innerHTML = serverOptions(document.getElementById("adminRouteServer").value || "auto");
       document.getElementById("globalRouteServer").innerHTML = serverOptions(document.getElementById("globalRouteServer").value || "auto");
+      document.getElementById("autoCacheServer").innerHTML = physicalServerOptions(document.getElementById("autoCacheServer").value);
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
     }
     document.getElementById("newUserForm").addEventListener("submit", async event => {
@@ -862,6 +905,31 @@ ADMIN_HTML = r"""<!doctype html>
         });
         document.getElementById("adminRouteDomain").value = "";
         status.textContent = "Route saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("autoCacheForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("autoCacheStatus");
+      status.className = "status";
+      try {
+        const scoreRaw = document.getElementById("autoCacheScore").value;
+        await api("/api/admin/auto-cache", {
+          method: "POST",
+          body: JSON.stringify({
+            domain: document.getElementById("autoCacheDomain").value,
+            selected_server_id: document.getElementById("autoCacheServer").value,
+            score_ms: scoreRaw === "" ? null : Number(scoreRaw),
+            status: document.getElementById("autoCacheStatusInput").value || "manual"
+          })
+        });
+        document.getElementById("autoCacheDomain").value = "";
+        document.getElementById("autoCacheScore").value = "";
+        status.textContent = "Auto cache saved.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -1348,9 +1416,104 @@ def compact_server(server: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+def auto_cache_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
+    return {
+        item["domain"]: item
+        for item in rows(
+            conn,
+            """
+            SELECT domain, selected_server_id, score_ms, status, checked_at, metadata_json
+            FROM domain_auto_cache
+            ORDER BY domain
+            """,
+        )
+    }
+
+
+def resolve_route_server(
+    *,
+    domain: str,
+    requested_server_id: str,
+    servers: dict[str, dict[str, Any]],
+    auto_cache: dict[str, dict[str, Any]],
+    context: str,
+    warnings: list[str],
+) -> tuple[str | None, dict[str, Any] | None]:
+    if requested_server_id != "auto":
+        return requested_server_id, None
+
+    cached = auto_cache.get(domain)
+    if not cached or not cached.get("selected_server_id"):
+        warnings.append(f"{context}: Auto has no cached selected server for {domain}")
+        return None, cached
+
+    selected_server_id = str(cached["selected_server_id"])
+    if selected_server_id == "auto":
+        warnings.append(f"{context}: Auto cache for {domain} points back to auto")
+        return None, cached
+    if selected_server_id not in servers:
+        warnings.append(f"{context}: Auto cache for {domain} points to unknown server {selected_server_id}")
+        return None, cached
+
+    return selected_server_id, cached
+
+
+def save_auto_cache_entry(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    selected_server_id: str,
+    score_ms: int | None,
+    status: str,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    domain = normalize_domain(domain)
+    selected_server_id = selected_server_id.strip()
+    if selected_server_id == "auto":
+        raise ValueError("Auto cache must point to a real server, not auto")
+    if not status or not re.match(r"^[A-Za-z0-9_.-]{1,32}$", status):
+        raise ValueError("status must be 1-32 chars: A-Z a-z 0-9 _ . -")
+    if score_ms is not None and score_ms < 0:
+        raise ValueError("score_ms must be zero or positive")
+    timestamp = now()
+    with connect(db_path) as conn:
+        validate_server_id(conn, selected_server_id, require_user_visible=True)
+        conn.execute(
+            """
+            INSERT INTO domain_auto_cache (
+              domain, selected_server_id, score_ms, status, checked_at, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, '{}')
+            ON CONFLICT(domain)
+            DO UPDATE SET selected_server_id = excluded.selected_server_id,
+                          score_ms = excluded.score_ms,
+                          status = excluded.status,
+                          checked_at = excluded.checked_at
+            """,
+            (domain, selected_server_id, score_ms, status, timestamp),
+        )
+    return {
+        "ok": True,
+        "domain": domain,
+        "selected_server_id": selected_server_id,
+        "score_ms": score_ms,
+        "status": status,
+        "checked_at": timestamp,
+    }
+
+
+def delete_auto_cache_entry(db_path: Path, inventory_path: Path, domain: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    domain = normalize_domain(domain)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM domain_auto_cache WHERE domain = ?", (domain,))
+    return {"ok": True, "domain": domain}
+
+
 def build_route_plan(db_path: Path) -> dict[str, Any]:
     with connect(db_path) as conn:
         servers = server_map(conn)
+        cached_auto = auto_cache_map(conn)
         global_routes = rows(
             conn,
             """
@@ -1406,12 +1569,28 @@ def build_route_plan(db_path: Path) -> dict[str, Any]:
                 }
             route_items: list[dict[str, Any]] = []
             for route in sorted(effective.values(), key=lambda item: item["domain"]):
-                server = servers.get(route["server_id"])
+                requested_server_id = route["server_id"]
+                route_warnings: list[str] = []
+                resolved_server_id, cached = resolve_route_server(
+                    domain=route["domain"],
+                    requested_server_id=requested_server_id,
+                    servers=servers,
+                    auto_cache=cached_auto,
+                    context=f"{user['id']}/{route['domain']}",
+                    warnings=route_warnings,
+                )
+                user_warnings.extend(route_warnings)
+                server_id = resolved_server_id or requested_server_id
+                server = servers.get(server_id)
                 if not server:
-                    user_warnings.append(f"{route['domain']}: unknown server {route['server_id']}")
+                    user_warnings.append(f"{route['domain']}: unknown server {server_id}")
                 route_items.append(
                     {
                         **route,
+                        "requested_server_id": requested_server_id,
+                        "server_id": server_id,
+                        "resolved_server_id": resolved_server_id,
+                        "auto_cache": cached,
                         "server": compact_server(server),
                     }
                 )
@@ -1524,6 +1703,7 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
     output_dir.mkdir(parents=True, exist_ok=True)
     with connect(db_path) as conn:
         servers = server_map(conn)
+        cached_auto = auto_cache_map(conn)
         enabled_interfaces: set[str] = set()
         for server in servers.values():
             iface = safe_interface_name(server.get("interface"))
@@ -1543,11 +1723,22 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
         ).fetchone()[0]
 
     grouped: dict[str, set[str]] = {iface: set() for iface in enabled_interfaces}
-    exported_routes: list[dict[str, str]] = []
+    exported_routes: list[dict[str, Any]] = []
     warnings: list[str] = []
     for route in global_routes:
         domain = route["domain"]
-        server_id = route["server_id"]
+        requested_server_id = route["server_id"]
+        resolved_server_id, cached = resolve_route_server(
+            domain=domain,
+            requested_server_id=requested_server_id,
+            servers=servers,
+            auto_cache=cached_auto,
+            context=domain,
+            warnings=warnings,
+        )
+        if not resolved_server_id:
+            continue
+        server_id = resolved_server_id
         server = servers.get(server_id)
         if not server:
             warnings.append(f"{domain}: unknown server {server_id}; skipped")
@@ -1566,7 +1757,16 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
                 "PBR export can only route to the current interface profile"
             )
         grouped.setdefault(iface, set()).add(domain)
-        exported_routes.append({"domain": domain, "server_id": server_id, "interface": iface})
+        exported_routes.append(
+            {
+                "domain": domain,
+                "server_id": server_id,
+                "requested_server_id": requested_server_id,
+                "interface": iface,
+                "auto_status": cached.get("status") if cached else None,
+                "auto_score_ms": cached.get("score_ms") if cached else None,
+            }
+        )
 
     files: list[dict[str, Any]] = []
     for iface in sorted(grouped):
@@ -1604,6 +1804,7 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
     output_dir.mkdir(parents=True, exist_ok=True)
     with connect(db_path) as conn:
         servers = server_map(conn)
+        cached_auto = auto_cache_map(conn)
         route_rows = rows(
             conn,
             """
@@ -1628,6 +1829,18 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
         if not client_ip:
             warnings.append(f"{user_id}/{domain}: missing client_ip; skipped")
             continue
+        requested_server_id = server_id
+        resolved_server_id, cached = resolve_route_server(
+            domain=domain,
+            requested_server_id=requested_server_id,
+            servers=servers,
+            auto_cache=cached_auto,
+            context=f"{user_id}/{domain}",
+            warnings=warnings,
+        )
+        if not resolved_server_id:
+            continue
+        server_id = resolved_server_id
         server = servers.get(server_id)
         if not server:
             warnings.append(f"{user_id}/{domain}: unknown server {server_id}; skipped")
@@ -1657,7 +1870,10 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
                 "client_ip": client_ip,
                 "domain": domain,
                 "server_id": server_id,
+                "requested_server_id": requested_server_id,
                 "interface": iface,
+                "auto_status": cached.get("status") if cached else None,
+                "auto_score_ms": cached.get("score_ms") if cached else None,
             }
         )
 
@@ -2202,6 +2418,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/global-domain-routes":
                 self.require_admin()
                 self.send_json(self.api_admin_save_global_domain_route(data))
+            elif parsed.path == "/api/admin/auto-cache":
+                self.require_admin()
+                self.send_json(self.api_admin_save_auto_cache(data))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -2234,6 +2453,11 @@ class Handler(BaseHTTPRequestHandler):
                 with self.app.conn() as conn:
                     conn.execute("DELETE FROM global_domain_routes WHERE domain = ?", (domain,))
                 self.send_json({"ok": True})
+            elif parsed.path == "/api/admin/auto-cache":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                domain = query.get("domain", [""])[0]
+                self.send_json(delete_auto_cache_entry(self.app.db_path, self.app.inventory_path, domain))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -2486,6 +2710,18 @@ class Handler(BaseHTTPRequestHandler):
             )
         return {"ok": True, "domain": domain, "server_id": server_id}
 
+    def api_admin_save_auto_cache(self, data: dict[str, Any]) -> dict[str, Any]:
+        score_value = data.get("score_ms")
+        score_ms = None if score_value in (None, "") else int(score_value)
+        return save_auto_cache_entry(
+            self.app.db_path,
+            self.app.inventory_path,
+            domain=str(data.get("domain") or ""),
+            selected_server_id=str(data.get("selected_server_id") or ""),
+            score_ms=score_ms,
+            status=str(data.get("status") or "manual"),
+        )
+
     def api_save_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = self.require_user()["id"]
         domain = normalize_domain(str(data.get("domain") or ""))
@@ -2549,10 +2785,12 @@ def print_db_summary(db_path: Path) -> None:
         user_count = conn.execute("SELECT count(*) FROM users").fetchone()[0]
         login_user_count = conn.execute("SELECT count(*) FROM users WHERE password_hash IS NOT NULL").fetchone()[0]
         route_count = conn.execute("SELECT count(*) FROM user_domain_routes").fetchone()[0]
+        auto_cache_count = conn.execute("SELECT count(*) FROM domain_auto_cache").fetchone()[0]
     print(f"DB: {db_path}")
     print(f"Servers: {server_count} total, {user_server_count} user-visible")
     print(f"Users: {user_count} total, {login_user_count} with login")
     print(f"Domain routes: {route_count}")
+    print(f"Auto cache: {auto_cache_count}")
 
 
 def read_password_arg(value: str | None, *, confirm: bool) -> str:
@@ -2596,6 +2834,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     route_plan_parser = sub.add_parser("route-plan", help="Print effective per-user route plan.")
     route_plan_parser.add_argument("--json", action="store_true", help="Print full JSON plan.")
+
+    auto_cache_list_parser = sub.add_parser("auto-cache-list", help="List cached Auto domain choices.")
+    auto_cache_list_parser.add_argument("--json", action="store_true", help="Print JSON cache entries.")
+
+    auto_cache_set_parser = sub.add_parser("auto-cache-set", help="Set cached Auto choice for one domain.")
+    auto_cache_set_parser.add_argument("domain")
+    auto_cache_set_parser.add_argument("selected_server_id")
+    auto_cache_set_parser.add_argument("--score-ms", type=int)
+    auto_cache_set_parser.add_argument("--status", default="manual")
+
+    auto_cache_delete_parser = sub.add_parser("auto-cache-delete", help="Delete cached Auto choice for one domain.")
+    auto_cache_delete_parser.add_argument("domain")
 
     export_parser = sub.add_parser(
         "export-pbr-overrides",
@@ -2731,9 +2981,52 @@ def main() -> int:
                     f"default={user['default_server_id']}\troutes={len(user['routes'])}"
                 )
                 for route in user["routes"]:
-                    print(f"  {route['domain']}\t{route['server_id']}\t{route['source']}")
+                    requested = route.get("requested_server_id")
+                    via = f" requested={requested}" if requested and requested != route["server_id"] else ""
+                    print(f"  {route['domain']}\t{route['server_id']}\t{route['source']}{via}")
                 for warning in user["warnings"]:
                     print(f"  WARNING: {warning}")
+        return 0
+    if args.command == "auto-cache-list":
+        init_db(args.db, args.inventory)
+        with connect(args.db) as conn:
+            entries = rows(
+                conn,
+                """
+                SELECT domain, selected_server_id, score_ms, status, checked_at
+                FROM domain_auto_cache
+                ORDER BY domain
+                """,
+            )
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("Auto cache is empty.")
+            for item in entries:
+                print(
+                    f"{item['domain']}\t{item['selected_server_id'] or '-'}\t"
+                    f"score={item['score_ms'] if item['score_ms'] is not None else '-'}\t"
+                    f"status={item['status']}\tchecked={item['checked_at'] or '-'}"
+                )
+        return 0
+    if args.command == "auto-cache-set":
+        item = save_auto_cache_entry(
+            args.db,
+            args.inventory,
+            domain=args.domain,
+            selected_server_id=args.selected_server_id,
+            score_ms=args.score_ms,
+            status=args.status,
+        )
+        print(
+            f"Auto cache saved: {item['domain']} -> {item['selected_server_id']} "
+            f"score={item['score_ms'] if item['score_ms'] is not None else '-'} status={item['status']}"
+        )
+        return 0
+    if args.command == "auto-cache-delete":
+        item = delete_auto_cache_entry(args.db, args.inventory, args.domain)
+        print(f"Auto cache deleted: {item['domain']}")
         return 0
     if args.command == "export-pbr-overrides":
         manifest = export_pbr_overrides(args.db, args.inventory, args.output_dir)

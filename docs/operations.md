@@ -194,6 +194,16 @@ The admin page can create normal users, bind them to VPN client IPs, change pass
 
 The admin `Deploy Preview` block is read-only. It can refresh the effective route plan and the combined deploy dry-run plan, but it does not run SSH commands or apply changes to Cudy. Apply changes from PowerShell with `deploy-routes --apply`.
 
+Manage cached `Auto` choices:
+
+```powershell
+python tools\vpn_control_app.py auto-cache-list
+python tools\vpn_control_app.py auto-cache-set example.com proxyde --score-ms 120
+python tools\vpn_control_app.py auto-cache-delete example.com
+```
+
+When a global or per-user route points to `auto`, export/deploy resolves it through `domain_auto_cache`. If there is no cached selected server for that domain, the route is skipped and the deploy preview shows a warning.
+
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.
