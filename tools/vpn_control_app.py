@@ -18,6 +18,7 @@ import json
 import os
 import re
 import secrets
+import shlex
 import sqlite3
 import sys
 import time
@@ -1673,6 +1674,26 @@ def ssh_exec_checked(client: paramiko.SSHClient, command: str, timeout: int) -> 
     return out
 
 
+def ssh_upload_file(client: paramiko.SSHClient, local_path: str | Path, remote_path: str, timeout: int) -> None:
+    data = Path(local_path).read_bytes()
+    transport = client.get_transport()
+    if transport is None:
+        raise RuntimeError("SSH transport is not active")
+    channel = transport.open_session(timeout=timeout)
+    channel.settimeout(timeout)
+    channel.exec_command(f"cat > {shlex.quote(remote_path)}")
+    channel.sendall(data)
+    channel.shutdown_write()
+    stdout = channel.makefile("rb", -1).read().decode("utf-8", "replace")
+    stderr = channel.makefile_stderr("rb", -1).read().decode("utf-8", "replace")
+    rc = channel.recv_exit_status()
+    channel.close()
+    if rc:
+        raise RuntimeError(
+            f"remote upload failed rc={rc}: {remote_path}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+        )
+
+
 def deploy_pbr_overrides(
     manifest: dict[str, Any],
     *,
@@ -1709,15 +1730,11 @@ printf '%s\n' "$backup"
             ssh_timeout,
         )
         backup_dir = backup_output.strip().splitlines()[-1]
-        sftp = client.open_sftp()
-        try:
-            for upload in plan["uploads"]:
-                sftp.put(upload["local"], upload["remote"])
-            if install_scripts:
-                sftp.put(str(LOCAL_PBR_SCRIPT), "/tmp/cudy-tr3000-pbr.user.opencck-merged-vpn")
-                sftp.put(str(LOCAL_SWITCHER_INSTALLER), "/root/install/install-vpn-switchers.sh")
-        finally:
-            sftp.close()
+        for upload in plan["uploads"]:
+            ssh_upload_file(client, upload["local"], upload["remote"], ssh_timeout)
+        if install_scripts:
+            ssh_upload_file(client, LOCAL_PBR_SCRIPT, "/tmp/cudy-tr3000-pbr.user.opencck-merged-vpn", ssh_timeout)
+            ssh_upload_file(client, LOCAL_SWITCHER_INSTALLER, "/root/install/install-vpn-switchers.sh", ssh_timeout)
 
         commands = [
             "chmod 644 /etc/pbr-overrides/*.domains /etc/pbr-overrides/manifest.json 2>/dev/null || true",
@@ -1815,14 +1832,10 @@ printf '%s\n' "$backup"
             ssh_timeout,
         )
         backup_dir = backup_output.strip().splitlines()[-1]
-        sftp = client.open_sftp()
-        try:
-            for upload in plan["uploads"]:
-                sftp.put(upload["local"], upload["remote"])
-            if install_script:
-                sftp.put(str(LOCAL_USER_ROUTES_APPLY), "/usr/bin/cudy-user-routes-apply")
-        finally:
-            sftp.close()
+        for upload in plan["uploads"]:
+            ssh_upload_file(client, upload["local"], upload["remote"], ssh_timeout)
+        if install_script:
+            ssh_upload_file(client, LOCAL_USER_ROUTES_APPLY, "/usr/bin/cudy-user-routes-apply", ssh_timeout)
 
         commands = [
             "chmod 644 /etc/cudy-user-routes/routes.tsv /etc/cudy-user-routes/manifest.json 2>/dev/null || true",
