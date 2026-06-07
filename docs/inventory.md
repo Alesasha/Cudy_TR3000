@@ -62,6 +62,31 @@ The snapshot records:
 - current LokVPN profile;
 - presence of provider refreshers and switchers.
 
+## Provider Refresh
+
+Cudy remains the source of truth for provider refresh mechanics:
+
+- VPNtype proxy endpoints are refreshed by `/usr/bin/vpntype-proxy-refresh-all`, including the existing cron job;
+- individual VPNtype proxies use `/usr/bin/proxy*-refresh`;
+- LokVPN profile refresh uses `/usr/bin/lokvpn-refresh-current`.
+
+The local project wraps these commands so they can be previewed and, when needed, executed over SSH:
+
+```powershell
+python tools\vpn_inventory.py refresh-provider
+python tools\vpn_inventory.py refresh-provider vpntype
+python tools\vpn_inventory.py refresh-provider lokvpn --profile fr2
+python tools\vpn_inventory.py refresh-provider proxyde
+```
+
+All of the commands above are dry-run previews. Add `--apply` only when the refresh should actually run on Cudy:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = '<router password>'
+python tools\vpn_inventory.py refresh-provider --apply
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
 ## Current Stage 1 Choice Count
 
 The intended user list is 32 choices:

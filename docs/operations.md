@@ -56,6 +56,25 @@ python tools\vpn_inventory.py refresh-cudy
 Remove-Item Env:CUDY_SSH_PASSWORD
 ```
 
+Preview provider refresh commands that would run on Cudy:
+
+```powershell
+python tools\vpn_inventory.py refresh-provider
+python tools\vpn_inventory.py refresh-provider vpntype
+python tools\vpn_inventory.py refresh-provider lokvpn --profile fr2
+python tools\vpn_inventory.py refresh-provider proxyde
+```
+
+Run the existing Cudy refresh scripts explicitly:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = '<router password>'
+python tools\vpn_inventory.py refresh-provider --apply
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
+`refresh-provider` is a wrapper around the scripts already installed on Cudy. It does not replace the router cron job or store provider API secrets in the local project.
+
 ## Local Control App
 
 Initialize local SQLite state:

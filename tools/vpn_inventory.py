@@ -13,6 +13,7 @@ import getpass
 import json
 import os
 import re
+import shlex
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,6 +27,8 @@ DEFAULT_INVENTORY = ROOT / "config" / "vpn_inventory.json"
 DEFAULT_RUNTIME = ROOT / "config" / "cudy-runtime.json"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
+
+REMOTE_REFRESH_MARKER = "@@VPN_PROVIDER_REFRESH_COMMAND"
 
 
 REMOTE_SCRIPT = r"""#!/bin/sh
@@ -272,6 +275,110 @@ def parse_vpntype_tags(text: str) -> list[dict[str, str]]:
     return tags
 
 
+def build_provider_refresh_plan(
+    inventory: dict[str, Any],
+    *,
+    target: str,
+    profile: str | None = None,
+) -> list[dict[str, Any]]:
+    servers = {server.get("id"): server for server in inventory.get("servers", [])}
+    target = target.strip().lower()
+    plan: list[dict[str, Any]] = []
+
+    def normalize_command(command: list[str]) -> list[str]:
+        if not command:
+            return command
+        normalized = list(command)
+        if "/" not in normalized[0]:
+            normalized[0] = f"/usr/bin/{normalized[0]}"
+        return normalized
+
+    def add_command(provider: str, command: list[str], note: str) -> None:
+        command = normalize_command(command)
+        plan.append(
+            {
+                "provider": provider,
+                "command": command,
+                "shell": shlex.join(command),
+                "note": note,
+            }
+        )
+
+    if target in {"all", "vpntype"}:
+        add_command(
+            "vpntype",
+            ["/usr/bin/vpntype-proxy-refresh-all"],
+            "Refresh all VPNtype HTTP proxy endpoints using the existing Cudy script.",
+        )
+
+    if target in {"all", "lokvpn"}:
+        command = ["/usr/bin/lokvpn-refresh-current"]
+        if profile:
+            command.append(profile)
+        add_command(
+            "lokvpn",
+            command,
+            "Refresh LokVPN sing-box config for the current or requested profile.",
+        )
+
+    if target not in {"all", "vpntype", "lokvpn"} and target in servers:
+        server = servers[target]
+        refresh_command = server.get("refresh_command") or server.get("profile_command")
+        if not refresh_command:
+            raise ValueError(f"{target}: no refresh_command/profile_command in inventory")
+        add_command(
+            str(server.get("provider") or target),
+            shlex.split(str(refresh_command)),
+            f"Refresh inventory server entry {target}.",
+        )
+
+    if not plan:
+        raise ValueError("target must be all, vpntype, lokvpn, or a server id with refresh metadata")
+    return plan
+
+
+def ssh_run_refresh_plan(host: str, user: str, password: str, timeout: int, plan: list[dict[str, Any]]) -> str:
+    lines = ["#!/bin/sh", "rc=0"]
+    for idx, item in enumerate(plan, start=1):
+        command = item["command"]
+        shell = shlex.join(command)
+        lines.append(f"printf '\\n{REMOTE_REFRESH_MARKER}:{idx}@@\\n'")
+        lines.append(f"printf '%s\\n' {shlex.quote('$ ' + shell)}")
+        lines.append(f"{shell} 2>&1")
+        lines.append("code=$?")
+        lines.append("if [ \"$code\" -ne 0 ]; then rc=1; fi")
+        lines.append(f"printf '{REMOTE_REFRESH_MARKER}_RC:{idx}:%s@@\\n' \"$code\"")
+    lines.append("exit \"$rc\"")
+    script = "\n".join(lines) + "\n"
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        host,
+        username=user,
+        password=password,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    try:
+        stdin, stdout, stderr = client.exec_command("sh -s", timeout=timeout * max(3, len(plan) * 3))
+        stdin.write(script)
+        stdin.channel.shutdown_write()
+        out = stdout.read().decode("utf-8", "replace")
+        err = stderr.read().decode("utf-8", "replace")
+        rc = stdout.channel.recv_exit_status()
+        if err.strip():
+            out += "\nSTDERR:\n" + err
+        if rc:
+            raise RuntimeError(f"remote provider refresh failed rc={rc}\n{out}")
+        return out
+    finally:
+        client.close()
+
+
 def build_runtime_snapshot(raw: str, *, host: str, user: str) -> dict[str, Any]:
     sections = parse_sections(raw)
     supported = sections.get("supported_interfaces", "").split()
@@ -404,6 +511,48 @@ def command_refresh_cudy(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_refresh_provider(args: argparse.Namespace) -> int:
+    inventory = read_json(args.inventory)
+    try:
+        plan = build_provider_refresh_plan(inventory, target=args.target, profile=args.profile)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    payload: dict[str, Any] = {
+        "target": args.target,
+        "apply": bool(args.apply),
+        "ssh_host": args.ssh_host,
+        "commands": plan,
+    }
+
+    if not args.apply:
+        if args.json:
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+        else:
+            print("Dry run. Use --apply to execute on Cudy.")
+            for item in plan:
+                print(f"{item['provider']}: {item['shell']}")
+        return 0
+
+    password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+    if not password:
+        password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
+
+    try:
+        output = ssh_run_refresh_plan(args.ssh_host, args.ssh_user, password, args.ssh_timeout, plan)
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    payload["output"] = output
+    if args.json:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    else:
+        print(output.strip())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the local VPN/server inventory.")
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
@@ -430,6 +579,25 @@ def build_parser() -> argparse.ArgumentParser:
     refresh_parser.add_argument("--output", type=Path, default=DEFAULT_RUNTIME)
     refresh_parser.add_argument("--json", action="store_true")
     refresh_parser.set_defaults(func=command_refresh_cudy)
+
+    provider_refresh_parser = sub.add_parser(
+        "refresh-provider",
+        help="Preview or run existing Cudy provider refresh scripts over SSH.",
+    )
+    provider_refresh_parser.add_argument(
+        "target",
+        nargs="?",
+        default="all",
+        help="all, vpntype, lokvpn, or a server id with refresh metadata.",
+    )
+    provider_refresh_parser.add_argument("--profile", help="LokVPN profile for lokvpn-refresh-current.")
+    provider_refresh_parser.add_argument("--apply", action="store_true", help="Execute on Cudy. Default is dry-run.")
+    provider_refresh_parser.add_argument("--ssh-host", default=DEFAULT_CUDY_HOST)
+    provider_refresh_parser.add_argument("--ssh-user", default=DEFAULT_CUDY_USER)
+    provider_refresh_parser.add_argument("--ssh-password")
+    provider_refresh_parser.add_argument("--ssh-timeout", type=int, default=60)
+    provider_refresh_parser.add_argument("--json", action="store_true")
+    provider_refresh_parser.set_defaults(func=command_refresh_provider)
 
     return parser
 

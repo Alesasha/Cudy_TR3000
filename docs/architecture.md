@@ -53,4 +53,6 @@ Effective routing is built per user from two layers:
 
 If both layers contain the same domain, the user-specific route wins.
 
+Provider endpoint refresh stays on Cudy during this stage. LokVPN and VPNtype keep using their existing router-side scripts and cron jobs, while the local project inventories them and can trigger them over SSH through `tools/vpn_inventory.py refresh-provider --apply`.
+
 Stage 4 should implement `Auto`: benchmark exits per domain, keep a cache of roughly 300 active domains, and refresh cached leaders in the background.
