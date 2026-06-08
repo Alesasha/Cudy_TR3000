@@ -194,6 +194,10 @@ http://127.0.0.1:8765/admin
 
 The admin page can create normal users, bind them to VPN client IPs, change passwords if needed, enable or disable them, edit global routes, and edit per-user domain routes.
 
+To create a new external Cudy client from the admin page, keep `Create Cudy VPN .conf` checked in the user form. The server calls `/usr/bin/friendctl add` on Cudy, imports the assigned `10.77.0.x` address into the user record, and saves the generated profile under `secrets/clients/cudy-home/`. After creation, use the returned `Download .conf` link or the row `Config` button.
+
+The user row `Delete` button can revoke the Cudy peer and delete the local user. If remote revoke is skipped, only the local control-plane user and local saved config are removed; the remote peer can still keep working until revoked on Cudy. After deleting a user with domain routes, use `Apply Routes` to remove that user's source-IP rules from the live Cudy nft table.
+
 The admin `Deploy Preview` block can refresh the effective route plan, refresh the combined deploy dry-run plan, and apply the current plan to Cudy.
 
 Manage cached `Auto` choices:

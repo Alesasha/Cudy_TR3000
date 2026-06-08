@@ -41,6 +41,8 @@ DEFAULT_USER_ROUTES_EXPORT_DIR = ROOT / "build" / "user-routes"
 DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
+DEFAULT_CUDY_FRIEND_ENDPOINT = "195.170.35.108:51830"
+CUDY_CLIENT_OUTPUT_DIR = ROOT / "secrets" / "clients" / "cudy-home"
 REMOTE_PBR_DIR = "/etc/pbr-overrides"
 REMOTE_USER_ROUTES_DIR = "/etc/cudy-user-routes"
 REMOTE_PBR_SCRIPT = "/usr/share/pbr/pbr.user.opencck-merged-vpn"
@@ -54,6 +56,7 @@ DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
 )
 SAFE_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
+SAFE_CLIENT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,64}$")
 
 
 SCHEMA = """
@@ -543,6 +546,7 @@ ADMIN_HTML = r"""<!doctype html>
     .field label { color: var(--muted); font-size: 12px; }
     button.secondary { background: #fff; color: var(--accent); border-color: var(--line); }
     button.danger { background: #fff; color: var(--danger); border-color: #efc0ba; }
+    a.button { display: inline-flex; align-items: center; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--accent); text-decoration: none; }
   </style>
 </head>
 <body>
@@ -571,6 +575,7 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
         <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
         <div class="field"><label>Client IP</label><input id="newUserClientIp" type="text" placeholder="10.77.0.x" autocomplete="off"></div>
+        <label class="inline muted"><input id="newUserCreateCudy" type="checkbox" checked> Create Cudy VPN .conf</label>
         <div class="field">
           <label>Password</label>
           <div class="inline">
@@ -582,7 +587,7 @@ ADMIN_HTML = r"""<!doctype html>
       </form>
       <p id="userStatus" class="status"></p>
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Client IP</th><th>Default</th><th>Enabled</th><th>Login</th><th>Password</th><th></th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Client IP</th><th>Default</th><th>Enabled</th><th>Login</th><th>Password</th><th>Actions</th></tr></thead>
         <tbody id="usersBody"></tbody>
       </table>
     </section>
@@ -734,7 +739,11 @@ ADMIN_HTML = r"""<!doctype html>
             <button class="secondary" type="button" data-toggle-row-password="${u.id}">Show</button>
             <button class="secondary" data-password="${u.id}">Set</button>
           </td>
-          <td><button data-save-user="${u.id}">Save</button></td>
+          <td class="inline">
+            <button data-save-user="${u.id}">Save</button>
+            <a class="button secondary" href="/api/admin/client-config?user_id=${encodeURIComponent(u.id)}">Config</a>
+            <button class="danger" data-delete-user="${u.id}">Delete</button>
+          </td>
         </tr>
       `).join("");
       body.querySelectorAll("[data-save-user]").forEach(button => {
@@ -790,6 +799,24 @@ ADMIN_HTML = r"""<!doctype html>
           const visible = input.type === "text";
           input.type = visible ? "password" : "text";
           button.textContent = visible ? "Show" : "Hide";
+        });
+      });
+      body.querySelectorAll("[data-delete-user]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const userId = button.dataset.deleteUser;
+          const revoke = confirm(`Delete ${userId} and revoke its Cudy VPN peer? Press Cancel to delete only locally.`);
+          if (!revoke && !confirm(`Delete ${userId} only from local control panel?`)) return;
+          const status = document.getElementById("userStatus");
+          status.className = "status";
+          try {
+            const result = await api(`/api/admin/users?id=${encodeURIComponent(userId)}&revoke_cudy=${revoke ? "1" : "0"}`, { method: "DELETE" });
+            status.textContent = `Deleted ${result.deleted_user_id}.`;
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
         });
       });
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
@@ -894,7 +921,7 @@ ADMIN_HTML = r"""<!doctype html>
       const status = document.getElementById("userStatus");
       status.className = "status";
       try {
-        await api("/api/admin/users", {
+        const result = await api("/api/admin/users", {
           method: "POST",
           body: JSON.stringify({
             id: document.getElementById("newUserId").value,
@@ -903,11 +930,14 @@ ADMIN_HTML = r"""<!doctype html>
             client_ip: document.getElementById("newUserClientIp").value,
             default_server_id: "auto",
             enabled: true,
+            create_cudy_client: document.getElementById("newUserCreateCudy").checked,
             password: document.getElementById("newUserPassword").value
           })
         });
         event.target.reset();
-        status.textContent = "User created.";
+        status.innerHTML = result.config_download_url
+          ? `User created. <a href="${result.config_download_url}">Download .conf</a>`
+          : "User created.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -1785,6 +1815,143 @@ def delete_auto_cache_entry(db_path: Path, inventory_path: Path, domain: str) ->
     return {"ok": True, "domain": domain}
 
 
+def validate_client_name(name: str) -> str:
+    value = name.strip()
+    if not SAFE_CLIENT_NAME_RE.fullmatch(value):
+        raise ValueError("client name must be 2-64 chars: A-Z a-z 0-9 _ . -")
+    return value
+
+
+def cudy_client_config_path(client_name: str) -> Path:
+    name = validate_client_name(client_name)
+    filename = f"{name}.conf" if name.endswith("-awg") else f"{name}-awg.conf"
+    return CUDY_CLIENT_OUTPUT_DIR / filename
+
+
+def cudy_client_config_candidates(client_name: str) -> list[Path]:
+    name = validate_client_name(client_name)
+    return [
+        CUDY_CLIENT_OUTPUT_DIR / f"{name}-awg.conf",
+        CUDY_CLIENT_OUTPUT_DIR / f"{name}.conf",
+    ]
+
+
+def find_cudy_client_config(client_name: str) -> Path | None:
+    for path in cudy_client_config_candidates(client_name):
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def parse_config_address(conf: str) -> str | None:
+    match = re.search(r"^Address\s*=\s*([^\s,]+)", conf, re.MULTILINE)
+    if not match:
+        return None
+    return normalize_client_ip(match.group(1))
+
+
+def create_cudy_vpn_client(
+    *,
+    client_name: str,
+    endpoint: str = DEFAULT_CUDY_FRIEND_ENDPOINT,
+    force: bool = False,
+) -> dict[str, Any]:
+    name = validate_client_name(client_name)
+    if not re.fullmatch(r"[^:\s]+:\d{1,5}", endpoint):
+        raise ValueError("endpoint must look like host:port")
+    output_path = cudy_client_config_path(name)
+    if output_path.exists() and not force:
+        raise ValueError(f"client config already exists: {output_path}")
+    password = load_cudy_ssh_password()
+    if not password:
+        raise ValueError(
+            "Cudy SSH password is not configured. Set CUDY_SSH_PASSWORD or create secrets/cudy_ssh_password.txt"
+        )
+    client = ssh_connect(DEFAULT_CUDY_HOST, DEFAULT_CUDY_USER, password, 60)
+    try:
+        add_output = ssh_exec_checked(
+            client,
+            f"/usr/bin/friendctl add {shlex.quote(name)} {shlex.quote(endpoint)}",
+            180,
+        )
+        conf = ssh_exec_checked(client, f"/usr/bin/friendctl conf {shlex.quote(name)}", 60)
+    finally:
+        client.close()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(conf, encoding="ascii", newline="\n")
+    return {
+        "client_name": name,
+        "client_ip": parse_config_address(conf),
+        "config_path": str(output_path),
+        "config_download_url": f"/api/admin/client-config?user_id={name}",
+        "output": add_output.strip(),
+    }
+
+
+def revoke_cudy_vpn_client(client_name: str) -> dict[str, Any]:
+    name = validate_client_name(client_name)
+    password = load_cudy_ssh_password()
+    if not password:
+        raise ValueError(
+            "Cudy SSH password is not configured. Set CUDY_SSH_PASSWORD or create secrets/cudy_ssh_password.txt"
+        )
+    output = ""
+    warning = None
+    client = ssh_connect(DEFAULT_CUDY_HOST, DEFAULT_CUDY_USER, password, 60)
+    try:
+        try:
+            output = ssh_exec_checked(client, f"/usr/bin/friendctl revoke {shlex.quote(name)}", 120).strip()
+        except RuntimeError as exc:
+            if "No such peer" in str(exc):
+                warning = f"Cudy peer not found: {name}"
+            else:
+                raise
+    finally:
+        client.close()
+    removed_files: list[str] = []
+    for path in cudy_client_config_candidates(name):
+        if path.exists() and path.is_file():
+            path.unlink()
+            removed_files.append(str(path))
+    return {"client_name": name, "output": output, "warning": warning, "removed_files": removed_files}
+
+
+def delete_admin_user(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    revoke_cudy: bool,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    user_id = user_id.strip()
+    if not user_id:
+        raise ValueError("user id is required")
+    revoke_result = None
+    with connect(db_path) as conn:
+        user = row(conn, "SELECT id, role FROM users WHERE id = ?", (user_id,))
+        if not user:
+            raise ValueError(f"Unknown user: {user_id}")
+        if user["role"] == "admin":
+            admin_count = conn.execute("SELECT count(*) FROM users WHERE role = 'admin' AND enabled = 1").fetchone()[0]
+            if admin_count <= 1:
+                raise ValueError("Cannot delete the last enabled admin")
+    if revoke_cudy:
+        revoke_result = revoke_cudy_vpn_client(user_id)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM auto_candidate_policies WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    if not revoke_cudy:
+        removed_files = []
+        for path in cudy_client_config_candidates(user_id):
+            if path.exists() and path.is_file():
+                path.unlink()
+                removed_files.append(str(path))
+        revoke_result = {"removed_files": removed_files}
+    return {"ok": True, "deleted_user_id": user_id, "revoke_cudy": bool(revoke_cudy), "revoke": revoke_result}
+
+
 def build_route_plan(db_path: Path) -> dict[str, Any]:
     with connect(db_path) as conn:
         servers = server_map(conn)
@@ -2637,6 +2804,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def send_file(self, path: Path, *, download_name: str) -> None:
+        payload = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", "text/plain; charset=utf-8")
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-disposition", f'attachment; filename="{download_name}"')
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def send_json(
         self,
         data: Any,
@@ -2754,6 +2931,15 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/deploy-preview":
                 self.require_admin()
                 self.send_json(build_combined_deploy_preview(self.app.db_path, self.app.inventory_path))
+            elif parsed.path == "/api/admin/client-config":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                user_id = query.get("user_id", [""])[0]
+                config_path = find_cudy_client_config(user_id)
+                if not config_path:
+                    self.send_error_json("Client config not found", HTTPStatus.NOT_FOUND)
+                    return
+                self.send_file(config_path, download_name=config_path.name)
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
             else:
@@ -2836,6 +3022,17 @@ class Handler(BaseHTTPRequestHandler):
                 with self.app.conn() as conn:
                     conn.execute("DELETE FROM global_domain_routes WHERE domain = ?", (domain,))
                 self.send_json({"ok": True})
+            elif parsed.path == "/api/admin/users":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    delete_admin_user(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=query.get("id", [""])[0],
+                        revoke_cudy=query.get("revoke_cudy", ["0"])[0] in {"1", "true", "yes"},
+                    )
+                )
             elif parsed.path == "/api/admin/auto-cache":
                 self.require_admin()
                 query = parse_qs(parsed.query)
@@ -2980,9 +3177,10 @@ class Handler(BaseHTTPRequestHandler):
         default_server_id = str(data.get("default_server_id") or "auto")
         client_ip = normalize_client_ip(str(data.get("client_ip") or ""))
         enabled = int(bool(data.get("enabled")))
-        password = data.get("password")
+        create_cudy_client = bool(data.get("create_cudy_client"))
+        password_raw = data.get("password")
+        password = None if password_raw in (None, "") else str(password_raw)
         if password is not None:
-            password = str(password)
             if len(password) < 8:
                 raise ValueError("Password must be at least 8 characters")
         if role not in {"admin", "user"}:
@@ -2991,14 +3189,25 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError("user id must be 2-64 chars: A-Z a-z 0-9 _ . -")
         if not display_name:
             raise ValueError("display name is required")
+        if create_cudy_client and role != "user":
+            raise ValueError("Cudy VPN client creation is only supported for role=user")
         timestamp = now()
+        cudy_client: dict[str, Any] | None = None
         with self.app.conn() as conn:
             validate_server_id(conn, default_server_id, require_user_visible=True)
             existing = row(conn, "SELECT id FROM users WHERE id = ?", (user_id,))
-            if existing is None:
-                if not password:
-                    raise ValueError("Password is required for a new user")
-                salt, password_hash = hash_password(password)
+        if existing is None and create_cudy_client:
+            cudy_client = create_cudy_vpn_client(client_name=user_id)
+            if cudy_client.get("client_ip"):
+                client_ip = normalize_client_ip(str(cudy_client["client_ip"]))
+        if existing is None:
+            if not password and not client_ip:
+                raise ValueError("Password or client_ip is required for a new user")
+            with self.app.conn() as conn:
+                if password:
+                    salt, password_hash = hash_password(password)
+                else:
+                    salt, password_hash = None, None
                 conn.execute(
                     """
                     INSERT INTO users (
@@ -3019,7 +3228,10 @@ class Handler(BaseHTTPRequestHandler):
                         timestamp,
                     ),
                 )
-            else:
+        else:
+            if create_cudy_client:
+                raise ValueError("Cudy VPN client creation is only supported for new users")
+            with self.app.conn() as conn:
                 conn.execute(
                     """
                     UPDATE users
@@ -3038,7 +3250,11 @@ class Handler(BaseHTTPRequestHandler):
                         """,
                         (salt, password_hash, timestamp, user_id),
                     )
-        return {"ok": True}
+        result = {"ok": True}
+        if cudy_client:
+            result["cudy_client"] = cudy_client
+            result["config_download_url"] = cudy_client["config_download_url"]
+        return result
 
     def api_admin_set_password(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = str(data.get("id") or "").strip()

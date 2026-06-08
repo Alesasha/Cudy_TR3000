@@ -86,6 +86,8 @@ http://127.0.0.1:8765/admin
   - enable/disable servers;
   - control user visibility;
   - create users;
+  - create Cudy AmneziaWG clients and download generated `.conf` profiles;
+  - delete users and optionally revoke their Cudy peer;
   - edit user names, roles, VPN client IPs, status, and default server;
   - reset user passwords;
   - show or hide newly entered password values before saving;
