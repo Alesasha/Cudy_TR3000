@@ -61,4 +61,15 @@ User-specific routes are deployed through a separate nft table, `inet cudy_user_
 
 Provider endpoint refresh stays on Cudy during this stage. LokVPN and VPNtype keep using their existing router-side scripts and cron jobs, while the local project inventories them and can trigger them over SSH through `tools/vpn_inventory.py refresh-provider --apply`.
 
-Stage 4 starts by making `Auto` resolvable through `domain_auto_cache`: a route can keep `server_id = auto`, while export/deploy expands it to the cached concrete server for that domain. The first implementation allows an administrator to edit this cache manually from the UI or CLI. The remaining work is to benchmark exits per domain, keep roughly 300 active domains, and refresh cached leaders in the background.
+Stage 4 starts by making `Auto` resolvable through `domain_auto_cache`: a route can keep `server_id = auto`, while export/deploy expands it to the cached concrete server for that domain. The first implementation allows an administrator to edit this cache manually from the UI or CLI.
+
+`Auto` is not currently a wildcard for every domain with no rule. The deploy model only emits rules for known global or per-user domains. Unknown domains follow the normal Cudy/PBR routing path until they are added to a route, cache, or future domain-discovery flow.
+
+Auto candidate server policies define which servers a benchmark should try and in what priority order. Resolution order is:
+
+1. user + domain;
+2. global + domain;
+3. user default;
+4. global default.
+
+The remaining work is to benchmark exits per domain, keep roughly 300 active domains, refresh cached leaders in the background, and optionally discover new domains from DNS/PBR logs before creating `Auto` routes.

@@ -125,6 +125,17 @@ CREATE TABLE IF NOT EXISTS domain_auto_cache (
   FOREIGN KEY(selected_server_id) REFERENCES servers(id)
 );
 
+CREATE TABLE IF NOT EXISTS auto_candidate_policies (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL DEFAULT '',
+  domain TEXT NOT NULL DEFAULT '',
+  candidate_server_ids TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(user_id, domain)
+);
+
 CREATE TABLE IF NOT EXISTS sessions (
   token TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
@@ -618,6 +629,20 @@ ADMIN_HTML = r"""<!doctype html>
       </table>
     </section>
     <section>
+      <h2>Auto Candidate Lists</h2>
+      <form id="autoCandidateForm" class="toolbar">
+        <div class="field"><label>User</label><select id="autoCandidateUser"></select></div>
+        <div class="field"><label>Domain</label><input id="autoCandidateDomain" type="text" placeholder="blank = all domains" autocomplete="off"></div>
+        <div class="field"><label>Servers</label><input id="autoCandidateServers" type="text" placeholder="proxyde, proxyus, uswest" autocomplete="off"></div>
+        <button type="submit">Save List</button>
+      </form>
+      <p id="autoCandidateStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Scope</th><th>User</th><th>Domain</th><th>Servers</th><th>Enabled</th><th></th></tr></thead>
+        <tbody id="autoCandidatesBody"></tbody>
+      </table>
+    </section>
+    <section>
       <h2>Deploy Preview</h2>
       <div class="toolbar">
         <button id="refreshPlan" type="button">Refresh Route Plan</button>
@@ -631,7 +656,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [] };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [] };
     async function api(path, options) {
       const response = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -652,6 +677,9 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function userOptions(value) {
       return state.users.map(u => `<option value="${u.id}" ${u.id === value ? "selected" : ""}>${u.id}</option>`).join("");
+    }
+    function autoCandidateUserOptions(value) {
+      return `<option value="" ${!value ? "selected" : ""}>Global</option>` + userOptions(value);
     }
     function renderServers() {
       const body = document.getElementById("serversBody");
@@ -821,6 +849,26 @@ ADMIN_HTML = r"""<!doctype html>
         });
       });
     }
+    function renderAutoCandidates() {
+      const body = document.getElementById("autoCandidatesBody");
+      body.innerHTML = state.autoCandidates.length ? state.autoCandidates.map(r => `
+        <tr>
+          <td>${r.scope}</td>
+          <td>${r.user_id || "Global"}</td>
+          <td>${r.domain || "All"}</td>
+          <td>${(r.candidate_server_ids || []).join(", ")}</td>
+          <td>${r.enabled ? "yes" : "no"}</td>
+          <td><button class="danger" data-delete-auto-candidate="${r.user_id || ""}|${r.domain || ""}">Delete</button></td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No Auto candidate lists.</td></tr>';
+      body.querySelectorAll("[data-delete-auto-candidate]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const [userId, domain] = button.dataset.deleteAutoCandidate.split("|");
+          await api(`/api/admin/auto-candidates?user_id=${encodeURIComponent(userId)}&domain=${encodeURIComponent(domain)}`, { method: "DELETE" });
+          await load();
+        });
+      });
+    }
     async function load() {
       const data = await api("/api/admin");
       state.servers = data.servers;
@@ -828,14 +876,17 @@ ADMIN_HTML = r"""<!doctype html>
       state.routes = data.routes;
       state.globalRoutes = data.global_routes || [];
       state.autoCache = data.auto_cache || [];
+      state.autoCandidates = data.auto_candidates || [];
       renderServers();
       renderUsers();
       renderGlobalRoutes();
       renderRoutes();
       renderAutoCache();
+      renderAutoCandidates();
       document.getElementById("adminRouteServer").innerHTML = serverOptions(document.getElementById("adminRouteServer").value || "auto");
       document.getElementById("globalRouteServer").innerHTML = serverOptions(document.getElementById("globalRouteServer").value || "auto");
       document.getElementById("autoCacheServer").innerHTML = physicalServerOptions(document.getElementById("autoCacheServer").value);
+      document.getElementById("autoCandidateUser").innerHTML = autoCandidateUserOptions(document.getElementById("autoCandidateUser").value);
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
     }
     document.getElementById("newUserForm").addEventListener("submit", async event => {
@@ -933,6 +984,29 @@ ADMIN_HTML = r"""<!doctype html>
         document.getElementById("autoCacheDomain").value = "";
         document.getElementById("autoCacheScore").value = "";
         status.textContent = "Auto cache saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("autoCandidateForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("autoCandidateStatus");
+      status.className = "status";
+      try {
+        await api("/api/admin/auto-candidates", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: document.getElementById("autoCandidateUser").value,
+            domain: document.getElementById("autoCandidateDomain").value,
+            candidate_server_ids: document.getElementById("autoCandidateServers").value
+          })
+        });
+        document.getElementById("autoCandidateDomain").value = "";
+        document.getElementById("autoCandidateServers").value = "";
+        status.textContent = "Auto candidate list saved.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -1057,6 +1131,20 @@ def migrate_db(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL,
           expires_at INTEGER NOT NULL,
           FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auto_candidate_policies (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL DEFAULT '',
+          domain TEXT NOT NULL DEFAULT '',
+          candidate_server_ids TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(user_id, domain)
         )
         """
     )
@@ -1455,12 +1543,167 @@ def auto_cache_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
     }
 
 
+def parse_candidate_server_ids(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [item.strip() for item in re.split(r"[\s,;]+", value) if item.strip()]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise ValueError("candidate_server_ids must be a list or a comma-separated string")
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item == "auto":
+            raise ValueError("Auto candidate list must contain real servers, not auto")
+        if item not in seen:
+            result.append(item)
+            seen.add(item)
+    if not result:
+        raise ValueError("candidate list cannot be empty")
+    return result
+
+
+def auto_candidate_policy_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    entries = rows(
+        conn,
+        """
+        SELECT id, user_id, domain, candidate_server_ids, enabled, updated_at
+        FROM auto_candidate_policies
+        ORDER BY user_id, domain
+        """,
+    )
+    for entry in entries:
+        try:
+            entry["candidate_server_ids"] = json.loads(entry["candidate_server_ids"])
+        except json.JSONDecodeError:
+            entry["candidate_server_ids"] = []
+        entry["scope"] = auto_policy_scope(entry.get("user_id") or "", entry.get("domain") or "")
+    return entries
+
+
+def auto_policy_scope(user_id: str, domain: str) -> str:
+    if user_id and domain:
+        return "user_domain"
+    if user_id:
+        return "user_default"
+    if domain:
+        return "global_domain"
+    return "global_default"
+
+
+def resolve_auto_candidate_policy(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    domain: str,
+) -> dict[str, Any] | None:
+    candidates = [
+        (user_id, domain),
+        ("", domain),
+        (user_id, ""),
+        ("", ""),
+    ]
+    for candidate_user_id, candidate_domain in candidates:
+        item = row(
+            conn,
+            """
+            SELECT id, user_id, domain, candidate_server_ids, enabled, updated_at
+            FROM auto_candidate_policies
+            WHERE user_id = ? AND domain = ? AND enabled = 1
+            """,
+            (candidate_user_id, candidate_domain),
+        )
+        if not item:
+            continue
+        try:
+            server_ids = json.loads(item["candidate_server_ids"])
+        except json.JSONDecodeError:
+            server_ids = []
+        item["candidate_server_ids"] = server_ids
+        item["scope"] = auto_policy_scope(item.get("user_id") or "", item.get("domain") or "")
+        return item
+    return None
+
+
+def save_auto_candidate_policy(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str | None,
+    domain: str | None,
+    candidate_server_ids: Any,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = (user_id or "").strip()
+    normalized_domain = normalize_domain(domain) if domain else ""
+    candidates = parse_candidate_server_ids(candidate_server_ids)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if normalized_user_id and row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        for server_id in candidates:
+            validate_server_id(conn, server_id, require_user_visible=True)
+        conn.execute(
+            """
+            INSERT INTO auto_candidate_policies (
+              user_id, domain, candidate_server_ids, enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, domain)
+            DO UPDATE SET candidate_server_ids = excluded.candidate_server_ids,
+                          enabled = excluded.enabled,
+                          updated_at = excluded.updated_at
+            """,
+            (
+                normalized_user_id,
+                normalized_domain,
+                json.dumps(candidates, ensure_ascii=False),
+                int(bool(enabled)),
+                timestamp,
+                timestamp,
+            ),
+        )
+    return {
+        "ok": True,
+        "user_id": normalized_user_id,
+        "domain": normalized_domain,
+        "scope": auto_policy_scope(normalized_user_id, normalized_domain),
+        "candidate_server_ids": candidates,
+        "enabled": bool(enabled),
+        "updated_at": timestamp,
+    }
+
+
+def delete_auto_candidate_policy(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str | None,
+    domain: str | None,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = (user_id or "").strip()
+    normalized_domain = normalize_domain(domain) if domain else ""
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM auto_candidate_policies WHERE user_id = ? AND domain = ?",
+            (normalized_user_id, normalized_domain),
+        )
+    return {
+        "ok": True,
+        "user_id": normalized_user_id,
+        "domain": normalized_domain,
+        "scope": auto_policy_scope(normalized_user_id, normalized_domain),
+    }
+
+
 def resolve_route_server(
     *,
     domain: str,
     requested_server_id: str,
     servers: dict[str, dict[str, Any]],
     auto_cache: dict[str, dict[str, Any]],
+    auto_policy: dict[str, Any] | None,
     context: str,
     warnings: list[str],
 ) -> tuple[str | None, dict[str, Any] | None]:
@@ -1469,7 +1712,14 @@ def resolve_route_server(
 
     cached = auto_cache.get(domain)
     if not cached or not cached.get("selected_server_id"):
-        warnings.append(f"{context}: Auto has no cached selected server for {domain}")
+        if auto_policy:
+            candidates = ", ".join(auto_policy.get("candidate_server_ids") or [])
+            warnings.append(
+                f"{context}: Auto has no cached selected server for {domain}; "
+                f"candidate policy {auto_policy['scope']}=[{candidates}]"
+            )
+        else:
+            warnings.append(f"{context}: Auto has no cached selected server for {domain}; no candidate policy")
         return None, cached
 
     selected_server_id = str(cached["selected_server_id"])
@@ -1596,11 +1846,17 @@ def build_route_plan(db_path: Path) -> dict[str, Any]:
             for route in sorted(effective.values(), key=lambda item: item["domain"]):
                 requested_server_id = route["server_id"]
                 route_warnings: list[str] = []
+                auto_policy = (
+                    resolve_auto_candidate_policy(conn, user_id=user["id"], domain=route["domain"])
+                    if requested_server_id == "auto"
+                    else None
+                )
                 resolved_server_id, cached = resolve_route_server(
                     domain=route["domain"],
                     requested_server_id=requested_server_id,
                     servers=servers,
                     auto_cache=cached_auto,
+                    auto_policy=auto_policy,
                     context=f"{user['id']}/{route['domain']}",
                     warnings=route_warnings,
                 )
@@ -1616,6 +1872,7 @@ def build_route_plan(db_path: Path) -> dict[str, Any]:
                         "server_id": server_id,
                         "resolved_server_id": resolved_server_id,
                         "auto_cache": cached,
+                        "auto_candidate_policy": auto_policy,
                         "server": compact_server(server),
                     }
                 )
@@ -1836,11 +2093,16 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
     for route in global_routes:
         domain = route["domain"]
         requested_server_id = route["server_id"]
+        auto_policy = None
+        if requested_server_id == "auto":
+            with connect(db_path) as conn:
+                auto_policy = resolve_auto_candidate_policy(conn, user_id="", domain=domain)
         resolved_server_id, cached = resolve_route_server(
             domain=domain,
             requested_server_id=requested_server_id,
             servers=servers,
             auto_cache=cached_auto,
+            auto_policy=auto_policy,
             context=domain,
             warnings=warnings,
         )
@@ -1873,6 +2135,7 @@ def export_pbr_overrides(db_path: Path, inventory_path: Path, output_dir: Path) 
                 "interface": iface,
                 "auto_status": cached.get("status") if cached else None,
                 "auto_score_ms": cached.get("score_ms") if cached else None,
+                "auto_candidate_policy": auto_policy,
             }
         )
 
@@ -1938,11 +2201,16 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
             warnings.append(f"{user_id}/{domain}: missing client_ip; skipped")
             continue
         requested_server_id = server_id
+        auto_policy = None
+        if requested_server_id == "auto":
+            with connect(db_path) as conn:
+                auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
         resolved_server_id, cached = resolve_route_server(
             domain=domain,
             requested_server_id=requested_server_id,
             servers=servers,
             auto_cache=cached_auto,
+            auto_policy=auto_policy,
             context=f"{user_id}/{domain}",
             warnings=warnings,
         )
@@ -1982,6 +2250,7 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
                 "interface": iface,
                 "auto_status": cached.get("status") if cached else None,
                 "auto_score_ms": cached.get("score_ms") if cached else None,
+                "auto_candidate_policy": auto_policy,
             }
         )
 
@@ -2529,6 +2798,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/auto-cache":
                 self.require_admin()
                 self.send_json(self.api_admin_save_auto_cache(data))
+            elif parsed.path == "/api/admin/auto-candidates":
+                self.require_admin()
+                self.send_json(self.api_admin_save_auto_candidates(data))
             elif parsed.path == "/api/admin/deploy-routes":
                 self.require_admin()
                 self.send_json(self.api_admin_deploy_routes(data))
@@ -2569,6 +2841,17 @@ class Handler(BaseHTTPRequestHandler):
                 query = parse_qs(parsed.query)
                 domain = query.get("domain", [""])[0]
                 self.send_json(delete_auto_cache_entry(self.app.db_path, self.app.inventory_path, domain))
+            elif parsed.path == "/api/admin/auto-candidates":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    delete_auto_candidate_policy(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=query.get("user_id", [""])[0],
+                        domain=query.get("domain", [""])[0],
+                    )
+                )
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -2673,6 +2956,7 @@ class Handler(BaseHTTPRequestHandler):
                     conn,
                     "SELECT domain, selected_server_id, score_ms, status, checked_at FROM domain_auto_cache ORDER BY domain",
                 ),
+                "auto_candidates": auto_candidate_policy_rows(conn),
             }
 
     def api_set_default_server(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -2833,6 +3117,16 @@ class Handler(BaseHTTPRequestHandler):
             status=str(data.get("status") or "manual"),
         )
 
+    def api_admin_save_auto_candidates(self, data: dict[str, Any]) -> dict[str, Any]:
+        return save_auto_candidate_policy(
+            self.app.db_path,
+            self.app.inventory_path,
+            user_id=str(data.get("user_id") or ""),
+            domain=str(data.get("domain") or ""),
+            candidate_server_ids=data.get("candidate_server_ids") or "",
+            enabled=bool(data.get("enabled", True)),
+        )
+
     def api_admin_deploy_routes(self, data: dict[str, Any]) -> dict[str, Any]:
         password = load_cudy_ssh_password()
         if not password:
@@ -2914,11 +3208,13 @@ def print_db_summary(db_path: Path) -> None:
         login_user_count = conn.execute("SELECT count(*) FROM users WHERE password_hash IS NOT NULL").fetchone()[0]
         route_count = conn.execute("SELECT count(*) FROM user_domain_routes").fetchone()[0]
         auto_cache_count = conn.execute("SELECT count(*) FROM domain_auto_cache").fetchone()[0]
+        auto_candidate_count = conn.execute("SELECT count(*) FROM auto_candidate_policies").fetchone()[0]
     print(f"DB: {db_path}")
     print(f"Servers: {server_count} total, {user_server_count} user-visible")
     print(f"Users: {user_count} total, {login_user_count} with login")
     print(f"Domain routes: {route_count}")
     print(f"Auto cache: {auto_cache_count}")
+    print(f"Auto candidate lists: {auto_candidate_count}")
 
 
 def read_password_arg(value: str | None, *, confirm: bool) -> str:
@@ -2974,6 +3270,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     auto_cache_delete_parser = sub.add_parser("auto-cache-delete", help="Delete cached Auto choice for one domain.")
     auto_cache_delete_parser.add_argument("domain")
+
+    auto_candidates_list_parser = sub.add_parser("auto-candidates-list", help="List Auto candidate server policies.")
+    auto_candidates_list_parser.add_argument("--json", action="store_true", help="Print JSON policies.")
+
+    auto_candidates_set_parser = sub.add_parser("auto-candidates-set", help="Set Auto candidate server list.")
+    auto_candidates_set_parser.add_argument("candidate_server_ids", help="Comma/space-separated server ids in priority order.")
+    auto_candidates_set_parser.add_argument("--user-id", default="", help="Blank means global policy.")
+    auto_candidates_set_parser.add_argument("--domain", default="", help="Blank means default policy for all domains.")
+    auto_candidates_set_parser.add_argument("--disabled", action="store_true")
+
+    auto_candidates_delete_parser = sub.add_parser("auto-candidates-delete", help="Delete Auto candidate server list.")
+    auto_candidates_delete_parser.add_argument("--user-id", default="", help="Blank means global policy.")
+    auto_candidates_delete_parser.add_argument("--domain", default="", help="Blank means default policy for all domains.")
 
     export_parser = sub.add_parser(
         "export-pbr-overrides",
@@ -3155,6 +3464,46 @@ def main() -> int:
     if args.command == "auto-cache-delete":
         item = delete_auto_cache_entry(args.db, args.inventory, args.domain)
         print(f"Auto cache deleted: {item['domain']}")
+        return 0
+    if args.command == "auto-candidates-list":
+        init_db(args.db, args.inventory)
+        with connect(args.db) as conn:
+            entries = auto_candidate_policy_rows(conn)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("Auto candidate policies are empty.")
+            for item in entries:
+                print(
+                    f"{item['scope']}\tuser={item['user_id'] or '-'}\t"
+                    f"domain={item['domain'] or '*'}\t"
+                    f"servers={','.join(item['candidate_server_ids'])}\t"
+                    f"enabled={bool(item['enabled'])}"
+                )
+        return 0
+    if args.command == "auto-candidates-set":
+        item = save_auto_candidate_policy(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            domain=args.domain,
+            candidate_server_ids=args.candidate_server_ids,
+            enabled=not args.disabled,
+        )
+        print(
+            f"Auto candidates saved: {item['scope']} user={item['user_id'] or '-'} "
+            f"domain={item['domain'] or '*'} servers={','.join(item['candidate_server_ids'])}"
+        )
+        return 0
+    if args.command == "auto-candidates-delete":
+        item = delete_auto_candidate_policy(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            domain=args.domain,
+        )
+        print(f"Auto candidates deleted: {item['scope']} user={item['user_id'] or '-'} domain={item['domain'] or '*'}")
         return 0
     if args.command == "export-pbr-overrides":
         manifest = export_pbr_overrides(args.db, args.inventory, args.output_dir)

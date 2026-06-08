@@ -96,6 +96,10 @@ http://127.0.0.1:8765/admin
   - stores `domain -> selected server` decisions in `domain_auto_cache`;
   - lets `Auto` routes resolve to a real interface during route plan/export;
   - can be edited from the admin UI or the `auto-cache-*` CLI commands.
+- Auto candidate lists:
+  - store ordered server candidates for future benchmarking;
+  - support global default, global per-domain, user default, and user per-domain scopes;
+  - resolve in this order: user+domain, global+domain, user default, global default.
 - Deploy preview:
   - combines global admin routes and per-user routes;
   - per-user route wins when the same domain exists in both layers;
@@ -121,6 +125,7 @@ http://127.0.0.1:8765/admin
 
 - automatic best-server benchmarking;
 - background refresh of cached `Auto` choices;
+- domain discovery for applying `Auto` to domains that do not yet have explicit rules;
 - multi-user invitation or remote sync.
 
 Those should be implemented after the local data model stabilizes.

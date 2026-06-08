@@ -206,6 +206,20 @@ python tools\vpn_control_app.py auto-cache-delete example.com
 
 When a global or per-user route points to `auto`, export/deploy resolves it through `domain_auto_cache`. If there is no cached selected server for that domain, the route is skipped and the deploy preview shows a warning.
 
+Manage ordered server candidate lists for future Auto benchmarks:
+
+```powershell
+python tools\vpn_control_app.py auto-candidates-list
+python tools\vpn_control_app.py auto-candidates-set "proxyde, proxyus, uswest"
+python tools\vpn_control_app.py auto-candidates-set "proxygb, proxyde" --domain example.com
+python tools\vpn_control_app.py auto-candidates-set "proxynl, proxyde" --user-id test-client-awg --domain example.com
+python tools\vpn_control_app.py auto-candidates-delete --domain example.com
+```
+
+Blank `--user-id` means a global policy. Blank `--domain` means the default policy for all domains. Candidate policy resolution order is user+domain, global+domain, user default, global default.
+
+`Auto` is not currently applied to every unknown domain automatically. The current deploy model only emits rules for domains present in global or per-user route tables; unknown domains keep following normal Cudy/PBR routing until a discovery or benchmark flow adds them.
+
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.
