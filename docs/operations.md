@@ -208,6 +208,25 @@ The user row `Delete` button can revoke the Cudy peer and delete the local user.
 
 The admin `Deploy Preview` block can refresh the effective route plan, refresh the combined deploy dry-run plan, and apply the current plan to Cudy.
 
+## Autostart
+
+Cudy/OpenWrt services should come back after a Cudy reboot when their init scripts are enabled. On the current router, these services are enabled:
+
+- `network`;
+- `pbr`;
+- `sing-box`;
+- `firewall`;
+- `cron`.
+
+The inbound Cudy AmneziaWG server is the UCI interface `network.awg_in`, so OpenWrt `network` brings it up. Provider refresh is cron-driven:
+
+```text
+*/15 * * * * /usr/bin/vpntype-proxy-refresh-all
+*/30 * * * * /usr/bin/lokvpn-refresh-current
+```
+
+The local control panel is different: `vpn_control_app.py serve` runs on this Windows machine. It does not automatically start after a Windows reboot unless a Windows Scheduled Task or service wrapper starts it.
+
 Manage cached `Auto` choices:
 
 ```powershell
