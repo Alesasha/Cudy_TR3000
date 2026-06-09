@@ -584,6 +584,7 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
         </div>
         <button type="submit">Create</button>
+        <button id="syncCudyClients" class="secondary" type="button">Sync Cudy</button>
       </form>
       <p id="userStatus" class="status"></p>
       <table>
@@ -939,6 +940,20 @@ ADMIN_HTML = r"""<!doctype html>
           ? `User created. <a href="${result.config_download_url}">Download .conf</a>`
           : "User created.";
         status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("syncCudyClients").addEventListener("click", async () => {
+      const status = document.getElementById("userStatus");
+      status.className = "status";
+      status.textContent = "Syncing Cudy clients...";
+      try {
+        const result = await api("/api/admin/sync-cudy-clients", { method: "POST", body: "{}" });
+        status.textContent = `Synced Cudy clients: ${result.synced.length}, warnings: ${result.warnings.length}`;
+        status.className = result.warnings.length ? "status error" : "status ok";
         await load();
       } catch (error) {
         status.textContent = error.message;
@@ -1848,6 +1863,83 @@ def parse_config_address(conf: str) -> str | None:
     if not match:
         return None
     return normalize_client_ip(match.group(1))
+
+
+def parse_cudy_friend_list(output: str) -> list[dict[str, str]]:
+    friends: list[dict[str, str]] = []
+    for index, line in enumerate(output.splitlines()):
+        if index == 0 or not line.strip():
+            continue
+        parts = line.split()
+        if len(parts) < 7:
+            continue
+        friends.append(
+            {
+                "name": parts[0],
+                "ip": parts[1],
+                "enabled": parts[2],
+                "endpoint": parts[3],
+                "handshake": parts[4],
+                "from_peer_bytes": parts[5],
+                "to_peer_bytes": parts[6],
+            }
+        )
+    return friends
+
+
+def sync_cudy_clients_from_router(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    fetch_configs: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    password = load_cudy_ssh_password()
+    if not password:
+        raise ValueError(
+            "Cudy SSH password is not configured. Set CUDY_SSH_PASSWORD or create secrets/cudy_ssh_password.txt"
+        )
+    client = ssh_connect(DEFAULT_CUDY_HOST, DEFAULT_CUDY_USER, password, 60)
+    synced: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    try:
+        friends = parse_cudy_friend_list(ssh_exec_checked(client, "/usr/bin/friendctl list", 60))
+        for friend in friends:
+            name = validate_client_name(friend["name"])
+            client_ip = normalize_client_ip(friend["ip"])
+            enabled = friend["enabled"].lower() == "yes"
+            config_path = None
+            if fetch_configs:
+                try:
+                    conf = ssh_exec_checked(client, f"/usr/bin/friendctl conf {shlex.quote(name)}", 60)
+                    path = cudy_client_config_path(name)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(conf, encoding="ascii", newline="\n")
+                    config_path = str(path)
+                except RuntimeError as exc:
+                    warnings.append(f"{name}: could not fetch config: {exc}")
+            create_or_update_user(
+                db_path,
+                inventory_path,
+                user_id=name,
+                display_name=name,
+                role="user",
+                password=None,
+                client_ip=client_ip,
+                enabled=enabled,
+                allow_no_password=True,
+            )
+            synced.append(
+                {
+                    **friend,
+                    "user_id": name,
+                    "client_ip": client_ip,
+                    "config_path": config_path,
+                }
+            )
+    finally:
+        client.close()
+    return {"ok": True, "synced": synced, "warnings": warnings}
 
 
 def create_cudy_vpn_client(
@@ -2990,6 +3082,9 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/deploy-routes":
                 self.require_admin()
                 self.send_json(self.api_admin_deploy_routes(data))
+            elif parsed.path == "/api/admin/sync-cudy-clients":
+                self.require_admin()
+                self.send_json(sync_cudy_clients_from_router(self.app.db_path, self.app.inventory_path))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -3472,6 +3567,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory with cudy-home client .conf files.",
     )
 
+    sync_parser = sub.add_parser("sync-cudy-clients", help="Sync live Cudy friendctl clients into users.")
+    sync_parser.add_argument("--no-fetch-configs", action="store_true", help="Do not download client .conf files from Cudy.")
+    sync_parser.add_argument("--json", action="store_true", help="Print JSON sync result.")
+
     route_plan_parser = sub.add_parser("route-plan", help="Print effective per-user route plan.")
     route_plan_parser.add_argument("--json", action="store_true", help="Print full JSON plan.")
 
@@ -3615,6 +3714,21 @@ def main() -> int:
         for item in imported:
             print(f"{item['id']}\t{item['client_ip']}\t{item['source']}")
         print(f"Imported/updated users: {len(imported)}")
+        return 0
+    if args.command == "sync-cudy-clients":
+        result = sync_cudy_clients_from_router(
+            args.db,
+            args.inventory,
+            fetch_configs=not args.no_fetch_configs,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            for item in result["synced"]:
+                print(f"{item['user_id']}\t{item['client_ip']}\tenabled={item['enabled']}\tconfig={item['config_path'] or '-'}")
+            print(f"Synced Cudy clients: {len(result['synced'])}")
+            for warning in result["warnings"]:
+                print(f"WARNING: {warning}")
         return 0
     if args.command == "route-plan":
         init_db(args.db, args.inventory)

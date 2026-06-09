@@ -42,6 +42,7 @@ import paramiko
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_OUTPUT_DIR = ROOT / "secrets" / "clients"
+DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
 
 
 SERVER_REGISTRY = {
@@ -182,7 +183,14 @@ def server_password(server_name: str, explicit_password: str | None) -> str | No
     if explicit_password:
         return explicit_password
     env_name = f"AWG_SSH_PASSWORD_{server_name.upper().replace('-', '_')}"
-    return os.environ.get(env_name) or os.environ.get("AWG_SSH_PASSWORD")
+    password = os.environ.get(env_name) or os.environ.get("AWG_SSH_PASSWORD")
+    if password:
+        return password
+    if server_name == "cudy-home" and DEFAULT_CUDY_PASSWORD_FILE.exists():
+        password = DEFAULT_CUDY_PASSWORD_FILE.read_text(encoding="utf-8-sig").strip()
+        if password:
+            return password
+    return None
 
 
 class Remote:

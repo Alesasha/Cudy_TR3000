@@ -40,6 +40,12 @@ Import existing Cudy AmneziaVPN clients from local `.conf` files:
 python tools\vpn_control_app.py import-cudy-clients
 ```
 
+Sync live Cudy clients from the router:
+
+```powershell
+python tools\vpn_control_app.py sync-cudy-clients
+```
+
 Create a normal user manually:
 
 ```powershell

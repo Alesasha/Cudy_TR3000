@@ -101,6 +101,14 @@ Import existing Cudy AmneziaVPN users:
 python tools\vpn_control_app.py import-cudy-clients
 ```
 
+Sync live Cudy users directly from `friendctl` on the router and download their `.conf` files:
+
+```powershell
+python tools\vpn_control_app.py sync-cudy-clients
+```
+
+The admin `Users` section also has a `Sync Cudy` button. Use it when users exist on the Cudy router but are not visible in the control panel.
+
 Preview effective per-user routing:
 
 ```powershell
