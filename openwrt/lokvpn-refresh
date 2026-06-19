@@ -4,12 +4,16 @@ set -eu
 SUB_URL="${SUB_URL:-}"
 CONFIG="${CONFIG:-/etc/sing-box/lokvpn.json}"
 SUB_CACHE="${SUB_CACHE:-/tmp/lokvpn-subscription.json}"
+INTERFACE_NAME="${INTERFACE_NAME:-lokvpn}"
+TUN_ADDRESS="${TUN_ADDRESS:-172.38.0.1/30}"
+TAG_PREFIX="${TAG_PREFIX:-$INTERFACE_NAME}"
 PROFILE="${1:-${LOKVPN_PROFILE:-fr2}}"
 
-[ -n "$SUB_URL" ] || {
-  echo "SUB_URL is required, e.g. export SUB_URL='https://pf.lok-vpn.ru/?profil_id=...&pass=...'" >&2
+if [ -z "$SUB_URL" ] && [ ! -s "$SUB_CACHE" ]; then
+  echo "SUB_URL is required when subscription cache is missing: $SUB_CACHE" >&2
+  echo "Example: export SUB_URL='https://pf.lok-vpn.ru/?profil_id=...&pass=...'" >&2
   exit 2
-}
+fi
 
 case "$PROFILE" in
   smart1) IDX=0; OB=1 ;;
@@ -37,14 +41,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-curl -fsS --connect-timeout 15 --max-time 60 \
-  -H 'X-App-Version: 2.7.0' \
-  -H 'X-Device-Locale: RU' \
-  -H 'X-Device-OS: Windows' \
-  -H 'X-Device-model: Ryzen7Pro4750G_x86_64' \
-  -H 'X-HWID: 3dadf61c-af37-4ea7-a8d3-ce044ce069d7' \
-  -H 'X-Ver-OS: 11_10.0.26200' \
-  "$SUB_URL" > "$TMP_SUB"
+if [ -n "$SUB_URL" ]; then
+  curl -fsS --connect-timeout 15 --max-time 60 \
+    -H 'X-App-Version: 2.7.0' \
+    -H 'X-Device-Locale: RU' \
+    -H 'X-Device-OS: Windows' \
+    -H 'X-Device-model: Ryzen7Pro4750G_x86_64' \
+    -H 'X-HWID: 3dadf61c-af37-4ea7-a8d3-ce044ce069d7' \
+    -H 'X-Ver-OS: 11_10.0.26200' \
+    "$SUB_URL" > "$TMP_SUB"
+else
+  cp "$SUB_CACHE" "$TMP_SUB"
+fi
 
 SERVER="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].settings.vnext[0].address")"
 PORT="$(jsonfilter -i "$TMP_SUB" -e "\$[$IDX].outbounds[$OB].settings.vnext[0].port")"
@@ -68,10 +76,10 @@ cat > "$TMP_CONFIG" <<EOF
   "inbounds": [
     {
       "type": "tun",
-      "tag": "lokvpn-tun",
-      "interface_name": "lokvpn",
+      "tag": "$TAG_PREFIX-tun",
+      "interface_name": "$INTERFACE_NAME",
       "address": [
-        "172.38.0.1/30"
+        "$TUN_ADDRESS"
       ],
       "mtu": 1400,
       "auto_route": false,

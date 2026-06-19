@@ -46,3 +46,19 @@ For ordinary VPN users, the preferred identity source is the AmneziaWG client IP
 For administrator/local access, the app can also use `HttpOnly` cookie sessions stored in the local SQLite database. This is enough for the local MVP bound to `127.0.0.1`.
 
 Before exposing the app to LAN or the internet, add TLS/reverse proxy hardening, CSRF protection, rate limiting, and a clear deployment boundary.
+
+## Agent Device Tokens
+
+Public control-server agents use per-device bearer tokens. The token is shown
+only once by `device-create`; SQLite stores only a PBKDF2 hash and salt.
+
+Treat a device token like a password:
+
+- do not commit it;
+- store it only on the client device;
+- revoke it with `device-revoke` if a device is lost or replaced;
+- issue separate tokens for every device instead of sharing one token.
+
+Agent APIs should be exposed only over HTTPS. The Python MVP intentionally keeps
+TLS at the reverse-proxy layer, for example Caddy or nginx in front of
+`127.0.0.1:8765`.

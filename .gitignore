@@ -12,6 +12,10 @@ data/*.sqlite
 data/*.sqlite-*
 data/*.pid
 build/
+**/bin/
+**/obj/
+*.apk
+*.aab
 
 .playwright-cli/
 .tmp-amnezia-client/

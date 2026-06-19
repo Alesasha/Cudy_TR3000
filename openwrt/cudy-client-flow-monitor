@@ -1,0 +1,99 @@
+#!/bin/sh
+set -eu
+
+LOG="${LOG:-/tmp/cudy-client-flow-monitor.log}"
+INTERVAL="${INTERVAL:-2}"
+MAX_LINES="${MAX_LINES:-8000}"
+CLIENT_IP="${CLIENT_IP:-10.77.0.3}"
+WATCH_IPS="${WATCH_IPS:-213.180.204.183 89.108.110.121}"
+CONN_LIMIT="${CONN_LIMIT:-40}"
+
+trim_log() {
+    lines="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+    if [ "$lines" -gt "$MAX_LINES" ]; then
+        tail -n "$MAX_LINES" "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+    fi
+}
+
+conntrack_dump() {
+    if command -v conntrack >/dev/null 2>&1; then
+        conntrack -L 2>/dev/null || true
+    elif [ -r /proc/net/nf_conntrack ]; then
+        cat /proc/net/nf_conntrack
+    elif [ -r /proc/net/ip_conntrack ]; then
+        cat /proc/net/ip_conntrack
+    fi
+}
+
+iface_stats() {
+    iface="$1"
+    ip -s link show "$iface" 2>/dev/null | awk '
+        /RX:/ { section = "rx"; getline; printf "%s_bytes=%s %s_packets=%s %s_errors=%s %s_dropped=%s ", section, $1, section, $2, section, $3, section, $4 }
+        /TX:/ { section = "tx"; getline; printf "%s_bytes=%s %s_packets=%s %s_errors=%s %s_dropped=%s", section, $1, section, $2, section, $3, section, $4 }
+    ' || true
+}
+
+peer_stats() {
+    if command -v awg >/dev/null 2>&1; then
+        awg show awg_in 2>/dev/null
+    elif command -v wg >/dev/null 2>&1; then
+        wg show awg_in 2>/dev/null
+    else
+        return 0
+    fi | awk -v ip="$CLIENT_IP" '
+        $1 == "peer:" { peer = $2; hit = 0 }
+        $1 == "endpoint:" { endpoint = $2 }
+        $1 == "allowed" && $2 == "ips:" && $3 == ip "/32" { hit = 1 }
+        $1 == "latest" && $2 == "handshake:" {
+            handshake = ""
+            for (i = 3; i <= NF; i++) handshake = handshake (handshake ? " " : "") $i
+        }
+        $1 == "transfer:" {
+            transfer = ""
+            for (i = 2; i <= NF; i++) transfer = transfer (transfer ? " " : "") $i
+        }
+        hit && $1 == "persistent" {
+            printf "peer=%s endpoint=%s handshake=\"%s\" transfer=\"%s\"", peer, endpoint, handshake, transfer
+        }
+    ' || true
+}
+
+watch_pattern() {
+    first=1
+    for ip in $WATCH_IPS; do
+        if [ "$first" -eq 1 ]; then
+            printf '%s' "$ip"
+            first=0
+        else
+            printf '|%s' "$ip"
+        fi
+    done
+}
+
+while true; do
+    ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    watch_re="$(watch_pattern)"
+    awg_stats="$(iface_stats awg_in)"
+    peer="$(peer_stats)"
+    routes="$(nft list chain inet cudy_user_routes prerouting 2>/dev/null | grep "$CLIENT_IP" | tr '\n' ';' || true)"
+    current="$(conntrack_dump | grep "$CLIENT_IP" | grep -E 'dport=(80|443)|sport=(80|443)' | tail -n "$CONN_LIMIT" || true)"
+    watched="$(printf '%s\n' "$current" | grep -E "$watch_re" || true)"
+
+    printf '%s client=%s watch_ips="%s" awg_in="%s" %s user_route_rules="%s"\n' \
+        "$ts" "$CLIENT_IP" "$WATCH_IPS" "$awg_stats" "$peer" "$routes" >> "$LOG"
+
+    if [ -n "$watched" ]; then
+        printf '%s watched_connections_begin\n' "$ts" >> "$LOG"
+        printf '%s\n' "$watched" | sed 's/^/  /' >> "$LOG"
+        printf '%s watched_connections_end\n' "$ts" >> "$LOG"
+    fi
+
+    if [ -n "$current" ]; then
+        printf '%s active_web_connections_begin\n' "$ts" >> "$LOG"
+        printf '%s\n' "$current" | sed 's/^/  /' >> "$LOG"
+        printf '%s active_web_connections_end\n' "$ts" >> "$LOG"
+    fi
+
+    trim_log
+    sleep "$INTERVAL"
+done

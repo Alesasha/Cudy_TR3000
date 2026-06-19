@@ -14,6 +14,7 @@ import base64
 import getpass
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -21,13 +22,15 @@ import secrets
 import shlex
 import sqlite3
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 from urllib.parse import parse_qs, urlparse
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 import paramiko
 
@@ -39,8 +42,12 @@ DEFAULT_USER_ID = "default"
 DEFAULT_PBR_EXPORT_DIR = ROOT / "build" / "pbr-overrides"
 DEFAULT_USER_ROUTES_EXPORT_DIR = ROOT / "build" / "user-routes"
 DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
+DEFAULT_VPNTYPE_AUTH_FILE = ROOT / "secrets" / "vpntype_auth.txt"
+DEFAULT_VPNTYPE_UUID_FILE = ROOT / "secrets" / "vpntype_uuid.txt"
+DEFAULT_LOKVPN_SUB_URL_FILE = ROOT / "secrets" / "lokvpn_sub_url.txt"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
+AGENT_TOKEN_CACHE_SECONDS = 300
 DEFAULT_CUDY_FRIEND_ENDPOINT = "195.170.35.108:51830"
 CUDY_CLIENT_OUTPUT_DIR = ROOT / "secrets" / "clients" / "cudy-home"
 REMOTE_PBR_DIR = "/etc/pbr-overrides"
@@ -49,9 +56,11 @@ REMOTE_PBR_SCRIPT = "/usr/share/pbr/pbr.user.opencck-merged-vpn"
 LOCAL_PBR_SCRIPT = ROOT / "openwrt" / "pbr.user.opencck-merged-vpn"
 LOCAL_SWITCHER_INSTALLER = ROOT / "openwrt" / "install-vpn-switchers.sh"
 LOCAL_USER_ROUTES_APPLY = ROOT / "openwrt" / "cudy-user-routes-apply"
+LOCAL_USER_ROUTES_INIT = ROOT / "openwrt" / "cudy-user-routes.init"
 SESSION_COOKIE = "vpn_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 210_000
+DEVICE_TOKEN_PREFIX = "vca_"
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
 )
@@ -108,6 +117,19 @@ CREATE TABLE IF NOT EXISTS user_domain_routes (
   FOREIGN KEY(server_id) REFERENCES servers(id)
 );
 
+CREATE TABLE IF NOT EXISTS user_ip_routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL,
+  target_cidr TEXT NOT NULL,
+  server_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(user_id, target_cidr),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(server_id) REFERENCES servers(id)
+);
+
 CREATE TABLE IF NOT EXISTS global_domain_routes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   domain TEXT NOT NULL UNIQUE,
@@ -115,6 +137,18 @@ CREATE TABLE IF NOT EXISTS global_domain_routes (
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  FOREIGN KEY(server_id) REFERENCES servers(id)
+);
+
+CREATE TABLE IF NOT EXISTS global_ip_routes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  target_cidr TEXT NOT NULL UNIQUE,
+  server_id TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT '',
+  note TEXT NOT NULL DEFAULT '',
   FOREIGN KEY(server_id) REFERENCES servers(id)
 );
 
@@ -145,6 +179,68 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT NOT NULL,
   expires_at INTEGER NOT NULL,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS agent_devices (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  display_name TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT '',
+  token_salt TEXT NOT NULL,
+  token_hash TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  last_seen_at TEXT,
+  last_ip TEXT,
+  last_user_agent TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS agent_status (
+  device_id TEXT PRIMARY KEY,
+  status_json TEXT NOT NULL,
+  reported_at TEXT NOT NULL,
+  FOREIGN KEY(device_id) REFERENCES agent_devices(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS transport_configs (
+  server_id TEXT PRIMARY KEY,
+  transport_type TEXT NOT NULL,
+  interface_name TEXT NOT NULL,
+  config_json TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  source TEXT NOT NULL DEFAULT '',
+  version TEXT NOT NULL DEFAULT '',
+  expires_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS agent_probe_jobs (
+  id TEXT PRIMARY KEY,
+  domain TEXT NOT NULL,
+  user_id TEXT NOT NULL DEFAULT '',
+  candidate_server_ids TEXT NOT NULL,
+  url TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  assigned_device_id TEXT NOT NULL DEFAULT '',
+  claimed_by_device_id TEXT NOT NULL DEFAULT '',
+  apply_cache INTEGER NOT NULL DEFAULT 1,
+  connect_timeout INTEGER NOT NULL DEFAULT 5,
+  max_time INTEGER NOT NULL DEFAULT 12,
+  priority INTEGER NOT NULL DEFAULT 100,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  result_json TEXT NOT NULL DEFAULT '{}',
+  winner_server_id TEXT,
+  score_ms INTEGER,
+  error TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  started_at TEXT,
+  finished_at TEXT,
+  FOREIGN KEY(winner_server_id) REFERENCES servers(id) ON DELETE SET NULL
 );
 """
 
@@ -328,6 +424,15 @@ USER_HTML = r"""<!doctype html>
     .status { min-height: 20px; color: var(--muted); }
     .status.error { color: var(--danger); }
     .status.ok { color: var(--ok); }
+    .priority-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      max-width: 100%;
+    }
+    .priority-list select { min-width: 180px; }
+    .priority-list[hidden], .field[hidden] { display: none; }
     @media (max-width: 720px) {
       header { align-items: flex-start; flex-direction: column; }
       main { padding: 14px; }
@@ -410,14 +515,14 @@ USER_HTML = r"""<!doctype html>
       `).join("");
       body.querySelectorAll("[data-delete]").forEach(button => {
         button.addEventListener("click", async () => {
-          await api(`/api/domain-routes?user_id=default&domain=${encodeURIComponent(button.dataset.delete)}`, { method: "DELETE" });
+          await api(`/api/domain-routes?domain=${encodeURIComponent(button.dataset.delete)}`, { method: "DELETE" });
           await load();
         });
       });
     }
 
     async function load() {
-      const data = await api("/api/bootstrap?user_id=default");
+      const data = await api("/api/bootstrap");
       state.servers = data.servers;
       state.routes = data.routes;
       state.user = data.user;
@@ -437,7 +542,7 @@ USER_HTML = r"""<!doctype html>
       try {
         await api("/api/user/default-server", {
           method: "POST",
-          body: JSON.stringify({ user_id: "default", server_id: document.getElementById("defaultServer").value })
+          body: JSON.stringify({ server_id: document.getElementById("defaultServer").value })
         });
         status.textContent = "Saved.";
         status.className = "status ok";
@@ -456,7 +561,6 @@ USER_HTML = r"""<!doctype html>
         await api("/api/domain-routes", {
           method: "POST",
           body: JSON.stringify({
-            user_id: "default",
             domain: document.getElementById("domainInput").value,
             server_id: document.getElementById("routeServer").value
           })
@@ -594,28 +698,57 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
     <section>
       <h2>Global Domain Routes</h2>
+      <form id="globalDefaultPriorityForm" class="toolbar">
+        <div id="globalDefaultAutoField" class="field">
+          <label>Default Priority</label>
+          <div id="globalDefaultAutoList" class="priority-list"></div>
+          <input id="globalDefaultAutoText" type="text" placeholder="proxyde, uswest, all-rest" autocomplete="off">
+        </div>
+        <button type="submit">Save Default</button>
+      </form>
+      <p id="globalDefaultPriorityStatus" class="status"></p>
       <form id="globalRouteForm" class="toolbar">
         <div class="field"><label>Domain</label><input id="globalRouteDomain" type="text" placeholder="example.com" autocomplete="off"></div>
         <div class="field"><label>Server</label><select id="globalRouteServer"></select></div>
+        <div id="globalRouteAutoField" class="field">
+          <label>Priority</label>
+          <div id="globalRouteAutoList" class="priority-list"></div>
+          <input id="globalRouteAutoText" type="text" placeholder="proxyde, uswest, all-rest" autocomplete="off">
+        </div>
         <button type="submit">Save Global</button>
       </form>
       <p id="globalRouteStatus" class="status"></p>
       <table>
-        <thead><tr><th>Domain</th><th>Server</th><th>Enabled</th><th></th></tr></thead>
+        <thead><tr><th>Domain</th><th>Server</th><th>Priority</th><th>Enabled</th><th></th></tr></thead>
         <tbody id="globalRoutesBody"></tbody>
       </table>
     </section>
     <section>
       <h2>Domain Routes</h2>
+      <form id="userDefaultPriorityForm" class="toolbar">
+        <div class="field"><label>User</label><select id="defaultRouteUser"></select></div>
+        <div id="userDefaultAutoField" class="field">
+          <label>Default Priority</label>
+          <div id="userDefaultAutoList" class="priority-list"></div>
+          <input id="userDefaultAutoText" type="text" placeholder="proxyde, uswest, all-rest" autocomplete="off">
+        </div>
+        <button type="submit">Save User Default</button>
+      </form>
+      <p id="userDefaultPriorityStatus" class="status"></p>
       <form id="adminRouteForm" class="toolbar">
         <div class="field"><label>User</label><select id="routeUser"></select></div>
         <div class="field"><label>Domain</label><input id="adminRouteDomain" type="text" placeholder="example.com" autocomplete="off"></div>
         <div class="field"><label>Server</label><select id="adminRouteServer"></select></div>
+        <div id="adminRouteAutoField" class="field">
+          <label>Priority</label>
+          <div id="adminRouteAutoList" class="priority-list"></div>
+          <input id="adminRouteAutoText" type="text" placeholder="proxyde, uswest, all-rest" autocomplete="off">
+        </div>
         <button type="submit">Save Route</button>
       </form>
       <p id="adminRouteStatus" class="status"></p>
       <table>
-        <thead><tr><th>User</th><th>Domain</th><th>Server</th><th>Enabled</th><th></th></tr></thead>
+        <thead><tr><th>User</th><th>Domain</th><th>Server</th><th>Priority</th><th>Enabled</th><th></th></tr></thead>
         <tbody id="routesBody"></tbody>
       </table>
     </section>
@@ -629,23 +762,53 @@ ADMIN_HTML = r"""<!doctype html>
         <button type="submit">Save Auto</button>
       </form>
       <p id="autoCacheStatus" class="status"></p>
+      <form id="autoSelectForm" class="toolbar">
+        <div class="field"><label>Probe Domain</label><input id="autoSelectDomain" type="text" placeholder="example.com" autocomplete="off"></div>
+        <div class="field"><label>User</label><select id="autoSelectUser"></select></div>
+        <div class="field"><label>Candidates</label><input id="autoSelectCandidates" type="text" placeholder="blank = policy"></div>
+        <button type="submit">Run Auto</button>
+        <label class="inline muted"><input id="autoSelectApply" type="checkbox" checked> Save</label>
+        <label class="inline muted"><input id="autoSelectDeploy" type="checkbox"> Deploy</label>
+        <label class="inline muted"><input id="autoSelectProfiles" type="checkbox"> LokVPN profiles</label>
+      </form>
+      <p id="autoSelectStatus" class="status"></p>
       <table>
         <thead><tr><th>Domain</th><th>Selected Server</th><th>Score</th><th>Status</th><th>Checked</th><th></th></tr></thead>
         <tbody id="autoCacheBody"></tbody>
       </table>
     </section>
     <section>
-      <h2>Auto Candidate Lists</h2>
-      <form id="autoCandidateForm" class="toolbar">
-        <div class="field"><label>User</label><select id="autoCandidateUser"></select></div>
-        <div class="field"><label>Domain</label><input id="autoCandidateDomain" type="text" placeholder="blank = all domains" autocomplete="off"></div>
-        <div class="field"><label>Servers</label><input id="autoCandidateServers" type="text" placeholder="proxyde, proxyus, uswest" autocomplete="off"></div>
-        <button type="submit">Save List</button>
-      </form>
-      <p id="autoCandidateStatus" class="status"></p>
+      <h2>Auto Probe Jobs</h2>
+      <div class="toolbar">
+        <button id="runAutoWorker" type="button">Run Worker Once</button>
+        <button id="refreshAutoJobs" class="secondary" type="button">Refresh</button>
+        <div class="field"><label>Max Jobs</label><input id="autoWorkerMaxJobs" type="number" min="1" max="50" step="1" value="5"></div>
+        <div class="field"><label>Cache TTL sec</label><input id="autoWorkerCacheTtl" type="number" min="0" step="60" value="3600"></div>
+      </div>
+      <p id="autoProbeStatus" class="status"></p>
       <table>
-        <thead><tr><th>Scope</th><th>User</th><th>Domain</th><th>Servers</th><th>Enabled</th><th></th></tr></thead>
-        <tbody id="autoCandidatesBody"></tbody>
+        <thead><tr><th>Status</th><th>Domain</th><th>Candidates</th><th>Assigned</th><th>Claimed</th><th>Winner</th><th>Score</th><th>Updated</th></tr></thead>
+        <tbody id="autoProbeJobsBody"></tbody>
+      </table>
+      <h3>Agents</h3>
+      <table>
+        <thead><tr><th>Device</th><th>User</th><th>Platform</th><th>Last Seen</th><th>Reported</th><th>Health</th><th>Applied</th><th>Errors</th></tr></thead>
+        <tbody id="agentStatusBody"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Provider Transports</h2>
+      <div class="toolbar">
+        <div class="field"><label>Provider</label><select id="providerRefreshProvider"><option value="all">All</option><option value="vpntype">VPNtype</option><option value="lokvpn">LokVPN</option></select></div>
+        <div class="field"><label>Servers</label><input id="providerRefreshServers" type="text" placeholder="blank = all, or proxyde,lokvpn-de1"></div>
+        <button id="runProviderRefresh" type="button">Refresh Provider</button>
+        <button id="refreshProviderTransports" class="secondary" type="button">Refresh Table</button>
+        <label class="inline muted"><input id="providerRefreshSkipVerify" type="checkbox"> Skip Verify</label>
+      </div>
+      <p id="providerRefreshStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Server</th><th>Provider</th><th>Type</th><th>Interface</th><th>Endpoint</th><th>Source</th><th>Version</th><th>Updated</th><th>Enabled</th></tr></thead>
+        <tbody id="providerTransportsBody"></tbody>
       </table>
     </section>
     <section>
@@ -662,7 +825,9 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [] };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [] };
+    const ALL_REST = "__all_rest__";
+    const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     async function api(path, options) {
       const response = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -681,11 +846,156 @@ ADMIN_HTML = r"""<!doctype html>
         .map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${s.label}</option>`)
         .join("");
     }
+    function physicalServers() {
+      return state.servers.filter(s => s.id !== "auto" && s.enabled && s.user_visible);
+    }
     function userOptions(value) {
       return state.users.map(u => `<option value="${u.id}" ${u.id === value ? "selected" : ""}>${u.id}</option>`).join("");
     }
     function autoCandidateUserOptions(value) {
       return `<option value="" ${!value ? "selected" : ""}>Global</option>` + userOptions(value);
+    }
+    function autoPolicyFor(userId, domain) {
+      const normalizedUser = userId || "";
+      const normalizedDomain = (domain || "").trim().toLowerCase();
+      return state.autoCandidates.find(item =>
+        (item.user_id || "") === normalizedUser &&
+        (item.domain || "") === normalizedDomain &&
+        item.enabled
+      ) || null;
+    }
+    function autoPolicyLabel(userId, domain) {
+      const policy = autoPolicyFor(userId, domain);
+      if (!policy) return "";
+      return (policy.candidate_server_ids || []).map(serverLabel).join(" -> ");
+    }
+    function setAutoEditor(prefix, serverIds) {
+      autoEditors[prefix] = [...(serverIds || [])];
+      renderAutoEditor(prefix);
+    }
+    function parsePriorityText(text) {
+      const aliases = new Map([
+        ["all rest", ALL_REST],
+        ["all-rest", ALL_REST],
+        ["all_rest", ALL_REST],
+        ["rest", ALL_REST],
+      ]);
+      return (text || "")
+        .split(/[,\n;]+/)
+        .map(item => item.trim())
+        .filter(Boolean)
+        .map(item => aliases.get(item.toLowerCase()) || item);
+    }
+    function formatPriorityText(values) {
+      return (values || []).map(value => value === ALL_REST ? "all-rest" : value).join(", ");
+    }
+    function syncAutoText(prefix) {
+      const input = document.getElementById(`${prefix}AutoText`);
+      if (input && document.activeElement !== input) {
+        input.value = formatPriorityText(autoEditors[prefix] || []);
+      }
+    }
+    function expandAutoCandidates(values) {
+      const result = [];
+      for (const value of values) {
+        if (!value) break;
+        if (value === ALL_REST) {
+          for (const server of physicalServers()) {
+            if (!result.includes(server.id)) result.push(server.id);
+          }
+          break;
+        }
+        if (!result.includes(value)) result.push(value);
+      }
+      return result;
+    }
+    function selectedAutoCandidates(prefix) {
+      return expandAutoCandidates(autoEditors[prefix] || []);
+    }
+    async function savePriorityPolicy(userId, domain, prefix, statusId) {
+      const status = document.getElementById(statusId);
+      const candidates = selectedAutoCandidates(prefix);
+      status.className = "status";
+      if (candidates.length) {
+        await api("/api/admin/auto-candidates", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: userId,
+            domain,
+            candidate_server_ids: candidates
+          })
+        });
+        status.textContent = "Priority saved.";
+      } else {
+        await api(`/api/admin/auto-candidates?user_id=${encodeURIComponent(userId)}&domain=${encodeURIComponent(domain)}`, { method: "DELETE" });
+        status.textContent = "Priority cleared.";
+      }
+      status.className = "status ok";
+    }
+    function renderAutoEditor(prefix) {
+      const field = document.getElementById(`${prefix}AutoField`);
+      const container = document.getElementById(`${prefix}AutoList`);
+      const serverSelect = prefix === "globalRoute"
+        ? document.getElementById("globalRouteServer")
+        : prefix === "adminRoute"
+          ? document.getElementById("adminRouteServer")
+          : null;
+      const isAuto = !serverSelect || serverSelect.value === "auto";
+      field.hidden = !isAuto;
+      if (!isAuto) {
+        container.innerHTML = "";
+        syncAutoText(prefix);
+        return;
+      }
+      const values = [...(autoEditors[prefix] || [])];
+      if (!values.includes(ALL_REST)) values.push("");
+      container.innerHTML = values.map((value, index) => {
+        const selectedBefore = new Set(values.slice(0, index).filter(v => v && v !== ALL_REST));
+        const options = ['<option value="">End</option>'];
+        for (const server of physicalServers()) {
+          if (!selectedBefore.has(server.id) || server.id === value) {
+            options.push(`<option value="${server.id}" ${server.id === value ? "selected" : ""}>${server.label}</option>`);
+          }
+        }
+        const remaining = physicalServers().some(server => !selectedBefore.has(server.id));
+        if (remaining || value === ALL_REST) {
+          options.push(`<option value="${ALL_REST}" ${value === ALL_REST ? "selected" : ""}>All rest</option>`);
+        }
+        return `<select data-auto-prefix="${prefix}" data-auto-index="${index}">${options.join("")}</select>`;
+      }).join("");
+      container.querySelectorAll("[data-auto-prefix]").forEach(select => {
+        select.addEventListener("change", () => {
+          const index = Number(select.dataset.autoIndex);
+          const next = autoEditors[prefix].slice(0, index);
+          if (select.value) next.push(select.value);
+          autoEditors[prefix] = next;
+          renderAutoEditor(prefix);
+        });
+      });
+      syncAutoText(prefix);
+    }
+    function syncAutoEditorFromExisting(prefix) {
+      if (prefix === "globalDefault") {
+        const policy = autoPolicyFor("", "");
+        setAutoEditor(prefix, policy ? policy.candidate_server_ids : []);
+        return;
+      }
+      if (prefix === "userDefault") {
+        const userId = document.getElementById("defaultRouteUser").value;
+        const policy = autoPolicyFor(userId, "");
+        setAutoEditor(prefix, policy ? policy.candidate_server_ids : []);
+        return;
+      }
+      if (prefix === "globalRoute") {
+        const domain = document.getElementById("globalRouteDomain").value;
+        const policy = autoPolicyFor("", domain);
+        setAutoEditor(prefix, policy ? policy.candidate_server_ids : []);
+        return;
+      }
+      const userId = document.getElementById("routeUser").value;
+      const domain = document.getElementById("adminRouteDomain").value;
+      const policy = autoPolicyFor(userId, domain);
+      setAutoEditor(prefix, policy ? policy.candidate_server_ids : []);
     }
     function renderServers() {
       const body = document.getElementById("serversBody");
@@ -828,10 +1138,11 @@ ADMIN_HTML = r"""<!doctype html>
         <tr>
           <td>${r.domain}</td>
           <td>${r.server_id}</td>
+          <td>${r.server_id === "auto" ? autoPolicyLabel("", r.domain) || '<span class="muted">Inherited/default</span>' : ""}</td>
           <td>${r.enabled ? "yes" : "no"}</td>
           <td><button class="danger" data-delete-global-route="${r.domain}">Delete</button></td>
         </tr>
-      `).join("") : '<tr><td colspan="4" class="muted">No global routes.</td></tr>';
+      `).join("") : '<tr><td colspan="5" class="muted">No global routes.</td></tr>';
       body.querySelectorAll("[data-delete-global-route]").forEach(button => {
         button.addEventListener("click", async () => {
           await api(`/api/admin/global-domain-routes?domain=${encodeURIComponent(button.dataset.deleteGlobalRoute)}`, { method: "DELETE" });
@@ -846,10 +1157,11 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${r.user_id}</td>
           <td>${r.domain}</td>
           <td>${r.server_id}</td>
+          <td>${r.server_id === "auto" ? autoPolicyLabel(r.user_id, r.domain) || '<span class="muted">Inherited/default</span>' : ""}</td>
           <td>${r.enabled ? "yes" : "no"}</td>
           <td><button class="danger" data-delete-route="${r.user_id}|${r.domain}">Delete</button></td>
         </tr>
-      `).join("") : '<tr><td colspan="4" class="muted">No routes.</td></tr>';
+      `).join("") : '<tr><td colspan="6" class="muted">No routes.</td></tr>';
       body.querySelectorAll("[data-delete-route]").forEach(button => {
         button.addEventListener("click", async () => {
           const [userId, domain] = button.dataset.deleteRoute.split("|");
@@ -877,25 +1189,56 @@ ADMIN_HTML = r"""<!doctype html>
         });
       });
     }
-    function renderAutoCandidates() {
-      const body = document.getElementById("autoCandidatesBody");
-      body.innerHTML = state.autoCandidates.length ? state.autoCandidates.map(r => `
+    function renderAutoProbeJobs() {
+      const body = document.getElementById("autoProbeJobsBody");
+      body.innerHTML = state.probeJobs.length ? state.probeJobs.map(job => `
         <tr>
-          <td>${r.scope}</td>
-          <td>${r.user_id || "Global"}</td>
-          <td>${r.domain || "All"}</td>
-          <td>${(r.candidate_server_ids || []).join(", ")}</td>
-          <td>${r.enabled ? "yes" : "no"}</td>
-          <td><button class="danger" data-delete-auto-candidate="${r.user_id || ""}|${r.domain || ""}">Delete</button></td>
+          <td>${job.status}</td>
+          <td>${job.domain}</td>
+          <td>${(job.candidate_server_ids || []).join(" -> ")}</td>
+          <td>${job.assigned_device_id || ""}</td>
+          <td>${job.claimed_by_device_id || ""}</td>
+          <td>${job.winner_server_id || ""}</td>
+          <td>${job.score_ms ?? ""}</td>
+          <td>${job.updated_at || ""}</td>
         </tr>
-      `).join("") : '<tr><td colspan="6" class="muted">No Auto candidate lists.</td></tr>';
-      body.querySelectorAll("[data-delete-auto-candidate]").forEach(button => {
-        button.addEventListener("click", async () => {
-          const [userId, domain] = button.dataset.deleteAutoCandidate.split("|");
-          await api(`/api/admin/auto-candidates?user_id=${encodeURIComponent(userId)}&domain=${encodeURIComponent(domain)}`, { method: "DELETE" });
-          await load();
-        });
-      });
+      `).join("") : '<tr><td colspan="8" class="muted">No probe jobs.</td></tr>';
+    }
+    function renderAgentStatus() {
+      const body = document.getElementById("agentStatusBody");
+      body.innerHTML = state.agentStatus.length ? state.agentStatus.map(item => {
+        const health = (item.status || {}).health || {};
+        const errors = ((item.status || {}).errors || []).concat((item.status || {}).status_errors || []);
+        return `
+          <tr>
+            <td>${item.device_id}</td>
+            <td>${item.user_id}</td>
+            <td>${item.platform || ""}</td>
+            <td>${item.last_seen_at || ""}</td>
+            <td>${item.reported_at || ""}</td>
+            <td>${health.ok === true ? "ok" : health.ok === false ? "fail" : ""}</td>
+            <td>${health.applied ?? ""}</td>
+            <td>${errors.length ? errors.slice(0, 2).join("; ") : ""}</td>
+          </tr>
+        `;
+      }).join("") : '<tr><td colspan="8" class="muted">No agent status.</td></tr>';
+    }
+    function renderProviderTransports() {
+      const body = document.getElementById("providerTransportsBody");
+      const rows = state.transportConfigs || [];
+      body.innerHTML = rows.length ? rows.map(item => `
+        <tr>
+          <td>${item.server_id}</td>
+          <td>${item.provider || ""}</td>
+          <td>${item.transport_type}</td>
+          <td>${item.interface_name}</td>
+          <td>${item.endpoint || ""}</td>
+          <td>${item.source || ""}</td>
+          <td>${item.version || ""}</td>
+          <td>${item.updated_at || ""}</td>
+          <td>${item.enabled ? "yes" : "no"}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="9" class="muted">No provider transports.</td></tr>';
     }
     async function load() {
       const data = await api("/api/admin");
@@ -905,17 +1248,27 @@ ADMIN_HTML = r"""<!doctype html>
       state.globalRoutes = data.global_routes || [];
       state.autoCache = data.auto_cache || [];
       state.autoCandidates = data.auto_candidates || [];
+      state.probeJobs = data.probe_jobs || [];
+      state.agentStatus = data.agent_status || [];
+      state.transportConfigs = data.transport_configs || [];
       renderServers();
       renderUsers();
       renderGlobalRoutes();
       renderRoutes();
       renderAutoCache();
-      renderAutoCandidates();
+      renderAutoProbeJobs();
+      renderAgentStatus();
+      renderProviderTransports();
       document.getElementById("adminRouteServer").innerHTML = serverOptions(document.getElementById("adminRouteServer").value || "auto");
       document.getElementById("globalRouteServer").innerHTML = serverOptions(document.getElementById("globalRouteServer").value || "auto");
       document.getElementById("autoCacheServer").innerHTML = physicalServerOptions(document.getElementById("autoCacheServer").value);
-      document.getElementById("autoCandidateUser").innerHTML = autoCandidateUserOptions(document.getElementById("autoCandidateUser").value);
+      document.getElementById("autoSelectUser").innerHTML = autoCandidateUserOptions(document.getElementById("autoSelectUser").value);
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
+      document.getElementById("defaultRouteUser").innerHTML = userOptions(document.getElementById("defaultRouteUser").value);
+      syncAutoEditorFromExisting("globalDefault");
+      syncAutoEditorFromExisting("userDefault");
+      renderAutoEditor("globalRoute");
+      renderAutoEditor("adminRoute");
     }
     document.getElementById("newUserForm").addEventListener("submit", async event => {
       event.preventDefault();
@@ -977,12 +1330,25 @@ ADMIN_HTML = r"""<!doctype html>
           method: "POST",
           body: JSON.stringify({
             domain: document.getElementById("globalRouteDomain").value,
-            server_id: document.getElementById("globalRouteServer").value
+            server_id: document.getElementById("globalRouteServer").value,
+            auto_candidate_server_ids: selectedAutoCandidates("globalRoute")
           })
         });
         document.getElementById("globalRouteDomain").value = "";
+        setAutoEditor("globalRoute", []);
         status.textContent = "Global route saved.";
         status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("globalDefaultPriorityForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("globalDefaultPriorityStatus");
+      try {
+        await savePriorityPolicy("", "", "globalDefault", "globalDefaultPriorityStatus");
         await load();
       } catch (error) {
         status.textContent = error.message;
@@ -999,12 +1365,25 @@ ADMIN_HTML = r"""<!doctype html>
           body: JSON.stringify({
             user_id: document.getElementById("routeUser").value,
             domain: document.getElementById("adminRouteDomain").value,
-            server_id: document.getElementById("adminRouteServer").value
+            server_id: document.getElementById("adminRouteServer").value,
+            auto_candidate_server_ids: selectedAutoCandidates("adminRoute")
           })
         });
         document.getElementById("adminRouteDomain").value = "";
+        setAutoEditor("adminRoute", []);
         status.textContent = "Route saved.";
         status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("userDefaultPriorityForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("userDefaultPriorityStatus");
+      try {
+        await savePriorityPolicy(document.getElementById("defaultRouteUser").value, "", "userDefault", "userDefaultPriorityStatus");
         await load();
       } catch (error) {
         status.textContent = error.message;
@@ -1036,22 +1415,48 @@ ADMIN_HTML = r"""<!doctype html>
         status.className = "status error";
       }
     });
-    document.getElementById("autoCandidateForm").addEventListener("submit", async event => {
+    document.getElementById("autoSelectForm").addEventListener("submit", async event => {
       event.preventDefault();
-      const status = document.getElementById("autoCandidateStatus");
+      const status = document.getElementById("autoSelectStatus");
       status.className = "status";
+      status.textContent = "Running Auto probe...";
       try {
-        await api("/api/admin/auto-candidates", {
+        const result = await api("/api/admin/auto-select", {
           method: "POST",
           body: JSON.stringify({
-            user_id: document.getElementById("autoCandidateUser").value,
-            domain: document.getElementById("autoCandidateDomain").value,
-            candidate_server_ids: document.getElementById("autoCandidateServers").value
+            domain: document.getElementById("autoSelectDomain").value,
+            user_id: document.getElementById("autoSelectUser").value,
+            candidate_server_ids: document.getElementById("autoSelectCandidates").value,
+            apply: document.getElementById("autoSelectApply").checked,
+            deploy: document.getElementById("autoSelectDeploy").checked,
+            switch_profiles: document.getElementById("autoSelectProfiles").checked
           })
         });
-        document.getElementById("autoCandidateDomain").value = "";
-        document.getElementById("autoCandidateServers").value = "";
-        status.textContent = "Auto candidate list saved.";
+        const winner = result.winner;
+        const summary = result.checks.map(c => `${c.server_id}:${c.status}${c.score_ms ? `/${c.score_ms}ms` : ""}`).join(", ");
+        status.textContent = winner
+          ? `Winner ${winner.server_id} (${winner.score_ms || "-"} ms). ${summary}`
+          : `No working candidate. ${summary}`;
+        status.className = winner ? "status ok" : "status error";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("runAutoWorker").addEventListener("click", async () => {
+      const status = document.getElementById("autoProbeStatus");
+      status.className = "status";
+      status.textContent = "Creating due probe jobs...";
+      try {
+        const result = await api("/api/admin/auto-worker-once", {
+          method: "POST",
+          body: JSON.stringify({
+            max_jobs: Number(document.getElementById("autoWorkerMaxJobs").value || 5),
+            cache_ttl_seconds: Number(document.getElementById("autoWorkerCacheTtl").value || 3600)
+          })
+        });
+        status.textContent = `Created ${result.created.length}, skipped ${result.skipped.length}, active agents ${result.active_agents}.`;
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -1059,6 +1464,45 @@ ADMIN_HTML = r"""<!doctype html>
         status.className = "status error";
       }
     });
+    document.getElementById("refreshAutoJobs").addEventListener("click", load);
+    document.getElementById("refreshProviderTransports").addEventListener("click", load);
+    document.getElementById("runProviderRefresh").addEventListener("click", async () => {
+      const status = document.getElementById("providerRefreshStatus");
+      status.className = "status";
+      status.textContent = "Refreshing provider transports...";
+      try {
+        const result = await api("/api/admin/provider-refresh", {
+          method: "POST",
+          body: JSON.stringify({
+            provider: document.getElementById("providerRefreshProvider").value,
+            servers: document.getElementById("providerRefreshServers").value,
+            skip_verify: document.getElementById("providerRefreshSkipVerify").checked
+          })
+        });
+        const groups = result.provider === "all" ? (result.results || []) : [result];
+        const refreshed = groups.reduce((sum, group) => sum + (group.refreshed || []).length, 0);
+        const failed = groups.reduce((sum, group) => sum + (group.failed || []).length, 0);
+        const failedText = groups.flatMap(group => group.failed || []).slice(0, 3).map(item => `${item.server_id}: ${item.error}`).join("; ");
+        status.textContent = `Refreshed ${refreshed}, failed ${failed}.${failedText ? " " + failedText : ""}`;
+        status.className = failed ? "status error" : "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("globalRouteServer").addEventListener("change", () => renderAutoEditor("globalRoute"));
+    document.getElementById("adminRouteServer").addEventListener("change", () => renderAutoEditor("adminRoute"));
+    document.getElementById("globalRouteDomain").addEventListener("change", () => syncAutoEditorFromExisting("globalRoute"));
+    document.getElementById("adminRouteDomain").addEventListener("change", () => syncAutoEditorFromExisting("adminRoute"));
+    document.getElementById("routeUser").addEventListener("change", () => syncAutoEditorFromExisting("adminRoute"));
+    document.getElementById("defaultRouteUser").addEventListener("change", () => syncAutoEditorFromExisting("userDefault"));
+    for (const prefix of ["globalDefault", "userDefault", "globalRoute", "adminRoute"]) {
+      document.getElementById(`${prefix}AutoText`).addEventListener("input", event => {
+        autoEditors[prefix] = parsePriorityText(event.target.value);
+        renderAutoEditor(prefix);
+      });
+    }
     document.getElementById("refreshPlan").addEventListener("click", async () => {
       const status = document.getElementById("planStatus");
       status.className = "status";
@@ -1125,6 +1569,26 @@ def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
 
+def parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def timestamp_age_seconds(value: str | None, *, reference: datetime | None = None) -> int | None:
+    parsed = parse_timestamp(value)
+    if parsed is None:
+        return None
+    reference = reference or datetime.now(timezone.utc)
+    return max(0, int((reference - parsed).total_seconds()))
+
+
 def load_inventory(path: Path) -> dict[str, Any]:
     with path.open("r", encoding="utf-8") as fh:
         return json.load(fh)
@@ -1132,9 +1596,11 @@ def load_inventory(path: Path) -> dict[str, Any]:
 
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = sqlite3.connect(db_path, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    conn.execute("PRAGMA journal_mode = WAL")
     return conn
 
 
@@ -1181,6 +1647,45 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS user_ip_routes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL,
+          target_cidr TEXT NOT NULL,
+          server_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(user_id, target_cidr),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY(server_id) REFERENCES servers(id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS global_ip_routes (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          target_cidr TEXT NOT NULL UNIQUE,
+          server_id TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          source TEXT NOT NULL DEFAULT '',
+          note TEXT NOT NULL DEFAULT '',
+          FOREIGN KEY(server_id) REFERENCES servers(id)
+        )
+        """
+    )
+    ensure_columns(
+        conn,
+        "global_ip_routes",
+        {
+            "source": "TEXT NOT NULL DEFAULT ''",
+            "note": "TEXT NOT NULL DEFAULT ''",
+        },
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS auto_candidate_policies (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           user_id TEXT NOT NULL DEFAULT '',
@@ -1190,6 +1695,80 @@ def migrate_db(conn: sqlite3.Connection) -> None:
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           UNIQUE(user_id, domain)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_devices (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          display_name TEXT NOT NULL,
+          platform TEXT NOT NULL DEFAULT '',
+          token_salt TEXT NOT NULL,
+          token_hash TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          last_seen_at TEXT,
+          last_ip TEXT,
+          last_user_agent TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_status (
+          device_id TEXT PRIMARY KEY,
+          status_json TEXT NOT NULL,
+          reported_at TEXT NOT NULL,
+          FOREIGN KEY(device_id) REFERENCES agent_devices(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS transport_configs (
+          server_id TEXT PRIMARY KEY,
+          transport_type TEXT NOT NULL,
+          interface_name TEXT NOT NULL,
+          config_json TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          source TEXT NOT NULL DEFAULT '',
+          version TEXT NOT NULL DEFAULT '',
+          expires_at TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_probe_jobs (
+          id TEXT PRIMARY KEY,
+          domain TEXT NOT NULL,
+          user_id TEXT NOT NULL DEFAULT '',
+          candidate_server_ids TEXT NOT NULL,
+          url TEXT,
+          status TEXT NOT NULL DEFAULT 'pending',
+          assigned_device_id TEXT NOT NULL DEFAULT '',
+          claimed_by_device_id TEXT NOT NULL DEFAULT '',
+          apply_cache INTEGER NOT NULL DEFAULT 1,
+          connect_timeout INTEGER NOT NULL DEFAULT 5,
+          max_time INTEGER NOT NULL DEFAULT 12,
+          priority INTEGER NOT NULL DEFAULT 100,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          result_json TEXT NOT NULL DEFAULT '{}',
+          winner_server_id TEXT,
+          score_ms INTEGER,
+          error TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          finished_at TEXT,
+          FOREIGN KEY(winner_server_id) REFERENCES servers(id) ON DELETE SET NULL
         )
         """
     )
@@ -1217,6 +1796,34 @@ def verify_password(password: str, salt_b64: str | None, hash_b64: str | None) -
     return hmac.compare_digest(expected, hash_b64)
 
 
+def generate_device_token() -> str:
+    return DEVICE_TOKEN_PREFIX + secrets.token_urlsafe(32)
+
+
+def hash_device_token(token: str, salt_b64: str | None = None) -> tuple[str, str]:
+    return hash_password(token, salt_b64)
+
+
+def verify_device_token(token: str, salt_b64: str | None, hash_b64: str | None) -> bool:
+    if not token or not salt_b64 or not hash_b64:
+        return False
+    _, expected = hash_device_token(token, salt_b64)
+    return hmac.compare_digest(expected, hash_b64)
+
+
+def normalize_device_id(value: str) -> str:
+    device_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", value.strip())
+    device_id = device_id.strip(".-")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{2,96}", device_id or ""):
+        raise ValueError("device id must be 2-96 chars: A-Z a-z 0-9 _ . -")
+    return device_id
+
+
+def normalize_platform(value: str | None) -> str:
+    platform = re.sub(r"[^A-Za-z0-9_.+-]+", "-", (value or "").strip().lower())
+    return platform[:40]
+
+
 def normalize_client_ip(value: str | None) -> str | None:
     raw = (value or "").strip()
     if not raw:
@@ -1230,6 +1837,19 @@ def normalize_client_ip(value: str | None) -> str | None:
     if any(part > 255 for part in parts):
         raise ValueError("client_ip octets must be 0-255")
     return raw
+
+
+def normalize_ipv4_cidr(value: str | None) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("target CIDR is required")
+    try:
+        network = ipaddress.ip_network(raw, strict=False)
+    except ValueError as exc:
+        raise ValueError(f"target must be an IPv4 address or CIDR: {raw}") from exc
+    if network.version != 4:
+        raise ValueError("target must be IPv4")
+    return str(network)
 
 
 def user_id_from_name(name: str) -> str:
@@ -1544,7 +2164,7 @@ def server_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
             """
             SELECT id, label, provider, kind, interface, geo_country, geo_region,
                    endpoint, switch_command, enabled, user_visible, admin_visible,
-                   metadata_json
+                   sort_order, metadata_json
             FROM servers
             """,
         )
@@ -1572,6 +2192,769 @@ def compact_server(server: dict[str, Any] | None) -> dict[str, Any] | None:
         "geo_region": server.get("geo_region"),
         "enabled": bool(server.get("enabled")),
     }
+
+
+def normalize_transport_type(value: str) -> str:
+    transport_type = (value or "").strip()
+    allowed = {"http-proxy-tun", "vless-reality-tun", "sing-box-json"}
+    if transport_type not in allowed:
+        raise ValueError(f"transport_type must be one of: {', '.join(sorted(allowed))}")
+    return transport_type
+
+
+def normalize_interface_name(value: str | None, *, default: str) -> str:
+    interface_name = (value or default or "").strip()
+    if not SAFE_INTERFACE_RE.match(interface_name):
+        raise ValueError("interface_name must contain only A-Z a-z 0-9 _ . -")
+    return interface_name
+
+
+def transport_config_rows(conn: sqlite3.Connection, *, enabled_only: bool = False) -> list[dict[str, Any]]:
+    where = "WHERE t.enabled = 1" if enabled_only else ""
+    entries = rows(
+        conn,
+        f"""
+        SELECT t.server_id, t.transport_type, t.interface_name, t.config_json,
+               t.enabled, t.source, t.version, t.expires_at, t.created_at, t.updated_at,
+               s.label, s.provider, s.kind
+        FROM transport_configs t
+        JOIN servers s ON s.id = t.server_id
+        {where}
+        ORDER BY s.sort_order, t.server_id
+        """,
+    )
+    for entry in entries:
+        try:
+            entry["config"] = json.loads(entry.pop("config_json") or "{}")
+        except json.JSONDecodeError:
+            entry["config"] = {}
+    return entries
+
+
+def transport_endpoint_summary(config: dict[str, Any]) -> str:
+    server = str(config.get("server") or "")
+    port = config.get("server_port")
+    if not server and isinstance(config.get("outbounds"), list):
+        for outbound in config["outbounds"]:
+            if not isinstance(outbound, dict):
+                continue
+            if outbound.get("tag") == "proxy-out" or outbound.get("type") in {"http", "socks", "vless"}:
+                server = str(outbound.get("server") or "")
+                port = outbound.get("server_port")
+                if server and port:
+                    break
+    return f"{server}:{port}" if server and port else ""
+
+
+def transport_config_summaries(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for item in transport_config_rows(conn):
+        result.append(
+            {
+                "server_id": item["server_id"],
+                "label": item.get("label") or item["server_id"],
+                "provider": item.get("provider") or "",
+                "kind": item.get("kind") or "",
+                "transport_type": item["transport_type"],
+                "interface_name": item["interface_name"],
+                "enabled": bool(item["enabled"]),
+                "source": item.get("source") or "",
+                "version": item.get("version") or "",
+                "expires_at": item.get("expires_at"),
+                "created_at": item.get("created_at"),
+                "updated_at": item.get("updated_at"),
+                "endpoint": transport_endpoint_summary(item.get("config") or {}),
+            }
+        )
+    return result
+
+
+def save_transport_config(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    server_id: str,
+    transport_type: str,
+    interface_name: str | None,
+    config: dict[str, Any],
+    enabled: bool = True,
+    source: str = "",
+    version: str = "",
+    expires_at: str | None = None,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    transport_type = normalize_transport_type(transport_type)
+    if not isinstance(config, dict) or not config:
+        raise ValueError("transport config must be a non-empty JSON object")
+    timestamp = now()
+    with connect(db_path) as conn:
+        server = row(conn, "SELECT id, interface FROM servers WHERE id = ?", (server_id,))
+        if not server:
+            raise ValueError(f"Unknown server_id: {server_id}")
+        interface = normalize_interface_name(interface_name, default=server.get("interface") or server_id)
+        conn.execute(
+            """
+            INSERT INTO transport_configs (
+              server_id, transport_type, interface_name, config_json, enabled,
+              source, version, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(server_id) DO UPDATE SET
+              transport_type = excluded.transport_type,
+              interface_name = excluded.interface_name,
+              config_json = excluded.config_json,
+              enabled = excluded.enabled,
+              source = excluded.source,
+              version = excluded.version,
+              expires_at = excluded.expires_at,
+              updated_at = excluded.updated_at
+            """,
+            (
+                server_id,
+                transport_type,
+                interface,
+                json.dumps(config, ensure_ascii=False, sort_keys=True),
+                int(enabled),
+                source,
+                version,
+                expires_at,
+                timestamp,
+                timestamp,
+            ),
+        )
+        saved = row(
+            conn,
+            """
+            SELECT server_id, transport_type, interface_name, config_json,
+                   enabled, source, version, expires_at, created_at, updated_at
+            FROM transport_configs
+            WHERE server_id = ?
+            """,
+            (server_id,),
+        )
+    assert saved is not None
+    saved["config"] = json.loads(saved.pop("config_json") or "{}")
+    return saved
+
+
+def delete_transport_config(db_path: Path, inventory_path: Path, *, server_id: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        existing = row(conn, "SELECT server_id FROM transport_configs WHERE server_id = ?", (server_id,))
+        if not existing:
+            raise ValueError(f"Transport config not found: {server_id}")
+        conn.execute("DELETE FROM transport_configs WHERE server_id = ?", (server_id,))
+    return {"ok": True, "server_id": server_id}
+
+
+VPNTYPE_PROVIDER_META: dict[str, dict[str, Any]] = {
+    "proxygb": {"country": "GB", "candidates": [142, 85]},
+    "proxyca": {"country": "CA", "candidates": [143, 82]},
+    "proxyfr": {"country": "FR", "candidates": [145, 81]},
+    "proxyby": {"country": "BY", "candidates": [146, 80]},
+    "proxyae": {"country": "AE", "candidates": [147, 79]},
+    "proxyhk": {"country": "HK", "candidates": [148, 78]},
+    "proxykz": {"country": "KZ", "candidates": [149, 77]},
+    "proxytr": {"country": "TR", "candidates": [150, 76]},
+    "proxyil": {"country": "IL", "candidates": [151, 75]},
+    "proxycz": {"country": "CZ", "candidates": [152, 74]},
+    "proxypl": {"country": "PL", "candidates": [153, 61]},
+    "proxyfi": {"country": "FI", "candidates": [154, 60]},
+    "proxynl": {"country": "NL", "candidates": [155, 59]},
+    "proxyal": {"country": "AL", "candidates": [156, 58]},
+    "proxyru": {"country": "RU", "candidates": [157, 57]},
+    "proxyus": {"country": "US", "candidates": [158, 56]},
+    "proxyde": {"country": "DE", "candidates": [159, 55]},
+}
+
+LOKVPN_PROFILE_MAP: dict[str, tuple[int, int]] = {
+    "smart1": (0, 1),
+    "de1": (1, 0),
+    "ru1": (2, 0),
+    "nl1": (3, 0),
+    "fr1": (4, 0),
+    "se1": (5, 0),
+    "smart2": (6, 1),
+    "de2": (7, 0),
+    "ru2": (8, 0),
+    "nl2": (9, 0),
+    "fr2": (10, 0),
+    "se2": (11, 0),
+}
+
+
+def read_secret_value(env_names: list[str], file_path: Path) -> str:
+    for env_name in env_names:
+        value = os.environ.get(env_name)
+        if value:
+            return value.strip()
+    if file_path.exists():
+        return file_path.read_text(encoding="utf-8").strip()
+    return ""
+
+
+def deterministic_tun_address(server_id: str, *, octet2: int) -> str:
+    digest = hashlib.sha256(server_id.encode("utf-8")).digest()
+    octet3 = 2 + digest[0] % 238
+    return f"172.{octet2}.{octet3}.1/30"
+
+
+def host_direct_route_rule(host: str) -> dict[str, Any]:
+    try:
+        ipaddress.ip_address(host)
+        return {"ip_cidr": [f"{host}/32"], "outbound": "direct"}
+    except ValueError:
+        return {"domain": [host], "outbound": "direct"}
+
+
+def make_http_proxy_tun_config(
+    *,
+    name: str,
+    proxy_host: str,
+    proxy_port: int,
+    proxy_type: str = "http",
+    interface_name: str | None = None,
+    mtu: int = 1400,
+) -> dict[str, Any]:
+    if proxy_type not in {"http", "socks"}:
+        raise ValueError("proxy_type must be http or socks")
+    iface = normalize_interface_name(interface_name, default=name)
+    return {
+        "log": {"level": "info", "timestamp": True},
+        "inbounds": [
+            {
+                "type": "tun",
+                "tag": f"{name}-tun",
+                "interface_name": iface,
+                "address": [deterministic_tun_address(name, octet2=41)],
+                "mtu": mtu,
+                "auto_route": False,
+                "strict_route": False,
+                "stack": "gvisor",
+            }
+        ],
+        "outbounds": [
+            {
+                "type": proxy_type,
+                "tag": "proxy-out",
+                "server": proxy_host,
+                "server_port": int(proxy_port),
+            },
+            {"type": "direct", "tag": "direct"},
+            {"type": "block", "tag": "block"},
+        ],
+        "route": {
+            "auto_detect_interface": True,
+            "rules": [host_direct_route_rule(proxy_host)],
+            "final": "proxy-out",
+        },
+    }
+
+
+def make_vless_reality_tun_config(
+    *,
+    name: str,
+    server: str,
+    server_port: int,
+    uuid: str,
+    flow: str,
+    sni: str,
+    public_key: str,
+    short_id: str,
+    interface_name: str | None = None,
+    mtu: int = 1400,
+) -> dict[str, Any]:
+    iface = normalize_interface_name(interface_name, default=name)
+    return {
+        "log": {"level": "info", "timestamp": True},
+        "inbounds": [
+            {
+                "type": "tun",
+                "tag": f"{name}-tun",
+                "interface_name": iface,
+                "address": [deterministic_tun_address(name, octet2=42)],
+                "mtu": mtu,
+                "auto_route": False,
+                "strict_route": False,
+                "stack": "gvisor",
+            }
+        ],
+        "outbounds": [
+            {
+                "type": "vless",
+                "tag": "proxy-out",
+                "server": server,
+                "server_port": int(server_port),
+                "uuid": uuid,
+                "flow": flow,
+                "tls": {
+                    "enabled": True,
+                    "server_name": sni,
+                    "utls": {"enabled": True, "fingerprint": "chrome"},
+                    "reality": {"enabled": True, "public_key": public_key, "short_id": short_id},
+                },
+            },
+            {"type": "direct", "tag": "direct"},
+            {"type": "block", "tag": "block"},
+        ],
+        "route": {
+            "auto_detect_interface": True,
+            "rules": [host_direct_route_rule(server)],
+            "final": "proxy-out",
+        },
+    }
+
+
+def http_request_bytes(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    body: bytes | None = None,
+    timeout: int = 30,
+    proxy_url: str | None = None,
+) -> bytes:
+    request = Request(url, data=body, headers=headers or {}, method=method)
+    opener = build_opener(ProxyHandler({"http": proxy_url, "https": proxy_url})) if proxy_url else None
+    if opener:
+        with opener.open(request, timeout=timeout) as response:
+            return response.read()
+    with urlopen(request, timeout=timeout) as response:
+        return response.read()
+
+
+def multipart_form_data(fields: dict[str, Any]) -> tuple[bytes, str]:
+    boundary = "----cudy-control-" + secrets.token_hex(12)
+    chunks: list[bytes] = []
+    for key, value in fields.items():
+        chunks.append(f"--{boundary}\r\n".encode("ascii"))
+        chunks.append(f'Content-Disposition: form-data; name="{key}"\r\n\r\n'.encode("utf-8"))
+        chunks.append(str(value).encode("utf-8"))
+        chunks.append(b"\r\n")
+    chunks.append(f"--{boundary}--\r\n".encode("ascii"))
+    return b"".join(chunks), f"multipart/form-data; boundary={boundary}"
+
+
+def vpntype_post(*, auth: str, url: str, fields: dict[str, Any], timeout: int = 30) -> Any:
+    body, content_type = multipart_form_data(fields)
+    raw = http_request_bytes(
+        url,
+        method="POST",
+        headers={"Authorization": auth, "Content-Type": content_type},
+        body=body,
+        timeout=timeout,
+    )
+    return json.loads(raw.decode("utf-8-sig"))
+
+
+def vpntype_candidate_ids(list_json: Any, *, country: str, base_candidates: list[int]) -> list[int]:
+    ids: list[int] = []
+    for candidate in base_candidates:
+        if int(candidate) not in ids:
+            ids.append(int(candidate))
+    if isinstance(list_json, list):
+        for item in list_json:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("country_id") or "") != country or not item.get("id"):
+                continue
+            candidate_id = int(item["id"])
+            if candidate_id not in ids:
+                ids.append(candidate_id)
+    return ids
+
+
+def test_http_proxy_endpoint(
+    *,
+    server: str,
+    port: int,
+    url: str,
+    connect_timeout: int,
+    max_time: int,
+) -> bool:
+    del connect_timeout
+    try:
+        raw = http_request_bytes(
+            url,
+            proxy_url=f"http://{server}:{port}",
+            timeout=max(3, max_time),
+        )
+        return bool(raw)
+    except Exception:
+        return False
+
+
+def refresh_vpntype_transport(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    server_id: str,
+    auth: str = "",
+    uuid: str = "",
+    proxy_list_json: Any | None = None,
+    proxy_check_url: str = "https://ifconfig.me/ip",
+    skip_verify: bool = False,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    auth = auth or read_secret_value(["VPNTYPE_AUTH_DEFAULT"], DEFAULT_VPNTYPE_AUTH_FILE)
+    uuid = uuid or read_secret_value(["VPNTYPE_UUID_DEFAULT"], DEFAULT_VPNTYPE_UUID_FILE)
+    if not auth or not uuid:
+        raise ValueError("VPNtype credentials are not configured. Set env or secrets/vpntype_auth.txt and secrets/vpntype_uuid.txt.")
+    meta = VPNTYPE_PROVIDER_META.get(server_id)
+    if not meta:
+        raise ValueError(f"Unknown VPNtype provider: {server_id}")
+    if proxy_list_json is None:
+        proxy_list_json = vpntype_post(
+            auth=auth,
+            url="https://vpntypedev.com/api/chrome/proxy-list",
+            fields={"version": "1.1.1", "uuid": uuid},
+        )
+    candidates = vpntype_candidate_ids(
+        proxy_list_json,
+        country=str(meta["country"]),
+        base_candidates=[int(item) for item in meta["candidates"]],
+    )
+    selected: dict[str, Any] | None = None
+    failures: list[dict[str, Any]] = []
+    for candidate_id in candidates:
+        try:
+            reply = vpntype_post(
+                auth=auth,
+                url="https://vpntypedev.com/api/chrome/proxy-credentials",
+                fields={"version": "1.1.1", "uuid": uuid, "proxy_id": candidate_id},
+            )
+            credentials = str(reply.get("credentials") or "")
+            match = re.match(r"^([^:]+):([0-9]+)$", credentials)
+            if not match:
+                failures.append({"proxy_id": candidate_id, "error": "bad credentials reply"})
+                continue
+            server = match.group(1)
+            port = int(match.group(2))
+            if skip_verify or test_http_proxy_endpoint(
+                server=server,
+                port=port,
+                url=proxy_check_url,
+                connect_timeout=connect_timeout,
+                max_time=max_time,
+            ):
+                selected = {"server": server, "port": port, "proxy_id": candidate_id}
+                break
+            failures.append({"proxy_id": candidate_id, "endpoint": f"{server}:{port}", "error": "verify failed"})
+        except Exception as exc:
+            failures.append({"proxy_id": candidate_id, "error": str(exc)})
+    if not selected:
+        raise ValueError(f"No working VPNtype endpoint for {server_id}. Candidates: {','.join(str(x) for x in candidates)}")
+    config = {
+        "proxy_type": "http",
+        "server": str(selected["server"]),
+        "server_port": int(selected["port"]),
+    }
+    saved = save_transport_config(
+        db_path,
+        inventory_path,
+        server_id=server_id,
+        transport_type="http-proxy-tun",
+        interface_name=server_id,
+        config=config,
+        enabled=True,
+        source="vpntype-api",
+        version=f"proxy_id={selected['proxy_id']}",
+    )
+    return {
+        "server_id": server_id,
+        "transport_type": "http-proxy-tun",
+        "endpoint": f"{selected['server']}:{selected['port']}",
+        "proxy_id": selected["proxy_id"],
+        "candidate_ids": candidates,
+        "failures": failures,
+        "updated_at": saved["updated_at"],
+    }
+
+
+def refresh_vpntype_transports(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    server_ids: list[str] | None = None,
+    auth: str = "",
+    uuid: str = "",
+    skip_verify: bool = False,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        available = [
+            item["id"]
+            for item in rows(
+                conn,
+                "SELECT id FROM servers WHERE provider = 'vpntype' AND kind = 'http-proxy-tun' AND enabled = 1 ORDER BY sort_order, id",
+            )
+        ]
+    selected_ids = server_ids or available
+    auth = auth or read_secret_value(["VPNTYPE_AUTH_DEFAULT"], DEFAULT_VPNTYPE_AUTH_FILE)
+    uuid = uuid or read_secret_value(["VPNTYPE_UUID_DEFAULT"], DEFAULT_VPNTYPE_UUID_FILE)
+    refreshed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    if not auth or not uuid:
+        return {
+            "provider": "vpntype",
+            "refreshed": [],
+            "failed": [{"server_id": server_id, "error": "VPNtype credentials are not configured"} for server_id in selected_ids],
+        }
+    try:
+        proxy_list_json = vpntype_post(
+            auth=auth,
+            url="https://vpntypedev.com/api/chrome/proxy-list",
+            fields={"version": "1.1.1", "uuid": uuid},
+        )
+    except Exception as exc:
+        return {
+            "provider": "vpntype",
+            "refreshed": [],
+            "failed": [{"server_id": server_id, "error": f"proxy-list failed: {exc}"} for server_id in selected_ids],
+        }
+    for server_id in selected_ids:
+        try:
+            refreshed.append(
+                refresh_vpntype_transport(
+                    db_path,
+                    inventory_path,
+                    server_id=server_id,
+                    auth=auth,
+                    uuid=uuid,
+                    proxy_list_json=proxy_list_json,
+                    skip_verify=skip_verify,
+                    connect_timeout=connect_timeout,
+                    max_time=max_time,
+                )
+            )
+        except Exception as exc:
+            failed.append({"server_id": server_id, "error": str(exc)})
+    return {"provider": "vpntype", "refreshed": refreshed, "failed": failed}
+
+
+def fetch_lokvpn_subscription(sub_url: str) -> Any:
+    headers = {
+        "X-App-Version": "2.7.0",
+        "X-Device-Locale": "RU",
+        "X-Device-OS": "Windows",
+        "X-Device-model": "Ryzen7Pro4750G_x86_64",
+        "X-HWID": "3dadf61c-af37-4ea7-a8d3-ce044ce069d7",
+        "X-Ver-OS": "11_10.0.26200",
+    }
+    raw = http_request_bytes(sub_url, headers=headers, timeout=60)
+    return json.loads(raw.decode("utf-8-sig"))
+
+
+def lokvpn_profile_from_server_id(server_id: str) -> str:
+    profile = server_id.removeprefix("lokvpn-")
+    if profile not in LOKVPN_PROFILE_MAP:
+        raise ValueError(f"Unknown LokVPN profile server_id: {server_id}")
+    return profile
+
+
+def refresh_lokvpn_transport(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    server_id: str,
+    sub_url: str = "",
+    subscription: Any | None = None,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    profile = lokvpn_profile_from_server_id(server_id)
+    sub_url = sub_url or read_secret_value(["LOKVPN_SUB_URL", "SUB_URL"], DEFAULT_LOKVPN_SUB_URL_FILE)
+    if subscription is None:
+        if not sub_url:
+            raise ValueError("LokVPN subscription URL is not configured. Set LOKVPN_SUB_URL/SUB_URL or secrets/lokvpn_sub_url.txt.")
+        subscription = fetch_lokvpn_subscription(sub_url)
+    idx, outbound_idx = LOKVPN_PROFILE_MAP[profile]
+    try:
+        outbound = subscription[idx]["outbounds"][outbound_idx]
+        vnext = outbound["settings"]["vnext"][0]
+        user = vnext["users"][0]
+        reality = outbound["streamSettings"]["realitySettings"]
+        parsed = {
+            "server": vnext["address"],
+            "server_port": int(vnext["port"]),
+            "uuid": user["id"],
+            "flow": user["flow"],
+            "sni": reality["serverName"],
+            "public_key": reality["publicKey"],
+            "short_id": reality["shortId"],
+        }
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ValueError(f"Could not parse LokVPN profile {profile}") from exc
+    if any(not parsed[key] for key in ("server", "server_port", "uuid", "flow", "sni", "public_key", "short_id")):
+        raise ValueError(f"Could not parse LokVPN profile {profile}")
+    config = {
+        "server": str(parsed["server"]),
+        "server_port": int(parsed["server_port"]),
+        "uuid": str(parsed["uuid"]),
+        "flow": str(parsed["flow"]),
+        "tls": {
+            "enabled": True,
+            "server_name": str(parsed["sni"]),
+            "utls": {"enabled": True, "fingerprint": "chrome"},
+            "reality": {
+                "enabled": True,
+                "public_key": str(parsed["public_key"]),
+                "short_id": str(parsed["short_id"]),
+            },
+        },
+    }
+    saved = save_transport_config(
+        db_path,
+        inventory_path,
+        server_id=server_id,
+        transport_type="vless-reality-tun",
+        interface_name=server_id,
+        config=config,
+        enabled=True,
+        source="lokvpn-subscription",
+        version=profile,
+    )
+    return {
+        "server_id": server_id,
+        "transport_type": "vless-reality-tun",
+        "profile": profile,
+        "endpoint": f"{parsed['server']}:{parsed['server_port']}",
+        "updated_at": saved["updated_at"],
+    }
+
+
+def refresh_lokvpn_transports(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    server_ids: list[str] | None = None,
+    sub_url: str = "",
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        available = [
+            item["id"]
+            for item in rows(
+                conn,
+                "SELECT id FROM servers WHERE provider = 'lokvpn' AND kind = 'sing-box-profile' AND enabled = 1 ORDER BY sort_order, id",
+            )
+        ]
+    selected_ids = server_ids or available
+    sub_url = sub_url or read_secret_value(["LOKVPN_SUB_URL", "SUB_URL"], DEFAULT_LOKVPN_SUB_URL_FILE)
+    refreshed: list[dict[str, Any]] = []
+    failed: list[dict[str, Any]] = []
+    if not sub_url:
+        return {
+            "provider": "lokvpn",
+            "refreshed": [],
+            "failed": [{"server_id": server_id, "error": "LokVPN subscription URL is not configured"} for server_id in selected_ids],
+        }
+    try:
+        subscription = fetch_lokvpn_subscription(sub_url)
+    except Exception as exc:
+        return {
+            "provider": "lokvpn",
+            "refreshed": [],
+            "failed": [{"server_id": server_id, "error": f"subscription fetch failed: {exc}"} for server_id in selected_ids],
+        }
+    for server_id in selected_ids:
+        try:
+            refreshed.append(
+                refresh_lokvpn_transport(
+                    db_path,
+                    inventory_path,
+                    server_id=server_id,
+                    sub_url=sub_url,
+                    subscription=subscription,
+                )
+            )
+        except Exception as exc:
+            failed.append({"server_id": server_id, "error": str(exc)})
+    return {"provider": "lokvpn", "refreshed": refreshed, "failed": failed}
+
+
+def refresh_provider_transports(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    provider: str,
+    server_ids: list[str] | None = None,
+    skip_verify: bool = False,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+) -> dict[str, Any]:
+    if provider == "vpntype":
+        return refresh_vpntype_transports(
+            db_path,
+            inventory_path,
+            server_ids=server_ids,
+            skip_verify=skip_verify,
+            connect_timeout=connect_timeout,
+            max_time=max_time,
+        )
+    if provider == "lokvpn":
+        return refresh_lokvpn_transports(db_path, inventory_path, server_ids=server_ids)
+    if provider == "all":
+        vpntype_ids = [item for item in server_ids or [] if item.startswith("proxy")] if server_ids is not None else None
+        lokvpn_ids = [item for item in server_ids or [] if item.startswith("lokvpn-")] if server_ids is not None else None
+        results = [
+            (
+                refresh_vpntype_transports(
+                    db_path,
+                    inventory_path,
+                    server_ids=vpntype_ids,
+                    skip_verify=skip_verify,
+                    connect_timeout=connect_timeout,
+                    max_time=max_time,
+                )
+                if vpntype_ids is None or vpntype_ids
+                else {"provider": "vpntype", "refreshed": [], "failed": []}
+            ),
+            (
+                refresh_lokvpn_transports(
+                    db_path,
+                    inventory_path,
+                    server_ids=lokvpn_ids,
+                )
+                if lokvpn_ids is None or lokvpn_ids
+                else {"provider": "lokvpn", "refreshed": [], "failed": []}
+            ),
+        ]
+        return {"provider": "all", "results": results}
+    raise ValueError("provider must be vpntype, lokvpn, or all")
+
+
+def build_transport_plan(
+    conn: sqlite3.Connection,
+    *,
+    server_ids: set[str],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    if not server_ids:
+        return []
+    configs = {item["server_id"]: item for item in transport_config_rows(conn, enabled_only=True)}
+    plan: list[dict[str, Any]] = []
+    for server_id in sorted(server_ids):
+        if server_id in {"", "auto", "direct"}:
+            continue
+        config = configs.get(server_id)
+        if not config:
+            continue
+        plan.append(
+            {
+                "server_id": server_id,
+                "transport_type": config["transport_type"],
+                "interface_name": config["interface_name"],
+                "config": config["config"],
+                "source": config.get("source") or "",
+                "version": config.get("version") or "",
+                "expires_at": config.get("expires_at"),
+                "updated_at": config.get("updated_at"),
+            }
+        )
+    return plan
 
 
 def auto_cache_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
@@ -1644,8 +3027,8 @@ def resolve_auto_candidate_policy(
 ) -> dict[str, Any] | None:
     candidates = [
         (user_id, domain),
-        ("", domain),
         (user_id, ""),
+        ("", domain),
         ("", ""),
     ]
     for candidate_user_id, candidate_domain in candidates:
@@ -1742,6 +3125,39 @@ def delete_auto_candidate_policy(
     }
 
 
+def sync_route_auto_candidate_policy(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str | None,
+    domain: str,
+    server_id: str,
+    candidate_server_ids: Any,
+) -> dict[str, Any] | None:
+    if server_id != "auto":
+        return delete_auto_candidate_policy(
+            db_path,
+            inventory_path,
+            user_id=user_id,
+            domain=domain,
+        )
+    if candidate_server_ids in (None, "", []):
+        return delete_auto_candidate_policy(
+            db_path,
+            inventory_path,
+            user_id=user_id,
+            domain=domain,
+        )
+    return save_auto_candidate_policy(
+        db_path,
+        inventory_path,
+        user_id=user_id,
+        domain=domain,
+        candidate_server_ids=candidate_server_ids,
+        enabled=True,
+    )
+
+
 def resolve_route_server(
     *,
     domain: str,
@@ -1778,6 +3194,33 @@ def resolve_route_server(
     return selected_server_id, cached
 
 
+def auto_cache_key_for_ip_route(target_cidr: str) -> str:
+    normalized = normalize_ipv4_cidr(target_cidr)
+    return "ip-" + normalized.replace(".", "-").replace("/", "-") + ".iproute.local"
+
+
+def probe_url_from_note(note: str) -> str | None:
+    for token in (note or "").replace(",", " ").split():
+        if token.startswith("probe="):
+            value = token.split("=", 1)[1].strip()
+            if value:
+                return value
+    return None
+
+
+def default_probe_url_for_cidr(target_cidr: str) -> str:
+    network = ipaddress.ip_network(normalize_ipv4_cidr(target_cidr), strict=False)
+    if network.num_addresses > 2:
+        target = network.network_address + 1
+    else:
+        target = network.network_address
+    return f"tcp://{target}:443"
+
+
+def ip_route_probe_url(target_cidr: str, note: str = "") -> str:
+    return probe_url_from_note(note) or default_probe_url_for_cidr(target_cidr)
+
+
 def save_auto_cache_entry(
     db_path: Path,
     inventory_path: Path,
@@ -1786,6 +3229,7 @@ def save_auto_cache_entry(
     selected_server_id: str,
     score_ms: int | None,
     status: str,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     domain = normalize_domain(domain)
@@ -1797,20 +3241,22 @@ def save_auto_cache_entry(
     if score_ms is not None and score_ms < 0:
         raise ValueError("score_ms must be zero or positive")
     timestamp = now()
+    metadata_json = json.dumps(metadata or {}, ensure_ascii=False, sort_keys=True)
     with connect(db_path) as conn:
         validate_server_id(conn, selected_server_id, require_user_visible=True)
         conn.execute(
             """
             INSERT INTO domain_auto_cache (
               domain, selected_server_id, score_ms, status, checked_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, '{}')
+            ) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(domain)
             DO UPDATE SET selected_server_id = excluded.selected_server_id,
                           score_ms = excluded.score_ms,
                           status = excluded.status,
-                          checked_at = excluded.checked_at
+                          checked_at = excluded.checked_at,
+                          metadata_json = excluded.metadata_json
             """,
-            (domain, selected_server_id, score_ms, status, timestamp),
+            (domain, selected_server_id, score_ms, status, timestamp, metadata_json),
         )
     return {
         "ok": True,
@@ -1819,6 +3265,7 @@ def save_auto_cache_entry(
         "score_ms": score_ms,
         "status": status,
         "checked_at": timestamp,
+        "metadata": metadata or {},
     }
 
 
@@ -1828,6 +3275,777 @@ def delete_auto_cache_entry(db_path: Path, inventory_path: Path, domain: str) ->
     with connect(db_path) as conn:
         conn.execute("DELETE FROM domain_auto_cache WHERE domain = ?", (domain,))
     return {"ok": True, "domain": domain}
+
+
+def probe_job_row_to_dict(item: dict[str, Any]) -> dict[str, Any]:
+    result = dict(item)
+    for key in ("candidate_server_ids",):
+        try:
+            result[key] = json.loads(result.get(key) or "[]")
+        except json.JSONDecodeError:
+            result[key] = []
+    try:
+        result["result"] = json.loads(result.pop("result_json") or "{}")
+    except json.JSONDecodeError:
+        result["result"] = {}
+    result["apply_cache"] = bool(result.get("apply_cache"))
+    return result
+
+
+def create_probe_job(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    candidate_server_ids: Any,
+    user_id: str = "",
+    url: str | None = None,
+    assigned_device_id: str = "",
+    apply_cache: bool = True,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+    priority: int = 100,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_domain = normalize_domain(domain)
+    normalized_user_id = (user_id or "").strip()
+    assigned_device_id = (assigned_device_id or "").strip()
+    candidates = parse_candidate_server_ids(candidate_server_ids)
+    if connect_timeout < 1 or max_time < 1:
+        raise ValueError("probe timeouts must be positive")
+    job_id = "probe_" + secrets.token_urlsafe(18)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if normalized_user_id and row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        if assigned_device_id and row(conn, "SELECT id FROM agent_devices WHERE id = ?", (assigned_device_id,)) is None:
+            raise ValueError(f"Unknown agent device: {assigned_device_id}")
+        for server_id in candidates:
+            validate_server_id(conn, server_id, require_user_visible=True)
+        conn.execute(
+            """
+            INSERT INTO agent_probe_jobs (
+              id, domain, user_id, candidate_server_ids, url, status,
+              assigned_device_id, apply_cache, connect_timeout, max_time,
+              priority, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                job_id,
+                normalized_domain,
+                normalized_user_id,
+                json.dumps(candidates, ensure_ascii=False),
+                url or None,
+                assigned_device_id,
+                int(bool(apply_cache)),
+                int(connect_timeout),
+                int(max_time),
+                int(priority),
+                timestamp,
+                timestamp,
+            ),
+        )
+        saved = row(conn, "SELECT * FROM agent_probe_jobs WHERE id = ?", (job_id,))
+    assert saved is not None
+    return probe_job_row_to_dict(saved)
+
+
+def list_probe_jobs(db_path: Path, inventory_path: Path, *, limit: int = 50) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        entries = rows(
+            conn,
+            """
+            SELECT *
+            FROM agent_probe_jobs
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 500)),),
+        )
+    return [probe_job_row_to_dict(item) for item in entries]
+
+
+def reset_probe_jobs(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    status: str = "running",
+    older_than_seconds: int = 0,
+    domain: str = "",
+    assigned_device_id: str = "",
+    target_status: str = "pending",
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    status = status.strip().lower()
+    target_status = target_status.strip().lower()
+    if status not in {"pending", "running", "failed", "done"}:
+        raise ValueError("status must be one of: pending, running, failed, done")
+    if target_status not in {"pending", "failed"}:
+        raise ValueError("target-status must be pending or failed")
+    filters = ["status = ?"]
+    params: list[Any] = [status]
+    if domain:
+        filters.append("domain = ?")
+        params.append(normalize_domain(domain))
+    if assigned_device_id:
+        filters.append("assigned_device_id = ?")
+        params.append(assigned_device_id)
+    if older_than_seconds > 0:
+        cutoff_epoch = datetime.now(timezone.utc).replace(microsecond=0).timestamp() - older_than_seconds
+        cutoff = datetime.fromtimestamp(cutoff_epoch, timezone.utc).replace(microsecond=0).isoformat()
+        filters.append("COALESCE(started_at, updated_at, created_at) < ?")
+        params.append(cutoff)
+    where_sql = " AND ".join(filters)
+    timestamp = now()
+    with connect(db_path) as conn:
+        matched = conn.execute(f"SELECT count(*) FROM agent_probe_jobs WHERE {where_sql}", params).fetchone()[0]
+        if target_status == "pending":
+            conn.execute(
+                f"""
+                UPDATE agent_probe_jobs
+                SET status = 'pending',
+                    claimed_by_device_id = '',
+                    started_at = NULL,
+                    finished_at = NULL,
+                    error = NULL,
+                    updated_at = ?
+                WHERE {where_sql}
+                """,
+                [timestamp, *params],
+            )
+        else:
+            conn.execute(
+                f"""
+                UPDATE agent_probe_jobs
+                SET status = 'failed',
+                    error = 'reset by operator',
+                    finished_at = ?,
+                    updated_at = ?
+                WHERE {where_sql}
+                """,
+                [timestamp, timestamp, *params],
+            )
+    return {
+        "ok": True,
+        "matched": int(matched),
+        "from_status": status,
+        "target_status": target_status,
+        "older_than_seconds": int(older_than_seconds),
+        "domain": domain,
+        "assigned_device_id": assigned_device_id,
+    }
+
+
+def claim_agent_probe_jobs(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    device: dict[str, Any],
+    limit: int = 2,
+) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    timestamp = now()
+    max_limit = max(1, min(int(limit), 10))
+    with connect(db_path) as conn:
+        entries = rows(
+            conn,
+            """
+            SELECT *
+            FROM agent_probe_jobs
+            WHERE status = 'pending'
+              AND (assigned_device_id = '' OR assigned_device_id = ?)
+            ORDER BY priority ASC, created_at ASC
+            LIMIT ?
+            """,
+            (device["id"], max_limit),
+        )
+        claimed: list[dict[str, Any]] = []
+        for item in entries:
+            cursor = conn.execute(
+                """
+                UPDATE agent_probe_jobs
+                SET status = 'running',
+                    claimed_by_device_id = ?,
+                    attempts = attempts + 1,
+                    started_at = ?,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (device["id"], timestamp, timestamp, item["id"]),
+            )
+            if cursor.rowcount == 1:
+                saved = row(conn, "SELECT * FROM agent_probe_jobs WHERE id = ?", (item["id"],))
+                if saved:
+                    claimed.append(probe_job_row_to_dict(saved))
+    return claimed
+
+
+def complete_agent_probe_job(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    device: dict[str, Any],
+    job_id: str,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    timestamp = now()
+    with connect(db_path) as conn:
+        job = row(conn, "SELECT * FROM agent_probe_jobs WHERE id = ?", (job_id,))
+        if not job:
+            raise ValueError(f"Unknown probe job: {job_id}")
+        if job.get("claimed_by_device_id") not in ("", device["id"]):
+            raise PermissionError("Probe job is claimed by another device")
+        winner = result.get("winner") if isinstance(result.get("winner"), dict) else None
+        winner_server_id = str((winner or {}).get("server_id") or "")
+        score_ms_raw = (winner or {}).get("time_total_ms") or (winner or {}).get("elapsed_ms")
+        score_ms = int(score_ms_raw) if score_ms_raw not in (None, "") else None
+        status = "done" if winner_server_id else "failed"
+        error = "" if winner_server_id else "no working candidate"
+        if winner_server_id:
+            validate_server_id(conn, winner_server_id, require_user_visible=True)
+        conn.execute(
+            """
+            UPDATE agent_probe_jobs
+            SET status = ?,
+                result_json = ?,
+                winner_server_id = ?,
+                score_ms = ?,
+                error = ?,
+                finished_at = ?,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                status,
+                json.dumps(result, ensure_ascii=False, sort_keys=True),
+                winner_server_id or None,
+                score_ms,
+                error,
+                timestamp,
+                timestamp,
+                job_id,
+            ),
+        )
+        updated = row(conn, "SELECT * FROM agent_probe_jobs WHERE id = ?", (job_id,))
+    if winner_server_id and bool(job.get("apply_cache")):
+        save_auto_cache_entry(
+            db_path,
+            inventory_path,
+            domain=job["domain"],
+            selected_server_id=winner_server_id,
+            score_ms=score_ms,
+            status="agent_probe",
+            metadata={
+                "job_id": job_id,
+                "device_id": device["id"],
+                "user_id": job.get("user_id") or "",
+                "url": result.get("url") or job.get("url") or f"https://{job['domain']}/",
+                "candidate_server_ids": result.get("candidate_server_ids") or [],
+            },
+        )
+    assert updated is not None
+    return probe_job_row_to_dict(updated)
+
+
+def active_agent_rows(conn: sqlite3.Connection, *, agent_stale_seconds: int) -> list[dict[str, Any]]:
+    reference = datetime.now(timezone.utc)
+    entries = rows(
+        conn,
+        """
+        SELECT d.id AS device_id, d.user_id, d.display_name, d.platform,
+               d.enabled, d.last_seen_at, s.reported_at, s.status_json
+        FROM agent_devices d
+        LEFT JOIN agent_status s ON s.device_id = d.id
+        WHERE d.enabled = 1
+        ORDER BY COALESCE(s.reported_at, d.last_seen_at) DESC, d.id
+        """,
+    )
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        seen_at = entry.get("reported_at") or entry.get("last_seen_at")
+        age = timestamp_age_seconds(seen_at, reference=reference)
+        if age is None or age > agent_stale_seconds:
+            continue
+        try:
+            entry["status"] = json.loads(entry.pop("status_json") or "{}")
+        except json.JSONDecodeError:
+            entry["status"] = {}
+        entry["age_seconds"] = age
+        result.append(entry)
+    return result
+
+
+def agent_reports_domain(agent: dict[str, Any], *, domain: str, user_id: str) -> bool:
+    status = agent.get("status") or {}
+    if user_id and agent.get("user_id") != user_id:
+        return False
+    for route in status.get("domain_routes") or []:
+        if str(route.get("domain") or "").lower() == domain:
+            return True
+    for route in status.get("ip_routes") or []:
+        if str(route.get("auto_cache_key") or "").lower() == domain:
+            return True
+    return False
+
+
+def agent_can_probe(agent: dict[str, Any]) -> bool:
+    status = agent.get("status") or {}
+    capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
+    if "can_probe" in capabilities:
+        return bool(capabilities.get("can_probe"))
+    platform_name = str(status.get("platform") or agent.get("platform") or "").lower()
+    if platform_name == "android":
+        return False
+    return True
+
+
+def choose_probe_agent(
+    agents: list[dict[str, Any]],
+    *,
+    domain: str,
+    user_id: str,
+) -> str:
+    probe_agents = [agent for agent in agents if agent_can_probe(agent)]
+    for agent in probe_agents:
+        if agent_reports_domain(agent, domain=domain, user_id=user_id):
+            return str(agent["device_id"])
+    if user_id:
+        for agent in probe_agents:
+            if agent.get("user_id") == user_id:
+                return str(agent["device_id"])
+    return ""
+
+
+def auto_probe_domain_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    entries = rows(
+        conn,
+        """
+        SELECT '' AS user_id, domain, NULL AS target_cidr, NULL AS note, updated_at, 'global' AS source
+        FROM global_domain_routes
+        WHERE enabled = 1 AND server_id = 'auto'
+        UNION ALL
+        SELECT user_id, domain, NULL AS target_cidr, NULL AS note, updated_at, 'user' AS source
+        FROM user_domain_routes
+        WHERE enabled = 1 AND server_id = 'auto'
+        UNION ALL
+        SELECT '' AS user_id, target_cidr AS domain, target_cidr, note, updated_at, 'global_ip' AS source
+        FROM global_ip_routes
+        WHERE enabled = 1 AND server_id = 'auto'
+        UNION ALL
+        SELECT user_id, target_cidr AS domain, target_cidr, '' AS note, updated_at, 'user_ip' AS source
+        FROM user_ip_routes
+        WHERE enabled = 1 AND server_id = 'auto'
+        ORDER BY domain, user_id
+        """,
+    )
+    seen: set[tuple[str, str]] = set()
+    result: list[dict[str, Any]] = []
+    for entry in entries:
+        target_cidr = entry.get("target_cidr") or ""
+        if target_cidr:
+            entry["domain"] = auto_cache_key_for_ip_route(target_cidr)
+            entry["url"] = ip_route_probe_url(target_cidr, entry.get("note") or "")
+        key = (entry.get("user_id") or "", entry["domain"])
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(entry)
+    return result
+
+
+def create_auto_probe_jobs_once(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    cache_ttl_seconds: int = 3600,
+    job_stale_seconds: int = 900,
+    agent_stale_seconds: int = 600,
+    max_jobs: int = 5,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    reference = datetime.now(timezone.utc)
+    stale_started_before = (reference.replace(microsecond=0).timestamp() - job_stale_seconds)
+    stale_cutoff = datetime.fromtimestamp(stale_started_before, timezone.utc).replace(microsecond=0).isoformat()
+    created: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    job_requests: list[dict[str, Any]] = []
+    active_agent_count = 0
+    planned_domains: set[str] = set()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE agent_probe_jobs
+            SET status = 'pending',
+                claimed_by_device_id = '',
+                started_at = NULL,
+                updated_at = ?
+            WHERE status = 'running'
+              AND COALESCE(started_at, updated_at) < ?
+            """,
+            (now(), stale_cutoff),
+        )
+        servers = server_map(conn)
+        default_candidates = default_auto_candidate_ids(servers)
+        agents = active_agent_rows(conn, agent_stale_seconds=agent_stale_seconds)
+        active_agent_count = len(agents)
+        cache = auto_cache_map(conn)
+        for spec in auto_probe_domain_rows(conn):
+            if len(job_requests) >= max_jobs:
+                break
+            domain = spec["domain"]
+            user_id = spec.get("user_id") or ""
+            if domain in planned_domains:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": "already_planned"})
+                continue
+            existing_job = row(
+                conn,
+                """
+                SELECT id, status
+                FROM agent_probe_jobs
+                WHERE domain = ? AND status IN ('pending', 'running')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (domain,),
+            )
+            if existing_job:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": f"job_{existing_job['status']}", "job_id": existing_job["id"]})
+                continue
+            cached = cache.get(domain)
+            cached_age = timestamp_age_seconds((cached or {}).get("checked_at"), reference=reference)
+            if cached and cached.get("selected_server_id") and cached_age is not None and cached_age < cache_ttl_seconds:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": "cache_fresh", "age_seconds": cached_age})
+                continue
+            policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
+            candidates = list((policy or {}).get("candidate_server_ids") or default_candidates)
+            candidates = [server_id for server_id in candidates if server_id in servers and servers[server_id].get("enabled") and servers[server_id].get("user_visible")]
+            if not candidates:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": "no_candidates"})
+                continue
+            assigned_device_id = choose_probe_agent(agents, domain=domain, user_id=user_id)
+            if not assigned_device_id and not agents:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": "no_active_agent"})
+                continue
+            job_requests.append(
+                {
+                    "domain": domain,
+                    "url": spec.get("url") or None,
+                    "candidate_server_ids": candidates,
+                    "user_id": user_id,
+                    "assigned_device_id": assigned_device_id,
+                }
+            )
+            planned_domains.add(domain)
+    for request in job_requests:
+        created.append(
+            create_probe_job(
+                db_path,
+                inventory_path,
+                domain=request["domain"],
+                candidate_server_ids=request["candidate_server_ids"],
+                user_id=request["user_id"],
+                url=request.get("url"),
+                assigned_device_id=request["assigned_device_id"],
+                apply_cache=True,
+                connect_timeout=connect_timeout,
+                max_time=max_time,
+                priority=100,
+            )
+        )
+    return {
+        "ok": True,
+        "created": created,
+        "skipped": skipped,
+        "active_agents": active_agent_count,
+        "cache_ttl_seconds": cache_ttl_seconds,
+        "max_jobs": max_jobs,
+    }
+
+
+def auto_probe_worker_loop(
+    *,
+    db_path: Path,
+    inventory_path: Path,
+    stop_event: threading.Event,
+    interval_seconds: int,
+    cache_ttl_seconds: int,
+    job_stale_seconds: int,
+    agent_stale_seconds: int,
+    max_jobs: int,
+    connect_timeout: int,
+    max_time: int,
+) -> None:
+    while not stop_event.wait(interval_seconds):
+        try:
+            result = create_auto_probe_jobs_once(
+                db_path,
+                inventory_path,
+                cache_ttl_seconds=cache_ttl_seconds,
+                job_stale_seconds=job_stale_seconds,
+                agent_stale_seconds=agent_stale_seconds,
+                max_jobs=max_jobs,
+                connect_timeout=connect_timeout,
+                max_time=max_time,
+            )
+            created_count = len(result.get("created") or [])
+            if created_count:
+                print(f"auto-probe worker: created {created_count} job(s)", file=sys.stderr)
+        except Exception as exc:
+            print(f"auto-probe worker failed: {exc}", file=sys.stderr)
+
+
+def provider_refresh_worker_loop(
+    *,
+    db_path: Path,
+    inventory_path: Path,
+    stop_event: threading.Event,
+    interval_seconds: int,
+    provider: str,
+    skip_verify: bool,
+    connect_timeout: int,
+    max_time: int,
+) -> None:
+    while not stop_event.wait(interval_seconds):
+        try:
+            result = refresh_provider_transports(
+                db_path,
+                inventory_path,
+                provider=provider,
+                skip_verify=skip_verify,
+                connect_timeout=connect_timeout,
+                max_time=max_time,
+            )
+            refreshed = 0
+            failed = 0
+            if result.get("provider") == "all":
+                for item in result.get("results") or []:
+                    refreshed += len(item.get("refreshed") or [])
+                    failed += len(item.get("failed") or [])
+            else:
+                refreshed = len(result.get("refreshed") or [])
+                failed = len(result.get("failed") or [])
+            if refreshed or failed:
+                print(f"provider-refresh worker: refreshed={refreshed} failed={failed}", file=sys.stderr)
+        except Exception as exc:
+            print(f"provider-refresh worker failed: {exc}", file=sys.stderr)
+
+
+def server_metadata(server: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return json.loads(server.get("metadata_json") or "{}")
+    except json.JSONDecodeError:
+        return {}
+
+
+def default_auto_candidate_ids(servers: dict[str, dict[str, Any]]) -> list[str]:
+    return [
+        server_id
+        for server_id, server in sorted(servers.items(), key=lambda item: (item[1].get("sort_order") or 0, item[0]))
+        if server_id != "auto" and server.get("enabled") and server.get("user_visible")
+    ]
+
+
+def parse_curl_probe_output(text: str) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for line in text.splitlines():
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        result[key.strip()] = value.strip()
+    try:
+        result["rc"] = int(result.get("rc", "1"))
+    except ValueError:
+        result["rc"] = 1
+    try:
+        result["http_code_int"] = int(result.get("http_code", "0"))
+    except ValueError:
+        result["http_code_int"] = 0
+    try:
+        result["time_total_ms"] = int(float(result.get("time_total", "0")) * 1000)
+    except ValueError:
+        result["time_total_ms"] = None
+    return result
+
+
+def run_cudy_curl_probe(
+    client: paramiko.SSHClient,
+    *,
+    iface: str,
+    url: str,
+    connect_timeout: int,
+    max_time: int,
+    timeout: int,
+) -> dict[str, Any]:
+    command = (
+        "out=$(curl -4 -L -sS -o /dev/null "
+        f"--interface {shlex.quote(iface)} "
+        f"--connect-timeout {int(connect_timeout)} --max-time {int(max_time)} "
+        "-w 'http_code=%{http_code}\\ntime_total=%{time_total}\\nremote_ip=%{remote_ip}\\n' "
+        f"{shlex.quote(url)} 2>&1); "
+        "rc=$?; printf 'rc=%s\\n%s\\n' \"$rc\" \"$out\""
+    )
+    stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    stdin.channel.shutdown_write()
+    out = stdout.read().decode("utf-8", "replace")
+    err = stderr.read().decode("utf-8", "replace")
+    stdout.channel.recv_exit_status()
+    parsed = parse_curl_probe_output(out + ("\n" + err if err.strip() else ""))
+    parsed["raw"] = (out + err).strip()
+    return parsed
+
+
+def auto_select_domain(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    user_id: str = "",
+    candidate_server_ids: Any = None,
+    url: str | None = None,
+    apply: bool = False,
+    deploy: bool = False,
+    switch_profiles: bool = False,
+    ssh_host: str = DEFAULT_CUDY_HOST,
+    ssh_user: str = DEFAULT_CUDY_USER,
+    ssh_password: str | None = None,
+    ssh_timeout: int = 60,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_domain = normalize_domain(domain)
+    normalized_user_id = (user_id or "").strip()
+    probe_url = url or f"https://{normalized_domain}/"
+
+    with connect(db_path) as conn:
+        servers = server_map(conn)
+        if normalized_user_id and row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        policy = None
+        if candidate_server_ids:
+            candidates = parse_candidate_server_ids(candidate_server_ids)
+            policy_source = "override"
+        else:
+            policy = resolve_auto_candidate_policy(conn, user_id=normalized_user_id, domain=normalized_domain)
+            if policy:
+                candidates = list(policy.get("candidate_server_ids") or [])
+                policy_source = policy["scope"]
+            else:
+                candidates = default_auto_candidate_ids(servers)
+                policy_source = "all_enabled_user_visible"
+        for server_id in candidates:
+            validate_server_id(conn, server_id, require_user_visible=True)
+
+    password = load_cudy_ssh_password(ssh_password)
+    if not password:
+        raise ValueError("Cudy SSH password is not configured. Set CUDY_SSH_PASSWORD or create secrets/cudy_ssh_password.txt")
+
+    checks: list[dict[str, Any]] = []
+    winner: dict[str, Any] | None = None
+    client = ssh_connect(ssh_host, ssh_user, password, ssh_timeout)
+    try:
+        for index, server_id in enumerate(candidates, start=1):
+            server = servers[server_id]
+            metadata = server_metadata(server)
+            iface = safe_interface_name(server.get("interface"))
+            check: dict[str, Any] = {
+                "server_id": server_id,
+                "label": server.get("label"),
+                "index": index,
+                "interface": iface,
+                "provider": server.get("provider"),
+                "kind": server.get("kind"),
+                "ok": False,
+            }
+            if not iface:
+                check["status"] = "no_interface"
+                checks.append(check)
+                continue
+            profile_command = metadata.get("profile_command")
+            if profile_command:
+                check["profile_command"] = profile_command
+                if not switch_profiles:
+                    check["status"] = "profile_switch_required"
+                    check["error"] = "use --switch-profiles to test LokVPN profile candidates"
+                    checks.append(check)
+                    continue
+                ssh_exec_checked(client, str(profile_command), ssh_timeout)
+                check["profile_switched"] = True
+                time.sleep(1)
+            probe = run_cudy_curl_probe(
+                client,
+                iface=iface,
+                url=probe_url,
+                connect_timeout=connect_timeout,
+                max_time=max_time,
+                timeout=max(ssh_timeout, max_time + 5),
+            )
+            http_code = int(probe.get("http_code_int") or 0)
+            ok = probe.get("rc") == 0 and 200 <= http_code < 500
+            check.update(
+                {
+                    "ok": ok,
+                    "status": "ok" if ok else "failed",
+                    "http_code": http_code,
+                    "score_ms": probe.get("time_total_ms"),
+                    "remote_ip": probe.get("remote_ip"),
+                    "curl_rc": probe.get("rc"),
+                    "raw": probe.get("raw"),
+                }
+            )
+            checks.append(check)
+            if ok and (winner is None or (check.get("score_ms") or 10**9) < (winner.get("score_ms") or 10**9)):
+                winner = check
+    finally:
+        client.close()
+
+    saved = None
+    deploy_result = None
+    if winner and apply:
+        saved = save_auto_cache_entry(
+            db_path,
+            inventory_path,
+            domain=normalized_domain,
+            selected_server_id=str(winner["server_id"]),
+            score_ms=winner.get("score_ms"),
+            status="auto",
+            metadata={
+                "policy_source": policy_source,
+                "user_id": normalized_user_id,
+                "url": probe_url,
+                "checked_candidates": len(checks),
+                "switch_profiles": switch_profiles,
+            },
+        )
+        if deploy:
+            deploy_result = apply_combined_route_deploy(
+                db_path,
+                inventory_path,
+                ssh_host=ssh_host,
+                ssh_user=ssh_user,
+                ssh_password=password,
+                restart_pbr=True,
+                run_user_apply=True,
+            )
+
+    return {
+        "ok": bool(winner),
+        "domain": normalized_domain,
+        "user_id": normalized_user_id,
+        "url": probe_url,
+        "policy_source": policy_source,
+        "candidate_server_ids": candidates,
+        "winner": winner,
+        "checks": checks,
+        "applied": bool(saved),
+        "saved": saved,
+        "deployed": bool(deploy_result),
+        "deploy_result": deploy_result,
+    }
 
 
 def validate_client_name(name: str) -> str:
@@ -2042,6 +4260,517 @@ def delete_admin_user(
                 removed_files.append(str(path))
         revoke_result = {"removed_files": removed_files}
     return {"ok": True, "deleted_user_id": user_id, "revoke_cudy": bool(revoke_cudy), "revoke": revoke_result}
+
+
+def create_agent_device(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    device_id: str | None = None,
+    display_name: str | None = None,
+    platform: str | None = None,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = user_id.strip()
+    normalized_platform = normalize_platform(platform)
+    if device_id:
+        normalized_device_id = normalize_device_id(device_id)
+    else:
+        suffix = secrets.token_hex(3)
+        base = "-".join(item for item in [normalized_user_id, normalized_platform or "device", suffix] if item)
+        normalized_device_id = normalize_device_id(base)
+    label = (display_name or normalized_device_id).strip()
+    if not label:
+        raise ValueError("device display name is required")
+    token = generate_device_token()
+    salt, token_hash = hash_device_token(token)
+    timestamp = now()
+    with connect(db_path) as conn:
+        user = row(conn, "SELECT id, enabled FROM users WHERE id = ?", (normalized_user_id,))
+        if not user:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        conn.execute(
+            """
+            INSERT INTO agent_devices (
+              id, user_id, display_name, platform, token_salt, token_hash,
+              enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              user_id = excluded.user_id,
+              display_name = excluded.display_name,
+              platform = excluded.platform,
+              token_salt = excluded.token_salt,
+              token_hash = excluded.token_hash,
+              enabled = excluded.enabled,
+              updated_at = excluded.updated_at
+            """,
+            (
+                normalized_device_id,
+                normalized_user_id,
+                label,
+                normalized_platform,
+                salt,
+                token_hash,
+                int(bool(enabled)),
+                timestamp,
+                timestamp,
+            ),
+        )
+    return {
+        "id": normalized_device_id,
+        "user_id": normalized_user_id,
+        "display_name": label,
+        "platform": normalized_platform,
+        "enabled": bool(enabled),
+        "token": token,
+    }
+
+
+def list_agent_devices(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT d.id, d.user_id, u.display_name AS user_display_name,
+                   d.display_name, d.platform, d.enabled, d.last_seen_at,
+                   d.last_ip, d.last_user_agent, d.created_at, d.updated_at,
+                   s.reported_at AS status_reported_at
+            FROM agent_devices d
+            JOIN users u ON u.id = d.user_id
+            LEFT JOIN agent_status s ON s.device_id = d.id
+            ORDER BY d.user_id, d.id
+            """,
+        )
+
+
+def revoke_agent_device(db_path: Path, inventory_path: Path, *, device_id: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_device_id = normalize_device_id(device_id)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE agent_devices SET enabled = 0, updated_at = ? WHERE id = ?",
+            (now(), normalized_device_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Unknown device: {normalized_device_id}")
+    return {"ok": True, "device_id": normalized_device_id, "enabled": False}
+
+
+def agent_status_rows(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        entries = rows(
+            conn,
+            """
+            SELECT d.id AS device_id, d.user_id, d.display_name, d.platform,
+                   d.enabled, d.last_seen_at, d.last_ip, s.reported_at, s.status_json
+            FROM agent_devices d
+            LEFT JOIN agent_status s ON s.device_id = d.id
+            ORDER BY d.user_id, d.id
+            """,
+        )
+    for entry in entries:
+        try:
+            entry["status"] = json.loads(entry.pop("status_json") or "{}")
+        except json.JSONDecodeError:
+            entry["status"] = {}
+    return entries
+
+
+def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[str, Any]) -> dict[str, Any]:
+    servers = server_map(conn)
+    cached_auto = auto_cache_map(conn)
+    user = row(
+        conn,
+        """
+        SELECT id, display_name, role, default_server_id, client_ip, enabled
+        FROM users
+        WHERE id = ? AND enabled = 1
+        """,
+        (user_id,),
+    )
+    if not user:
+        raise PermissionError("Agent user is disabled or missing")
+    effective: dict[str, dict[str, Any]] = {}
+    for route in rows(
+        conn,
+        """
+        SELECT domain, server_id, updated_at
+        FROM global_domain_routes
+        WHERE enabled = 1
+        ORDER BY domain
+        """,
+    ):
+        effective[route["domain"]] = {**route, "source": "global"}
+    for route in rows(
+        conn,
+        """
+        SELECT domain, server_id, updated_at
+        FROM user_domain_routes
+        WHERE user_id = ? AND enabled = 1
+        ORDER BY domain
+        """,
+        (user_id,),
+    ):
+        effective[route["domain"]] = {**route, "source": "user"}
+
+    domain_routes: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    referenced_server_ids: set[str] = set()
+    for route in sorted(effective.values(), key=lambda item: item["domain"]):
+        requested_server_id = route["server_id"]
+        route_warnings: list[str] = []
+        auto_policy = (
+            resolve_auto_candidate_policy(conn, user_id=user_id, domain=route["domain"])
+            if requested_server_id == "auto"
+            else None
+        )
+        resolved_server_id, cached = resolve_route_server(
+            domain=route["domain"],
+            requested_server_id=requested_server_id,
+            servers=servers,
+            auto_cache=cached_auto,
+            auto_policy=auto_policy,
+            context=f"{user_id}/{route['domain']}",
+            warnings=route_warnings,
+        )
+        warnings.extend(route_warnings)
+        server_id = resolved_server_id or requested_server_id
+        referenced_server_ids.add(server_id)
+        domain_routes.append(
+            {
+                "domain": route["domain"],
+                "source": route["source"],
+                "requested_server_id": requested_server_id,
+                "server_id": server_id,
+                "resolved_server_id": resolved_server_id,
+                "server": compact_server(servers.get(server_id)),
+                "auto_cache": cached,
+                "auto_candidate_policy": auto_policy,
+                "updated_at": route["updated_at"],
+            }
+        )
+
+    ip_routes = rows(
+        conn,
+        """
+        SELECT target_cidr, server_id, enabled, updated_at, 'global' AS source
+        FROM global_ip_routes
+        WHERE enabled = 1
+        UNION ALL
+        SELECT target_cidr, server_id, enabled, updated_at, 'user' AS source
+        FROM user_ip_routes
+        WHERE user_id = ? AND enabled = 1
+        ORDER BY target_cidr, source
+        """,
+        (user_id,),
+    )
+    effective_ip_routes: dict[str, dict[str, Any]] = {}
+    for route in ip_routes:
+        effective_ip_routes[route["target_cidr"]] = route
+    ip_routes = sorted(effective_ip_routes.values(), key=lambda item: item["target_cidr"])
+    resolved_ip_routes: list[dict[str, Any]] = []
+    cleanup_ip_routes: list[dict[str, Any]] = []
+    for route in ip_routes:
+        requested_server_id = str(route["server_id"])
+        resolved_server_id = None
+        cached = None
+        auto_policy = None
+        cache_key = ""
+        server_id = requested_server_id
+        if requested_server_id == "auto":
+            cache_key = auto_cache_key_for_ip_route(route["target_cidr"])
+            route_warnings: list[str] = []
+            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=cache_key)
+            resolved_server_id, cached = resolve_route_server(
+                domain=cache_key,
+                requested_server_id=requested_server_id,
+                servers=servers,
+                auto_cache=cached_auto,
+                auto_policy=auto_policy,
+                context=f"{user_id}/{route['target_cidr']}",
+                warnings=route_warnings,
+            )
+            warnings.extend(route_warnings)
+            if not resolved_server_id:
+                cleanup_ip_routes.append(
+                    {
+                        "target_cidr": route["target_cidr"],
+                        "source": route["source"],
+                        "requested_server_id": requested_server_id,
+                        "server_id": "",
+                        "resolved_server_id": None,
+                        "auto_cache_key": cache_key,
+                        "auto_cache": cached,
+                        "auto_candidate_policy": auto_policy,
+                        "updated_at": route["updated_at"],
+                    }
+                )
+                continue
+            server_id = resolved_server_id
+        route["requested_server_id"] = requested_server_id
+        route["server_id"] = server_id
+        route["resolved_server_id"] = resolved_server_id
+        route["auto_cache_key"] = cache_key
+        route["auto_cache"] = cached
+        route["auto_candidate_policy"] = auto_policy
+        route["server"] = compact_server(servers.get(server_id))
+        referenced_server_ids.add(server_id)
+        resolved_ip_routes.append(route)
+    ip_routes = resolved_ip_routes
+
+    for job in rows(
+        conn,
+        """
+        SELECT candidate_server_ids
+        FROM agent_probe_jobs
+        WHERE status = 'pending'
+          AND (assigned_device_id = '' OR assigned_device_id = ?)
+          AND (user_id = '' OR user_id = ?)
+        ORDER BY priority ASC, created_at ASC
+        LIMIT 10
+        """,
+        (device["id"], user_id),
+    ):
+        try:
+            candidates = json.loads(job.get("candidate_server_ids") or "[]")
+        except json.JSONDecodeError:
+            candidates = []
+        for server_id in candidates:
+            if server_id in servers:
+                referenced_server_ids.add(server_id)
+
+    transport_plan = build_transport_plan(conn, server_ids=referenced_server_ids, warnings=warnings)
+
+    return {
+        "schema_version": 1,
+        "generated_at": now(),
+        "device": {
+            "id": device["id"],
+            "display_name": device["display_name"],
+            "platform": device.get("platform") or "",
+        },
+        "user": user,
+        "control": {
+            "poll_seconds": 60,
+            "status_seconds": 60,
+            "reserved_targets": [
+                {"id": "direct", "label": "Direct internet", "kind": "local"},
+                {"id": "auto", "label": "Auto", "kind": "virtual"},
+            ],
+        },
+        "servers": user_servers(conn),
+        "default_server_id": user["default_server_id"],
+        "default_server": compact_server(servers.get(user["default_server_id"])),
+        "domain_routes": domain_routes,
+        "ip_routes": ip_routes,
+        "cleanup_ip_routes": cleanup_ip_routes,
+        "transport_plan": transport_plan,
+        "auto_candidates": auto_candidate_policy_rows(conn),
+        "warnings": warnings,
+    }
+
+
+def list_user_domain_routes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT r.user_id, u.client_ip, r.domain, r.server_id, r.enabled, r.updated_at
+            FROM user_domain_routes r
+            JOIN users u ON u.id = r.user_id
+            ORDER BY r.user_id, r.server_id, r.domain
+            """,
+        )
+
+
+def save_user_domain_route(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    domain: str,
+    server_id: str,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = user_id.strip()
+    normalized_domain = normalize_domain(domain)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        validate_server_id(conn, server_id, require_user_visible=False)
+        conn.execute(
+            """
+            INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, domain)
+            DO UPDATE SET server_id = excluded.server_id, enabled = excluded.enabled, updated_at = excluded.updated_at
+            """,
+            (normalized_user_id, normalized_domain, server_id, int(enabled), timestamp, timestamp),
+        )
+    return {"ok": True, "user_id": normalized_user_id, "domain": normalized_domain, "server_id": server_id}
+
+
+def delete_user_domain_route(db_path: Path, inventory_path: Path, *, user_id: str, domain: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = user_id.strip()
+    normalized_domain = normalize_domain(domain)
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM user_domain_routes WHERE user_id = ? AND domain = ?",
+            (normalized_user_id, normalized_domain),
+        )
+    return {"ok": True, "user_id": normalized_user_id, "domain": normalized_domain}
+
+
+def list_user_ip_routes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT r.user_id, u.client_ip, r.target_cidr, r.server_id, r.enabled, r.updated_at
+            FROM user_ip_routes r
+            JOIN users u ON u.id = r.user_id
+            ORDER BY r.user_id, r.server_id, r.target_cidr
+            """,
+        )
+
+
+def list_global_ip_routes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT target_cidr, server_id, enabled, source, note, updated_at
+            FROM global_ip_routes
+            ORDER BY server_id, target_cidr
+            """,
+        )
+
+
+def save_global_ip_route(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    target_cidr: str,
+    server_id: str,
+    enabled: bool = True,
+    source: str = "",
+    note: str = "",
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_cidr = normalize_ipv4_cidr(target_cidr)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if server_id != "auto":
+            validate_server_id(conn, server_id, require_user_visible=False)
+        conn.execute(
+            """
+            INSERT INTO global_ip_routes (target_cidr, server_id, enabled, created_at, updated_at, source, note)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(target_cidr)
+            DO UPDATE SET server_id = excluded.server_id,
+                          enabled = excluded.enabled,
+                          updated_at = excluded.updated_at,
+                          source = excluded.source,
+                          note = excluded.note
+            """,
+            (normalized_cidr, server_id, int(enabled), timestamp, timestamp, source, note),
+        )
+    return {"ok": True, "target_cidr": normalized_cidr, "server_id": server_id}
+
+
+def delete_global_ip_route(db_path: Path, inventory_path: Path, *, target_cidr: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_cidr = normalize_ipv4_cidr(target_cidr)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM global_ip_routes WHERE target_cidr = ?", (normalized_cidr,))
+    return {"ok": True, "target_cidr": normalized_cidr}
+
+
+def iter_ip_override_file(path: Path) -> Iterable[str]:
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        yield normalize_ipv4_cidr(line)
+
+
+def import_global_ip_routes(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    input_files: list[Path],
+    server_id: str,
+    source: str = "override-file",
+    note: str = "",
+    enabled: bool = True,
+) -> dict[str, Any]:
+    imported: list[dict[str, Any]] = []
+    for input_file in input_files:
+        for cidr in iter_ip_override_file(input_file):
+            imported.append(
+                save_global_ip_route(
+                    db_path,
+                    inventory_path,
+                    target_cidr=cidr,
+                    server_id=server_id,
+                    enabled=enabled,
+                    source=source,
+                    note=note or str(input_file),
+                )
+            )
+    return {"ok": True, "server_id": server_id, "imported": imported, "count": len(imported)}
+
+
+def save_user_ip_route(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    target_cidr: str,
+    server_id: str,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = user_id.strip()
+    normalized_cidr = normalize_ipv4_cidr(target_cidr)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        if server_id != "auto":
+            validate_server_id(conn, server_id, require_user_visible=False)
+        conn.execute(
+            """
+            INSERT INTO user_ip_routes (user_id, target_cidr, server_id, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, target_cidr)
+            DO UPDATE SET server_id = excluded.server_id, enabled = excluded.enabled, updated_at = excluded.updated_at
+            """,
+            (normalized_user_id, normalized_cidr, server_id, int(enabled), timestamp, timestamp),
+        )
+    return {"ok": True, "user_id": normalized_user_id, "target_cidr": normalized_cidr, "server_id": server_id}
+
+
+def delete_user_ip_route(db_path: Path, inventory_path: Path, *, user_id: str, target_cidr: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = user_id.strip()
+    normalized_cidr = normalize_ipv4_cidr(target_cidr)
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM user_ip_routes WHERE user_id = ? AND target_cidr = ?",
+            (normalized_user_id, normalized_cidr),
+        )
+    return {"ok": True, "user_id": normalized_user_id, "target_cidr": normalized_cidr}
 
 
 def build_route_plan(db_path: Path) -> dict[str, Any]:
@@ -2438,39 +5167,52 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
         route_rows = rows(
             conn,
             """
-            SELECT r.domain, r.server_id, u.id AS user_id, u.display_name, u.client_ip
+            SELECT 'domain' AS target_type, r.domain AS target, r.domain, r.server_id,
+                   u.id AS user_id, u.display_name, u.client_ip
             FROM user_domain_routes r
             JOIN users u ON u.id = r.user_id
             WHERE r.enabled = 1 AND u.enabled = 1 AND u.role = 'user'
-            ORDER BY u.id, r.server_id, r.domain
+            UNION ALL
+            SELECT 'ip' AS target_type, r.target_cidr AS target, NULL AS domain, r.server_id,
+                   u.id AS user_id, u.display_name, u.client_ip
+            FROM user_ip_routes r
+            JOIN users u ON u.id = r.user_id
+            WHERE r.enabled = 1 AND u.enabled = 1 AND u.role = 'user'
+            ORDER BY user_id, server_id, target
             """,
         )
 
     warnings: list[str] = []
     group_map: dict[tuple[str, str], str] = {}
     exported_routes: list[dict[str, Any]] = []
-    tsv_lines = ["# group\tuser_id\tclient_ip\tinterface\tdomain\n"]
+    tsv_lines = ["# group\tuser_id\tclient_ip\tinterface\ttarget\n"]
 
     for route in route_rows:
         user_id = route["user_id"]
         client_ip = normalize_client_ip(route["client_ip"]) if route["client_ip"] else None
+        target_type = route["target_type"]
+        target = route["target"]
         domain = route["domain"]
         server_id = route["server_id"]
+        label = f"{target_type}:{target}"
         if not client_ip:
-            warnings.append(f"{user_id}/{domain}: missing client_ip; skipped")
+            warnings.append(f"{user_id}/{label}: missing client_ip; skipped")
             continue
         requested_server_id = server_id
         auto_policy = None
-        if requested_server_id == "auto":
+        if requested_server_id == "auto" and target_type == "domain":
             with connect(db_path) as conn:
                 auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
+        elif requested_server_id == "auto":
+            warnings.append(f"{user_id}/{label}: IP/CIDR route cannot use auto; skipped")
+            continue
         resolved_server_id, cached = resolve_route_server(
-            domain=domain,
+            domain=domain or target,
             requested_server_id=requested_server_id,
             servers=servers,
             auto_cache=cached_auto,
             auto_policy=auto_policy,
-            context=f"{user_id}/{domain}",
+            context=f"{user_id}/{label}",
             warnings=warnings,
         )
         if not resolved_server_id:
@@ -2478,18 +5220,18 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
         server_id = resolved_server_id
         server = servers.get(server_id)
         if not server:
-            warnings.append(f"{user_id}/{domain}: unknown server {server_id}; skipped")
+            warnings.append(f"{user_id}/{label}: unknown server {server_id}; skipped")
             continue
         if not server.get("enabled"):
-            warnings.append(f"{user_id}/{domain}: server {server_id} is disabled; skipped")
+            warnings.append(f"{user_id}/{label}: server {server_id} is disabled; skipped")
             continue
         iface = safe_interface_name(server.get("interface"))
         if not iface:
-            warnings.append(f"{user_id}/{domain}: server {server_id} has no safe interface; skipped")
+            warnings.append(f"{user_id}/{label}: server {server_id} has no safe interface; skipped")
             continue
         if server.get("kind") == "sing-box-profile":
             warnings.append(
-                f"{user_id}/{domain}: {server_id} is a profile on shared interface {iface}; "
+                f"{user_id}/{label}: {server_id} is a profile on shared interface {iface}; "
                 "source routing can only select the currently active profile"
             )
         group_key = (client_ip, iface)
@@ -2497,12 +5239,14 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
         if not group:
             group = safe_route_group(len(group_map) + 1, iface)
             group_map[group_key] = group
-        tsv_lines.append(f"{group}\t{user_id}\t{client_ip}\t{iface}\t{domain}\n")
+        tsv_lines.append(f"{group}\t{user_id}\t{client_ip}\t{iface}\t{target}\n")
         exported_routes.append(
             {
                 "group": group,
                 "user_id": user_id,
                 "client_ip": client_ip,
+                "target_type": target_type,
+                "target": target,
                 "domain": domain,
                 "server_id": server_id,
                 "requested_server_id": requested_server_id,
@@ -2760,8 +5504,13 @@ def deploy_user_routes(
 set -eu
 backup="/root/backup-cudy-user-routes/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$backup"
-[ -d /etc/cudy-user-routes ] && cp -a /etc/cudy-user-routes "$backup/" || true
+if [ -d /etc/cudy-user-routes ]; then
+  mkdir -p "$backup/cudy-user-routes"
+  [ -f /etc/cudy-user-routes/routes.tsv ] && cat /etc/cudy-user-routes/routes.tsv > "$backup/cudy-user-routes/routes.tsv" || true
+  [ -f /etc/cudy-user-routes/manifest.json ] && cat /etc/cudy-user-routes/manifest.json > "$backup/cudy-user-routes/manifest.json" || true
+fi
 [ -f /usr/bin/cudy-user-routes-apply ] && cp /usr/bin/cudy-user-routes-apply "$backup/" || true
+[ -f /etc/init.d/cudy-user-routes ] && cp /etc/init.d/cudy-user-routes "$backup/cudy-user-routes.init" || true
 mkdir -p /etc/cudy-user-routes
 printf '%s\n' "$backup"
 """,
@@ -2772,6 +5521,7 @@ printf '%s\n' "$backup"
             ssh_upload_file(client, upload["local"], upload["remote"], ssh_timeout)
         if install_script:
             ssh_upload_file(client, LOCAL_USER_ROUTES_APPLY, "/usr/bin/cudy-user-routes-apply", ssh_timeout)
+            ssh_upload_file(client, LOCAL_USER_ROUTES_INIT, "/etc/init.d/cudy-user-routes", ssh_timeout)
 
         commands = [
             "chmod 644 /etc/cudy-user-routes/routes.tsv /etc/cudy-user-routes/manifest.json 2>/dev/null || true",
@@ -2781,6 +5531,9 @@ printf '%s\n' "$backup"
                 [
                     "sh -n /usr/bin/cudy-user-routes-apply",
                     "chmod +x /usr/bin/cudy-user-routes-apply",
+                    "sh -n /etc/init.d/cudy-user-routes",
+                    "chmod +x /etc/init.d/cudy-user-routes",
+                    "/etc/init.d/cudy-user-routes enable",
                 ]
             )
         if run_apply:
@@ -2859,10 +5612,28 @@ class App:
     def __init__(self, db_path: Path, inventory_path: Path):
         self.db_path = db_path
         self.inventory_path = inventory_path
+        self.agent_token_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.agent_token_cache_lock = threading.RLock()
         init_db(db_path, inventory_path)
 
     def conn(self) -> sqlite3.Connection:
         return connect(self.db_path)
+
+    def cached_agent(self, token: str) -> dict[str, Any] | None:
+        now_epoch = time.time()
+        with self.agent_token_cache_lock:
+            cached = self.agent_token_cache.get(token)
+            if not cached:
+                return None
+            expires_at, device = cached
+            if expires_at <= now_epoch:
+                self.agent_token_cache.pop(token, None)
+                return None
+            return dict(device)
+
+    def cache_agent(self, token: str, device: dict[str, Any]) -> None:
+        with self.agent_token_cache_lock:
+            self.agent_token_cache[token] = (time.time() + AGENT_TOKEN_CACHE_SECONDS, dict(device))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -2985,6 +5756,48 @@ class Handler(BaseHTTPRequestHandler):
             raise PermissionError("Admin role required")
         return user
 
+    def agent_token(self) -> str | None:
+        auth = self.headers.get("authorization", "")
+        if auth.lower().startswith("bearer "):
+            return auth.split(" ", 1)[1].strip()
+        token = self.headers.get("x-device-token", "").strip()
+        return token or None
+
+    def require_agent(self) -> dict[str, Any]:
+        token = self.agent_token()
+        if not token:
+            raise PermissionError("Agent token required")
+        cached = self.app.cached_agent(token)
+        if cached is not None:
+            return cached
+        remote_ip = normalize_client_ip_or_none(self.client_address[0])
+        user_agent = self.headers.get("user-agent", "")[:240]
+        with self.app.conn() as conn:
+            devices = rows(
+                conn,
+                """
+                SELECT d.id, d.user_id, d.display_name, d.platform, d.token_salt,
+                       d.token_hash, d.enabled, u.enabled AS user_enabled
+                FROM agent_devices d
+                JOIN users u ON u.id = d.user_id
+                WHERE d.enabled = 1 AND u.enabled = 1
+                """,
+            )
+            for device in devices:
+                if verify_device_token(token, device.get("token_salt"), device.get("token_hash")):
+                    timestamp = now()
+                    conn.execute(
+                        """
+                        UPDATE agent_devices
+                        SET last_seen_at = ?, last_ip = ?, last_user_agent = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (timestamp, remote_ip, user_agent, timestamp, device["id"]),
+                    )
+                    self.app.cache_agent(token, device)
+                    return device
+        raise PermissionError("Invalid agent token")
+
     def auth_error(self, exc: Exception, *, html_redirect: bool = False, next_path: str = "/") -> None:
         if html_redirect:
             self.send_redirect(f"/login?next={next_path}")
@@ -3023,6 +5836,15 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/deploy-preview":
                 self.require_admin()
                 self.send_json(build_combined_deploy_preview(self.app.db_path, self.app.inventory_path))
+            elif parsed.path == "/api/agent/config":
+                device = self.require_agent()
+                with self.app.conn() as conn:
+                    self.send_json(build_agent_config(conn, user_id=device["user_id"], device=device))
+            elif parsed.path == "/api/agent/probe-jobs":
+                device = self.require_agent()
+                query = parse_qs(parsed.query)
+                limit = int(query.get("limit", ["2"])[0] or "2")
+                self.send_json({"ok": True, "jobs": claim_agent_probe_jobs(self.app.db_path, self.app.inventory_path, device=device, limit=limit)})
             elif parsed.path == "/api/admin/client-config":
                 self.require_admin()
                 query = parse_qs(parsed.query)
@@ -3079,12 +5901,35 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/auto-candidates":
                 self.require_admin()
                 self.send_json(self.api_admin_save_auto_candidates(data))
+            elif parsed.path == "/api/admin/auto-select":
+                self.require_admin()
+                self.send_json(self.api_admin_auto_select(data))
+            elif parsed.path == "/api/admin/auto-worker-once":
+                self.require_admin()
+                self.send_json(self.api_admin_auto_worker_once(data))
+            elif parsed.path == "/api/admin/provider-refresh":
+                self.require_admin()
+                self.send_json(self.api_admin_provider_refresh(data))
             elif parsed.path == "/api/admin/deploy-routes":
                 self.require_admin()
                 self.send_json(self.api_admin_deploy_routes(data))
             elif parsed.path == "/api/admin/sync-cudy-clients":
                 self.require_admin()
                 self.send_json(sync_cudy_clients_from_router(self.app.db_path, self.app.inventory_path))
+            elif parsed.path == "/api/agent/status":
+                device = self.require_agent()
+                self.send_json(self.api_agent_status(device, data))
+            elif parsed.path == "/api/agent/probe-jobs/result":
+                device = self.require_agent()
+                self.send_json(
+                    complete_agent_probe_job(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        device=device,
+                        job_id=str(data.get("job_id") or ""),
+                        result=data.get("result") or {},
+                    )
+                )
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -3193,6 +6038,38 @@ class Handler(BaseHTTPRequestHandler):
         expired = f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
         self.send_json({"ok": True}, extra_headers=[("set-cookie", expired)])
 
+    def api_agent_status(self, device: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+        timestamp = now()
+        payload = {
+            "schema_version": int(data.get("schema_version") or 1),
+            "platform": str(data.get("platform") or device.get("platform") or ""),
+            "agent_version": str(data.get("agent_version") or ""),
+            "vpn_interfaces": data.get("vpn_interfaces") or [],
+            "routes": data.get("routes") or [],
+            "domain_routes": data.get("domain_routes") or [],
+            "ip_routes": data.get("ip_routes") or [],
+            "dns": data.get("dns") or {},
+            "health": data.get("health") or {},
+            "capabilities": data.get("capabilities") or {},
+            "errors": data.get("errors") or [],
+            "raw": data.get("raw") or {},
+        }
+        with self.app.conn() as conn:
+            conn.execute(
+                """
+                INSERT INTO agent_status (device_id, status_json, reported_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(device_id)
+                DO UPDATE SET status_json = excluded.status_json, reported_at = excluded.reported_at
+                """,
+                (device["id"], json.dumps(payload, ensure_ascii=False, sort_keys=True), timestamp),
+            )
+            conn.execute(
+                "UPDATE agent_devices SET last_seen_at = ?, updated_at = ? WHERE id = ?",
+                (timestamp, timestamp, device["id"]),
+            )
+        return {"ok": True, "device_id": device["id"], "reported_at": timestamp}
+
     def api_bootstrap(self, user_id: str) -> dict[str, Any]:
         with self.app.conn() as conn:
             user = row(
@@ -3216,6 +6093,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_admin(self) -> dict[str, Any]:
         with self.app.conn() as conn:
+            agent_status = rows(
+                conn,
+                """
+                SELECT d.id AS device_id, d.user_id, d.display_name, d.platform,
+                       d.enabled, d.last_seen_at, d.last_ip, s.reported_at, s.status_json
+                FROM agent_devices d
+                LEFT JOIN agent_status s ON s.device_id = d.id
+                ORDER BY d.user_id, d.id
+                """,
+            )
+            for item in agent_status:
+                try:
+                    item["status"] = json.loads(item.pop("status_json") or "{}")
+                except json.JSONDecodeError:
+                    item["status"] = {}
             return {
                 "servers": admin_servers(conn),
                 "users": rows(
@@ -3244,11 +6136,46 @@ class Handler(BaseHTTPRequestHandler):
                     ORDER BY domain
                     """,
                 ),
+                "global_ip_routes": rows(
+                    conn,
+                    """
+                    SELECT target_cidr, server_id, enabled, source, note, updated_at
+                    FROM global_ip_routes
+                    ORDER BY server_id, target_cidr
+                    """,
+                ),
                 "auto_cache": rows(
                     conn,
                     "SELECT domain, selected_server_id, score_ms, status, checked_at FROM domain_auto_cache ORDER BY domain",
                 ),
                 "auto_candidates": auto_candidate_policy_rows(conn),
+                "transport_configs": transport_config_summaries(conn),
+                "probe_jobs": [
+                    probe_job_row_to_dict(item)
+                    for item in rows(
+                        conn,
+                        """
+                        SELECT *
+                        FROM agent_probe_jobs
+                        ORDER BY created_at DESC
+                        LIMIT 50
+                        """,
+                    )
+                ],
+                "agent_devices": rows(
+                    conn,
+                    """
+                    SELECT d.id, d.user_id, u.display_name AS user_display_name,
+                           d.display_name, d.platform, d.enabled, d.last_seen_at,
+                           d.last_ip, d.last_user_agent, d.created_at, d.updated_at,
+                           s.reported_at AS status_reported_at
+                    FROM agent_devices d
+                    JOIN users u ON u.id = d.user_id
+                    LEFT JOIN agent_status s ON s.device_id = d.id
+                    ORDER BY d.user_id, d.id
+                    """,
+                ),
+                "agent_status": agent_status,
             }
 
     def api_set_default_server(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -3383,6 +6310,7 @@ class Handler(BaseHTTPRequestHandler):
         user_id = str(data.get("user_id") or "").strip()
         domain = normalize_domain(str(data.get("domain") or ""))
         server_id = str(data.get("server_id") or "")
+        candidate_server_ids = data.get("auto_candidate_server_ids")
         timestamp = now()
         with self.app.conn() as conn:
             validate_server_id(conn, server_id, require_user_visible=True)
@@ -3397,11 +6325,26 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (user_id, domain, server_id, timestamp, timestamp),
             )
-        return {"ok": True, "domain": domain, "server_id": server_id}
+        auto_candidate_policy = sync_route_auto_candidate_policy(
+            self.app.db_path,
+            self.app.inventory_path,
+            user_id=user_id,
+            domain=domain,
+            server_id=server_id,
+            candidate_server_ids=candidate_server_ids,
+        )
+        return {
+            "ok": True,
+            "user_id": user_id,
+            "domain": domain,
+            "server_id": server_id,
+            "auto_candidate_policy": auto_candidate_policy,
+        }
 
     def api_admin_save_global_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
         domain = normalize_domain(str(data.get("domain") or ""))
         server_id = str(data.get("server_id") or "")
+        candidate_server_ids = data.get("auto_candidate_server_ids")
         timestamp = now()
         with self.app.conn() as conn:
             validate_server_id(conn, server_id, require_user_visible=True)
@@ -3414,7 +6357,20 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (domain, server_id, timestamp, timestamp),
             )
-        return {"ok": True, "domain": domain, "server_id": server_id}
+        auto_candidate_policy = sync_route_auto_candidate_policy(
+            self.app.db_path,
+            self.app.inventory_path,
+            user_id="",
+            domain=domain,
+            server_id=server_id,
+            candidate_server_ids=candidate_server_ids,
+        )
+        return {
+            "ok": True,
+            "domain": domain,
+            "server_id": server_id,
+            "auto_candidate_policy": auto_candidate_policy,
+        }
 
     def api_admin_save_auto_cache(self, data: dict[str, Any]) -> dict[str, Any]:
         score_value = data.get("score_ms")
@@ -3436,6 +6392,47 @@ class Handler(BaseHTTPRequestHandler):
             domain=str(data.get("domain") or ""),
             candidate_server_ids=data.get("candidate_server_ids") or "",
             enabled=bool(data.get("enabled", True)),
+        )
+
+    def api_admin_auto_select(self, data: dict[str, Any]) -> dict[str, Any]:
+        return auto_select_domain(
+            self.app.db_path,
+            self.app.inventory_path,
+            domain=str(data.get("domain") or ""),
+            user_id=str(data.get("user_id") or ""),
+            candidate_server_ids=data.get("candidate_server_ids") or None,
+            url=str(data.get("url") or "") or None,
+            apply=bool(data.get("apply", True)),
+            deploy=bool(data.get("deploy", False)),
+            switch_profiles=bool(data.get("switch_profiles", False)),
+        )
+
+    def api_admin_auto_worker_once(self, data: dict[str, Any]) -> dict[str, Any]:
+        return create_auto_probe_jobs_once(
+            self.app.db_path,
+            self.app.inventory_path,
+            cache_ttl_seconds=max(0, min(int(data.get("cache_ttl_seconds") or 3600), 30 * 24 * 3600)),
+            job_stale_seconds=max(60, min(int(data.get("job_stale_seconds") or 900), 24 * 3600)),
+            agent_stale_seconds=max(60, min(int(data.get("agent_stale_seconds") or 600), 24 * 3600)),
+            max_jobs=max(1, min(int(data.get("max_jobs") or 5), 50)),
+            connect_timeout=max(1, min(int(data.get("connect_timeout") or 5), 60)),
+            max_time=max(1, min(int(data.get("max_time") or 12), 120)),
+        )
+
+    def api_admin_provider_refresh(self, data: dict[str, Any]) -> dict[str, Any]:
+        provider = str(data.get("provider") or "all")
+        if provider not in {"vpntype", "lokvpn", "all"}:
+            raise ValueError("provider must be vpntype, lokvpn, or all")
+        servers_raw = data.get("servers") or ""
+        server_ids = parse_candidate_server_ids(servers_raw) if servers_raw else None
+        return refresh_provider_transports(
+            self.app.db_path,
+            self.app.inventory_path,
+            provider=provider,
+            server_ids=server_ids,
+            skip_verify=bool(data.get("skip_verify")),
+            connect_timeout=max(1, min(int(data.get("connect_timeout") or 5), 60)),
+            max_time=max(1, min(int(data.get("max_time") or 12), 120)),
         )
 
     def api_admin_deploy_routes(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -3518,14 +6515,20 @@ def print_db_summary(db_path: Path) -> None:
         user_count = conn.execute("SELECT count(*) FROM users").fetchone()[0]
         login_user_count = conn.execute("SELECT count(*) FROM users WHERE password_hash IS NOT NULL").fetchone()[0]
         route_count = conn.execute("SELECT count(*) FROM user_domain_routes").fetchone()[0]
+        ip_route_count = conn.execute("SELECT count(*) FROM user_ip_routes").fetchone()[0]
+        global_ip_route_count = conn.execute("SELECT count(*) FROM global_ip_routes").fetchone()[0]
         auto_cache_count = conn.execute("SELECT count(*) FROM domain_auto_cache").fetchone()[0]
         auto_candidate_count = conn.execute("SELECT count(*) FROM auto_candidate_policies").fetchone()[0]
+        agent_device_count = conn.execute("SELECT count(*) FROM agent_devices").fetchone()[0]
     print(f"DB: {db_path}")
     print(f"Servers: {server_count} total, {user_server_count} user-visible")
     print(f"Users: {user_count} total, {login_user_count} with login")
     print(f"Domain routes: {route_count}")
+    print(f"IP/CIDR routes: {ip_route_count}")
+    print(f"Global IP/CIDR routes: {global_ip_route_count}")
     print(f"Auto cache: {auto_cache_count}")
     print(f"Auto candidate lists: {auto_candidate_count}")
+    print(f"Agent devices: {agent_device_count}")
 
 
 def read_password_arg(value: str | None, *, confirm: bool) -> str:
@@ -3537,6 +6540,16 @@ def read_password_arg(value: str | None, *, confirm: bool) -> str:
         if first != second:
             raise ValueError("Passwords do not match")
     return first
+
+
+def read_json_arg(value: str) -> dict[str, Any]:
+    raw = value.strip()
+    if raw.startswith("@"):
+        raw = Path(raw[1:]).read_text(encoding="utf-8")
+    data = json.loads(raw)
+    if not isinstance(data, dict):
+        raise ValueError("JSON value must be an object")
+    return data
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -3558,6 +6571,62 @@ def build_parser() -> argparse.ArgumentParser:
     create_user_parser.add_argument("--password", help="Prefer interactive prompt or env in normal use.")
     create_user_parser.add_argument("--disabled", action="store_true")
     create_user_parser.add_argument("--no-password-change", action="store_true")
+
+    device_create_parser = sub.add_parser("device-create", help="Create or rotate an agent device token.")
+    device_create_parser.add_argument("user_id")
+    device_create_parser.add_argument("--device-id")
+    device_create_parser.add_argument("--display-name")
+    device_create_parser.add_argument("--platform", choices=["linux", "windows", "android", "macos", "other"], default="other")
+    device_create_parser.add_argument("--disabled", action="store_true")
+    device_create_parser.add_argument("--json", action="store_true", help="Print JSON, including the one-time token.")
+
+    device_list_parser = sub.add_parser("device-list", help="List agent devices.")
+    device_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    device_revoke_parser = sub.add_parser("device-revoke", help="Disable an agent device token.")
+    device_revoke_parser.add_argument("device_id")
+    device_revoke_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    device_status_parser = sub.add_parser("device-status", help="List last reported agent status.")
+    device_status_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    transport_list_parser = sub.add_parser("transport-list", help="List control-server transport configs.")
+    transport_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    transport_http_parser = sub.add_parser("transport-set-http", help="Set HTTP proxy TUN config for an agent transport.")
+    transport_http_parser.add_argument("server_id")
+    transport_http_parser.add_argument("--proxy-host", required=True)
+    transport_http_parser.add_argument("--proxy-port", required=True, type=int)
+    transport_http_parser.add_argument("--proxy-type", choices=["http", "socks"], default="http")
+    transport_http_parser.add_argument("--interface-name")
+    transport_http_parser.add_argument("--source", default="")
+    transport_http_parser.add_argument("--version", default="")
+    transport_http_parser.add_argument("--expires-at")
+    transport_http_parser.add_argument("--disabled", action="store_true")
+    transport_http_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    transport_json_parser = sub.add_parser("transport-set-json", help="Set a generic JSON config for an agent transport.")
+    transport_json_parser.add_argument("server_id")
+    transport_json_parser.add_argument("transport_type", choices=["vless-reality-tun", "sing-box-json", "http-proxy-tun"])
+    transport_json_parser.add_argument("--config-json", required=True, help="JSON object or @path.")
+    transport_json_parser.add_argument("--interface-name")
+    transport_json_parser.add_argument("--source", default="")
+    transport_json_parser.add_argument("--version", default="")
+    transport_json_parser.add_argument("--expires-at")
+    transport_json_parser.add_argument("--disabled", action="store_true")
+    transport_json_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    transport_delete_parser = sub.add_parser("transport-delete", help="Delete a control-server transport config.")
+    transport_delete_parser.add_argument("server_id")
+    transport_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    provider_refresh_parser = sub.add_parser("provider-refresh", help="Refresh VPN provider transport configs on the control-server.")
+    provider_refresh_parser.add_argument("provider", choices=["vpntype", "lokvpn", "all"])
+    provider_refresh_parser.add_argument("--servers", default="", help="Optional comma/space-separated server ids to refresh.")
+    provider_refresh_parser.add_argument("--skip-verify", action="store_true", help="Do not probe VPNtype proxy endpoints before saving.")
+    provider_refresh_parser.add_argument("--connect-timeout", type=int, default=5)
+    provider_refresh_parser.add_argument("--max-time", type=int, default=12)
+    provider_refresh_parser.add_argument("--json", action="store_true", help="Print JSON result.")
 
     import_parser = sub.add_parser("import-cudy-clients", help="Import existing cudy-home client .conf files as users.")
     import_parser.add_argument(
@@ -3599,6 +6668,55 @@ def build_parser() -> argparse.ArgumentParser:
     auto_candidates_delete_parser.add_argument("--user-id", default="", help="Blank means global policy.")
     auto_candidates_delete_parser.add_argument("--domain", default="", help="Blank means default policy for all domains.")
 
+    auto_select_parser = sub.add_parser("auto-select", help="Probe Auto candidates for a domain and optionally save the winner.")
+    auto_select_parser.add_argument("domain")
+    auto_select_parser.add_argument("--user-id", default="", help="Use user/domain candidate policy resolution.")
+    auto_select_parser.add_argument("--candidates", help="Override policy with comma/space-separated server ids.")
+    auto_select_parser.add_argument("--url", help="Override probe URL. Default is https://DOMAIN/.")
+    auto_select_parser.add_argument("--connect-timeout", type=int, default=5)
+    auto_select_parser.add_argument("--max-time", type=int, default=12)
+    auto_select_parser.add_argument("--ssh-host", default=DEFAULT_CUDY_HOST)
+    auto_select_parser.add_argument("--ssh-user", default=DEFAULT_CUDY_USER)
+    auto_select_parser.add_argument("--ssh-password")
+    auto_select_parser.add_argument("--ssh-timeout", type=int, default=60)
+    auto_select_parser.add_argument("--switch-profiles", action="store_true", help="Allow live switching LokVPN profile candidates during the probe.")
+    auto_select_parser.add_argument("--apply", action="store_true", help="Save selected winner into Auto cache. Default is probe-only.")
+    auto_select_parser.add_argument("--deploy", action="store_true", help="After --apply, deploy routes to Cudy.")
+    auto_select_parser.add_argument("--json", action="store_true", help="Print JSON result.")
+
+    probe_job_create_parser = sub.add_parser("probe-job-create", help="Create an agent-side Auto probe job.")
+    probe_job_create_parser.add_argument("domain")
+    probe_job_create_parser.add_argument("candidate_server_ids", help="Comma/space-separated server ids in priority order.")
+    probe_job_create_parser.add_argument("--user-id", default="", help="Blank means global Auto cache job.")
+    probe_job_create_parser.add_argument("--assigned-device-id", default="", help="Optional exact agent device id.")
+    probe_job_create_parser.add_argument("--url", help="Override probe URL. Default is https://DOMAIN/.")
+    probe_job_create_parser.add_argument("--connect-timeout", type=int, default=5)
+    probe_job_create_parser.add_argument("--max-time", type=int, default=12)
+    probe_job_create_parser.add_argument("--priority", type=int, default=100)
+    probe_job_create_parser.add_argument("--no-apply-cache", action="store_true", help="Do not update Auto cache from the winner.")
+    probe_job_create_parser.add_argument("--json", action="store_true", help="Print JSON job.")
+
+    probe_job_list_parser = sub.add_parser("probe-job-list", help="List recent agent-side Auto probe jobs.")
+    probe_job_list_parser.add_argument("--limit", type=int, default=50)
+    probe_job_list_parser.add_argument("--json", action="store_true", help="Print JSON jobs.")
+
+    probe_job_reset_parser = sub.add_parser("probe-job-reset", help="Reset or fail matching agent-side Auto probe jobs.")
+    probe_job_reset_parser.add_argument("--status", default="running", choices=["pending", "running", "failed", "done"])
+    probe_job_reset_parser.add_argument("--target-status", default="pending", choices=["pending", "failed"])
+    probe_job_reset_parser.add_argument("--older-than-seconds", type=int, default=0)
+    probe_job_reset_parser.add_argument("--domain", default="")
+    probe_job_reset_parser.add_argument("--assigned-device-id", default="")
+    probe_job_reset_parser.add_argument("--json", action="store_true", help="Print JSON result.")
+
+    auto_worker_once_parser = sub.add_parser("auto-worker-once", help="Create due agent Auto probe jobs once.")
+    auto_worker_once_parser.add_argument("--cache-ttl-seconds", type=int, default=3600)
+    auto_worker_once_parser.add_argument("--job-stale-seconds", type=int, default=900)
+    auto_worker_once_parser.add_argument("--agent-stale-seconds", type=int, default=600)
+    auto_worker_once_parser.add_argument("--max-jobs", type=int, default=5)
+    auto_worker_once_parser.add_argument("--connect-timeout", type=int, default=5)
+    auto_worker_once_parser.add_argument("--max-time", type=int, default=12)
+    auto_worker_once_parser.add_argument("--json", action="store_true", help="Print JSON result.")
+
     export_parser = sub.add_parser(
         "export-pbr-overrides",
         help="Export global admin routes as OpenWrt /etc/pbr-overrides force-<interface>.domains files.",
@@ -3629,6 +6747,59 @@ def build_parser() -> argparse.ArgumentParser:
     )
     user_export_parser.add_argument("--output-dir", type=Path, default=DEFAULT_USER_ROUTES_EXPORT_DIR)
     user_export_parser.add_argument("--json", action="store_true", help="Print full export manifest.")
+
+    user_domain_list_parser = sub.add_parser("user-domain-route-list", help="List per-user domain routes.")
+    user_domain_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    user_domain_set_parser = sub.add_parser("user-domain-route-set", help="Set a per-user domain route.")
+    user_domain_set_parser.add_argument("user_id")
+    user_domain_set_parser.add_argument("domain")
+    user_domain_set_parser.add_argument("server_id")
+    user_domain_set_parser.add_argument("--disabled", action="store_true")
+    user_domain_set_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    user_domain_delete_parser = sub.add_parser("user-domain-route-delete", help="Delete a per-user domain route.")
+    user_domain_delete_parser.add_argument("user_id")
+    user_domain_delete_parser.add_argument("domain")
+    user_domain_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    user_ip_list_parser = sub.add_parser("user-ip-route-list", help="List per-user IPv4/CIDR routes.")
+    user_ip_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    user_ip_set_parser = sub.add_parser("user-ip-route-set", help="Set a per-user IPv4/CIDR route.")
+    user_ip_set_parser.add_argument("user_id")
+    user_ip_set_parser.add_argument("target_cidr")
+    user_ip_set_parser.add_argument("server_id")
+    user_ip_set_parser.add_argument("--disabled", action="store_true")
+    user_ip_set_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    user_ip_delete_parser = sub.add_parser("user-ip-route-delete", help="Delete a per-user IPv4/CIDR route.")
+    user_ip_delete_parser.add_argument("user_id")
+    user_ip_delete_parser.add_argument("target_cidr")
+    user_ip_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_ip_list_parser = sub.add_parser("global-ip-route-list", help="List global IPv4/CIDR routes.")
+    global_ip_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_ip_set_parser = sub.add_parser("global-ip-route-set", help="Set a global IPv4/CIDR route.")
+    global_ip_set_parser.add_argument("target_cidr")
+    global_ip_set_parser.add_argument("server_id")
+    global_ip_set_parser.add_argument("--disabled", action="store_true")
+    global_ip_set_parser.add_argument("--source", default="")
+    global_ip_set_parser.add_argument("--note", default="")
+    global_ip_set_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_ip_delete_parser = sub.add_parser("global-ip-route-delete", help="Delete a global IPv4/CIDR route.")
+    global_ip_delete_parser.add_argument("target_cidr")
+    global_ip_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_ip_import_parser = sub.add_parser("global-ip-route-import", help="Import global IPv4/CIDR routes from override files.")
+    global_ip_import_parser.add_argument("server_id")
+    global_ip_import_parser.add_argument("input_files", nargs="+", type=Path)
+    global_ip_import_parser.add_argument("--source", default="override-file")
+    global_ip_import_parser.add_argument("--note", default="")
+    global_ip_import_parser.add_argument("--disabled", action="store_true")
+    global_ip_import_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
     user_deploy_parser = sub.add_parser(
         "deploy-user-routes",
@@ -3679,6 +6850,20 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--no-auto-worker", action="store_true", help="Disable background Auto probe job scheduler.")
+    serve_parser.add_argument("--auto-worker-interval", type=int, default=300)
+    serve_parser.add_argument("--auto-cache-ttl-seconds", type=int, default=3600)
+    serve_parser.add_argument("--auto-worker-job-stale-seconds", type=int, default=900)
+    serve_parser.add_argument("--auto-worker-agent-stale-seconds", type=int, default=600)
+    serve_parser.add_argument("--auto-worker-max-jobs", type=int, default=5)
+    serve_parser.add_argument("--auto-worker-connect-timeout", type=int, default=5)
+    serve_parser.add_argument("--auto-worker-max-time", type=int, default=12)
+    serve_parser.add_argument("--no-provider-refresh-worker", action="store_true", help="Disable background VPNtype/LokVPN transport refresh.")
+    serve_parser.add_argument("--provider-refresh-provider", choices=["vpntype", "lokvpn", "all"], default="all")
+    serve_parser.add_argument("--provider-refresh-interval", type=int, default=900)
+    serve_parser.add_argument("--provider-refresh-skip-verify", action="store_true")
+    serve_parser.add_argument("--provider-refresh-connect-timeout", type=int, default=5)
+    serve_parser.add_argument("--provider-refresh-max-time", type=int, default=12)
 
     return parser
 
@@ -3708,6 +6893,151 @@ def main() -> int:
             allow_no_password=args.no_password_change,
         )
         print(f"User saved: {args.user_id} role={args.role}")
+        return 0
+    if args.command == "device-create":
+        result = create_agent_device(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            device_id=args.device_id,
+            display_name=args.display_name,
+            platform=args.platform,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Device saved: {result['id']} user={result['user_id']} platform={result['platform']}")
+            print("Token is shown once. Store it on the client device:")
+            print(result["token"])
+        return 0
+    if args.command == "device-list":
+        entries = list_agent_devices(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No agent devices.")
+            for item in entries:
+                print(
+                    f"{item['id']}\tuser={item['user_id']}\tplatform={item['platform'] or '-'}\t"
+                    f"enabled={bool(item['enabled'])}\tlast_seen={item['last_seen_at'] or '-'}"
+                )
+        return 0
+    if args.command == "device-revoke":
+        result = revoke_agent_device(args.db, args.inventory, device_id=args.device_id)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Device revoked: {result['device_id']}")
+        return 0
+    if args.command == "device-status":
+        entries = agent_status_rows(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No agent devices.")
+            for item in entries:
+                health = item.get("status", {}).get("health", {})
+                print(
+                    f"{item['device_id']}\tuser={item['user_id']}\t"
+                    f"last_seen={item['last_seen_at'] or '-'}\t"
+                    f"reported={item['reported_at'] or '-'}\thealth={health}"
+                )
+        return 0
+    if args.command == "transport-list":
+        init_db(args.db, args.inventory)
+        with connect(args.db) as conn:
+            entries = transport_config_rows(conn)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No transport configs.")
+            for item in entries:
+                print(
+                    f"{item['server_id']}\t{item['transport_type']}\tiface={item['interface_name']}\t"
+                    f"enabled={bool(item['enabled'])}\tsource={item.get('source') or '-'}\t"
+                    f"updated={item.get('updated_at') or '-'}"
+                )
+        return 0
+    if args.command == "transport-set-http":
+        if args.proxy_port <= 0 or args.proxy_port > 65535:
+            raise ValueError("proxy port must be 1-65535")
+        result = save_transport_config(
+            args.db,
+            args.inventory,
+            server_id=args.server_id,
+            transport_type="http-proxy-tun",
+            interface_name=args.interface_name,
+            config={
+                "proxy_type": args.proxy_type,
+                "server": args.proxy_host,
+                "server_port": args.proxy_port,
+            },
+            enabled=not args.disabled,
+            source=args.source,
+            version=args.version,
+            expires_at=args.expires_at,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Transport saved: {result['server_id']} {result['transport_type']} iface={result['interface_name']}")
+        return 0
+    if args.command == "transport-set-json":
+        result = save_transport_config(
+            args.db,
+            args.inventory,
+            server_id=args.server_id,
+            transport_type=args.transport_type,
+            interface_name=args.interface_name,
+            config=read_json_arg(args.config_json),
+            enabled=not args.disabled,
+            source=args.source,
+            version=args.version,
+            expires_at=args.expires_at,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Transport saved: {result['server_id']} {result['transport_type']} iface={result['interface_name']}")
+        return 0
+    if args.command == "transport-delete":
+        result = delete_transport_config(args.db, args.inventory, server_id=args.server_id)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Transport deleted: {result['server_id']}")
+        return 0
+    if args.command == "provider-refresh":
+        server_ids = parse_candidate_server_ids(args.servers) if args.servers else None
+        result = refresh_provider_transports(
+            args.db,
+            args.inventory,
+            provider=args.provider,
+            server_ids=server_ids,
+            skip_verify=args.skip_verify,
+            connect_timeout=args.connect_timeout,
+            max_time=args.max_time,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            groups = result.get("results") if result.get("provider") == "all" else [result]
+            for group in groups or []:
+                print(
+                    f"{group['provider']}: refreshed={len(group.get('refreshed') or [])} "
+                    f"failed={len(group.get('failed') or [])}"
+                )
+                for item in group.get("refreshed") or []:
+                    print(
+                        f"  OK {item['server_id']}\t{item.get('endpoint') or '-'}\t"
+                        f"{item.get('updated_at') or '-'}"
+                    )
+                for item in group.get("failed") or []:
+                    print(f"  FAIL {item['server_id']}\t{item.get('error') or '-'}")
         return 0
     if args.command == "import-cudy-clients":
         imported = import_cudy_clients(args.db, args.inventory, args.source_dir)
@@ -3834,6 +7164,254 @@ def main() -> int:
             domain=args.domain,
         )
         print(f"Auto candidates deleted: {item['scope']} user={item['user_id'] or '-'} domain={item['domain'] or '*'}")
+        return 0
+    if args.command == "auto-select":
+        result = auto_select_domain(
+            args.db,
+            args.inventory,
+            domain=args.domain,
+            user_id=args.user_id,
+            candidate_server_ids=args.candidates,
+            url=args.url,
+            apply=args.apply,
+            deploy=args.deploy,
+            switch_profiles=args.switch_profiles,
+            ssh_host=args.ssh_host,
+            ssh_user=args.ssh_user,
+            ssh_password=args.ssh_password,
+            ssh_timeout=args.ssh_timeout,
+            connect_timeout=args.connect_timeout,
+            max_time=args.max_time,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"Auto select {result['domain']} policy={result['policy_source']} "
+                f"candidates={','.join(result['candidate_server_ids'])}"
+            )
+            for check in result["checks"]:
+                score = check.get("score_ms")
+                print(
+                    f"  {check['server_id']}\t{check['status']}\t"
+                    f"http={check.get('http_code', '-')}\t"
+                    f"score={score if score is not None else '-'}ms\t"
+                    f"iface={check.get('interface') or '-'}"
+                )
+            winner = result.get("winner")
+            if winner:
+                print(f"Winner: {winner['server_id']} score={winner.get('score_ms')}ms")
+                if result.get("applied"):
+                    print("Auto cache updated.")
+                if result.get("deployed"):
+                    print("Routes deployed.")
+            else:
+                print("No working candidate found.")
+                return 1
+        return 0
+    if args.command == "probe-job-create":
+        result = create_probe_job(
+            args.db,
+            args.inventory,
+            domain=args.domain,
+            candidate_server_ids=args.candidate_server_ids,
+            user_id=args.user_id,
+            url=args.url,
+            assigned_device_id=args.assigned_device_id,
+            apply_cache=not args.no_apply_cache,
+            connect_timeout=args.connect_timeout,
+            max_time=args.max_time,
+            priority=args.priority,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"Probe job created: {result['id']} domain={result['domain']} "
+                f"candidates={','.join(result['candidate_server_ids'])} "
+                f"assigned={result.get('assigned_device_id') or '-'} apply_cache={result.get('apply_cache')}"
+            )
+        return 0
+    if args.command == "probe-job-list":
+        entries = list_probe_jobs(args.db, args.inventory, limit=args.limit)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No probe jobs.")
+            for item in entries:
+                print(
+                    f"{item['id']}\t{item['status']}\t{item['domain']}\t"
+                    f"candidates={','.join(item['candidate_server_ids'])}\t"
+                    f"assigned={item.get('assigned_device_id') or '-'}\t"
+                    f"claimed={item.get('claimed_by_device_id') or '-'}\t"
+                    f"winner={item.get('winner_server_id') or '-'}\t"
+                    f"score={item.get('score_ms') if item.get('score_ms') is not None else '-'}\t"
+                    f"updated={item.get('updated_at') or '-'}"
+                )
+        return 0
+    if args.command == "probe-job-reset":
+        result = reset_probe_jobs(
+            args.db,
+            args.inventory,
+            status=args.status,
+            older_than_seconds=args.older_than_seconds,
+            domain=args.domain,
+            assigned_device_id=args.assigned_device_id,
+            target_status=args.target_status,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"Probe jobs reset: matched={result['matched']} "
+                f"{result['from_status']} -> {result['target_status']}"
+            )
+        return 0
+    if args.command == "auto-worker-once":
+        result = create_auto_probe_jobs_once(
+            args.db,
+            args.inventory,
+            cache_ttl_seconds=args.cache_ttl_seconds,
+            job_stale_seconds=args.job_stale_seconds,
+            agent_stale_seconds=args.agent_stale_seconds,
+            max_jobs=args.max_jobs,
+            connect_timeout=args.connect_timeout,
+            max_time=args.max_time,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(
+                f"Auto worker once: created={len(result['created'])} "
+                f"skipped={len(result['skipped'])} active_agents={result['active_agents']}"
+            )
+            for item in result["created"]:
+                print(
+                    f"  created {item['id']} {item['domain']} "
+                    f"candidates={','.join(item['candidate_server_ids'])} "
+                    f"assigned={item.get('assigned_device_id') or '-'}"
+                )
+            for item in result["skipped"][:20]:
+                print(f"  skipped {item['domain']} user={item.get('user_id') or '-'} reason={item.get('reason')}")
+        return 0
+    if args.command == "user-domain-route-list":
+        entries = list_user_domain_routes(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No user domain routes.")
+            for item in entries:
+                print(
+                    f"{item['user_id']}\t{item['client_ip'] or '-'}\t"
+                    f"{item['domain']}\t{item['server_id']}\tenabled={bool(item['enabled'])}"
+                )
+        return 0
+    if args.command == "user-domain-route-set":
+        result = save_user_domain_route(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            domain=args.domain,
+            server_id=args.server_id,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"User domain route saved: {result['user_id']} {result['domain']} -> {result['server_id']}")
+        return 0
+    if args.command == "user-domain-route-delete":
+        result = delete_user_domain_route(args.db, args.inventory, user_id=args.user_id, domain=args.domain)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"User domain route deleted: {result['user_id']} {result['domain']}")
+        return 0
+    if args.command == "user-ip-route-list":
+        entries = list_user_ip_routes(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No user IP/CIDR routes.")
+            for item in entries:
+                print(
+                    f"{item['user_id']}\t{item['client_ip'] or '-'}\t"
+                    f"{item['target_cidr']}\t{item['server_id']}\tenabled={bool(item['enabled'])}"
+                )
+        return 0
+    if args.command == "user-ip-route-set":
+        result = save_user_ip_route(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            target_cidr=args.target_cidr,
+            server_id=args.server_id,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"User IP route saved: {result['user_id']} {result['target_cidr']} -> {result['server_id']}")
+        return 0
+    if args.command == "user-ip-route-delete":
+        result = delete_user_ip_route(args.db, args.inventory, user_id=args.user_id, target_cidr=args.target_cidr)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"User IP route deleted: {result['user_id']} {result['target_cidr']}")
+        return 0
+    if args.command == "global-ip-route-list":
+        entries = list_global_ip_routes(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        elif not entries:
+            print("Global IP/CIDR routes are empty.")
+        else:
+            for item in entries:
+                print(
+                    f"{item['target_cidr']}\t{item['server_id']}\t"
+                    f"enabled={bool(item['enabled'])}\tsource={item.get('source') or '-'}"
+                )
+        return 0
+    if args.command == "global-ip-route-set":
+        result = save_global_ip_route(
+            args.db,
+            args.inventory,
+            target_cidr=args.target_cidr,
+            server_id=args.server_id,
+            enabled=not args.disabled,
+            source=args.source,
+            note=args.note,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Global IP route saved: {result['target_cidr']} -> {result['server_id']}")
+        return 0
+    if args.command == "global-ip-route-delete":
+        result = delete_global_ip_route(args.db, args.inventory, target_cidr=args.target_cidr)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Global IP route deleted: {result['target_cidr']}")
+        return 0
+    if args.command == "global-ip-route-import":
+        result = import_global_ip_routes(
+            args.db,
+            args.inventory,
+            input_files=args.input_files,
+            server_id=args.server_id,
+            source=args.source,
+            note=args.note,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Imported {result['count']} global IP route(s) -> {result['server_id']}")
         return 0
     if args.command == "export-pbr-overrides":
         manifest = export_pbr_overrides(args.db, args.inventory, args.output_dir)
@@ -4109,13 +7687,70 @@ def main() -> int:
     if args.command == "serve":
         app = App(args.db, args.inventory)
         server = Server((args.host, args.port), app)
+        worker_stop = threading.Event()
+        worker_thread: threading.Thread | None = None
+        provider_thread: threading.Thread | None = None
+        if not args.no_auto_worker:
+            try:
+                initial = create_auto_probe_jobs_once(
+                    args.db,
+                    args.inventory,
+                    cache_ttl_seconds=args.auto_cache_ttl_seconds,
+                    job_stale_seconds=args.auto_worker_job_stale_seconds,
+                    agent_stale_seconds=args.auto_worker_agent_stale_seconds,
+                    max_jobs=args.auto_worker_max_jobs,
+                    connect_timeout=args.auto_worker_connect_timeout,
+                    max_time=args.auto_worker_max_time,
+                )
+                if initial.get("created"):
+                    print(f"auto-probe worker: created {len(initial['created'])} initial job(s)", file=sys.stderr)
+            except Exception as exc:
+                print(f"auto-probe worker initial run failed: {exc}", file=sys.stderr)
+            worker_thread = threading.Thread(
+                target=auto_probe_worker_loop,
+                kwargs={
+                    "db_path": args.db,
+                    "inventory_path": args.inventory,
+                    "stop_event": worker_stop,
+                    "interval_seconds": max(30, args.auto_worker_interval),
+                    "cache_ttl_seconds": args.auto_cache_ttl_seconds,
+                    "job_stale_seconds": args.auto_worker_job_stale_seconds,
+                    "agent_stale_seconds": args.auto_worker_agent_stale_seconds,
+                    "max_jobs": args.auto_worker_max_jobs,
+                    "connect_timeout": args.auto_worker_connect_timeout,
+                    "max_time": args.auto_worker_max_time,
+                },
+                daemon=True,
+            )
+            worker_thread.start()
+        if not args.no_provider_refresh_worker:
+            provider_thread = threading.Thread(
+                target=provider_refresh_worker_loop,
+                kwargs={
+                    "db_path": args.db,
+                    "inventory_path": args.inventory,
+                    "stop_event": worker_stop,
+                    "interval_seconds": max(60, args.provider_refresh_interval),
+                    "provider": args.provider_refresh_provider,
+                    "skip_verify": args.provider_refresh_skip_verify,
+                    "connect_timeout": args.provider_refresh_connect_timeout,
+                    "max_time": args.provider_refresh_max_time,
+                },
+                daemon=True,
+            )
+            provider_thread.start()
         print(f"Serving on http://{args.host}:{args.port}")
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\nStopping.")
         finally:
+            worker_stop.set()
             server.server_close()
+            if worker_thread:
+                worker_thread.join(timeout=3)
+            if provider_thread:
+                provider_thread.join(timeout=3)
         return 0
     parser.error("unknown command")
     return 2

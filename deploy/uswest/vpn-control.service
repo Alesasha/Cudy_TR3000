@@ -1,0 +1,17 @@
+[Unit]
+Description=Cudy VPN Control Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/cudy-control
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 /opt/cudy-control/tools/vpn_control_app.py --db /opt/cudy-control/data/vpn_control.db --inventory /opt/cudy-control/config/vpn_inventory.json serve --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+User=cudy-control
+Group=cudy-control
+
+[Install]
+WantedBy=multi-user.target

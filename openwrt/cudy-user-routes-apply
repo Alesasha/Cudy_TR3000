@@ -25,6 +25,26 @@ valid_ipv4() {
   printf '%s\n' "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
 }
 
+valid_ipv4_cidr() {
+  value="$1"
+  ip="${value%/*}"
+  mask="${value#*/}"
+  if [ "$ip" = "$value" ]; then
+    mask="32"
+  fi
+  valid_ipv4 "$ip" || return 1
+  printf '%s\n' "$mask" | grep -Eq '^[0-9]{1,2}$' || return 1
+  [ "$mask" -ge 0 ] && [ "$mask" -le 32 ] || return 1
+}
+
+normalize_ipv4_cidr() {
+  value="$1"
+  case "$value" in
+    */*) printf '%s\n' "$value" ;;
+    *) printf '%s/32\n' "$value" ;;
+  esac
+}
+
 mark_for_iface() {
   iface="$1"
   ip rule show 2>/dev/null | awk -v table="pbr_$iface" '
@@ -40,15 +60,19 @@ mark_for_iface() {
   '
 }
 
-resolve_domains() {
-  domain_file="$1"
-  while read -r domain; do
-    [ -n "$domain" ] || continue
-    nslookup "$domain" 2>/dev/null \
+resolve_targets() {
+  target_file="$1"
+  while read -r target; do
+    [ -n "$target" ] || continue
+    if valid_ipv4_cidr "$target"; then
+      normalize_ipv4_cidr "$target"
+      continue
+    fi
+    nslookup "$target" 2>/dev/null \
       | awk '/^Address[ 0-9]*: / { print $NF }' \
       | grep -E '^([0-9]{1,3}\.){3}[0-9]{1,3}$' \
       | awk '{ print $1 "/32" }' || true
-  done < "$domain_file" | sort -u
+  done < "$target_file" | sort -u
 }
 
 append_nft_elements() {
@@ -77,13 +101,13 @@ if [ ! -f "$ROUTES_FILE" ]; then
   exit 1
 fi
 
-while IFS="$(printf '\t')" read -r group user_id client_ip iface domain; do
+while IFS="$(printf '\t')" read -r group user_id client_ip iface target; do
   case "$group" in ''|\#*) continue ;; esac
   safe_name "$group" || { echo "Unsafe group: $group" >&2; exit 1; }
   safe_name "$iface" || { echo "Unsafe interface: $iface" >&2; exit 1; }
   valid_ipv4 "$client_ip" || { echo "Invalid client IP: $client_ip" >&2; exit 1; }
   printf '%s\t%s\t%s\n' "$client_ip" "$iface" "$user_id" > "$WORK_DIR/$group.meta"
-  printf '%s\n' "$domain" >> "$WORK_DIR/$group.domains"
+  printf '%s\n' "$target" >> "$WORK_DIR/$group.targets"
 done < "$ROUTES_FILE"
 
 batch="$WORK_DIR/apply.nft"
@@ -94,10 +118,10 @@ batch="$WORK_DIR/apply.nft"
 
 groups=0
 rules=0
-for domain_file in "$WORK_DIR"/*.domains; do
-  [ -e "$domain_file" ] || continue
-  group="${domain_file##*/}"
-  group="${group%.domains}"
+for target_file in "$WORK_DIR"/*.targets; do
+  [ -e "$target_file" ] || continue
+  group="${target_file##*/}"
+  group="${group%.targets}"
   set_name="dst_$group"
   meta="$(cat "$WORK_DIR/$group.meta")"
   client_ip="$(printf '%s\n' "$meta" | awk -F '\t' '{print $1}')"
@@ -109,7 +133,7 @@ for domain_file in "$WORK_DIR"/*.domains; do
   }
 
   ip_file="$WORK_DIR/$group.ips"
-  resolve_domains "$domain_file" > "$ip_file"
+  resolve_targets "$target_file" > "$ip_file"
   if [ ! -s "$ip_file" ]; then
     echo "WARN: no IPv4 resolved for group=$group iface=$iface client=$client_ip" >&2
     continue

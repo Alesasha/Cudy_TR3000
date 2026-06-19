@@ -1,66 +1,89 @@
 # Cudy TR3000 VPN Routing Hub
 
-Проект управляет Cudy TR3000/OpenWrt как центральным маршрутизатором VPN/proxy-выходов.
+Control plane and client agents for policy-based VPN/proxy routing.
 
-Текущая цель: дать пользователю локальный веб-интерфейс для выбора выхода по доменам, включая режим `Auto`, а администратору - полный контроль над серверами, пользователями, профилями провайдеров и правилами маршрутизации.
+The project started as a Cudy TR3000/OpenWrt router automation repo. The current
+direction is a public control-server plus managed agents for Windows, Android,
+Linux, and Cudy fallback routing.
 
-## Что Уже Есть
+## Current Architecture
 
-- Собственные AmneziaWG-выходы:
-  - `awg1`: Megahost Aktau;
-  - `awg2`: HostVDS US West.
-- Удаленные пользователи через входящий AmneziaWG на Cudy.
-- VPNtype и LokVPN как sing-box/TUN каналы.
-- PBR override-списки для принудительного WAN/VPN.
-- CLI для создания клиентов и статистики: `tools/awg_client_add.py`.
-- Stage 1 inventory: `config/vpn_inventory.json` и `tools/vpn_inventory.py`.
-- Локальная web-панель MVP: `tools/vpn_control_app.py`.
+- `uswest` control-server runs `tools/vpn_control_app.py`.
+- Agents fetch user/domain policy and transport plans from the control-server.
+- Windows and Android agents can apply local routes and start provider exits.
+- Cudy remains useful as a LAN-wide agent and emergency fallback control path.
+- Provider exits include own AmneziaWG servers plus VPNtype/LokVPN sing-box
+  transports.
 
-## Быстрый Старт Для Разработчика
+## Repository Layout
+
+- `apps/CudyAndroidAgent/` - native .NET Android agent using Android `VpnService`
+  and libbox/sing-box runtime.
+- `tools/vpn_control_app.py` - control-server, admin/user UI, agent API, Auto
+  cache, probe jobs, provider refresh workers.
+- `tools/agent-windows/` - Windows managed route agent scripts and diagnostics.
+- `tools/agent-linux/` - Linux managed agent prototype and install helpers.
+- `tools/route_agent.py` - shared managed route agent engine used by desktop
+  scripts.
+- `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
+- `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
+- `openwrt/` - scripts deployed to Cudy/OpenWrt.
+- `deploy/uswest/` - systemd/Caddy deployment templates for the public
+  control-server.
+- `config/vpn_inventory.json` - static server catalog.
+- `docs/` - architecture, operations, security, verification, and platform
+  notes.
+- `secrets/` - local-only keys, tokens, provider credentials, client configs;
+  ignored by git.
+
+## Quick Checks
+
+Install Python dependencies:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
+Validate core Python code and inventory:
+
 ```powershell
 python tools\vpn_inventory.py validate
-python tools\vpn_inventory.py list
-python tools\vpn_inventory.py admin-list --include-disabled
-python tools\vpn_control_app.py init-db
-python tools\vpn_control_app.py create-user admin --role admin
-python -m py_compile tools\vpn_inventory.py tools\awg_client_add.py
+python -m py_compile tools\vpn_control_app.py tools\vpn_inventory.py tools\route_agent.py tools\awg_client_add.py
 ```
 
-Для live-снимка Cudy:
+Build the Android release APK:
 
 ```powershell
-$env:CUDY_SSH_PASSWORD = '<router password>'
-python tools\vpn_inventory.py refresh-cudy
-Remove-Item Env:CUDY_SSH_PASSWORD
+dotnet build apps\CudyAndroidAgent\CudyAndroidAgent.csproj -c Release -p:RuntimeIdentifier=android-arm64
 ```
 
-## Структура
+Run the Android smoke test with a connected device:
 
-- `config/` - статический каталог серверов и будущие конфиги приложения.
-- `tools/` - локальные Python-утилиты оператора.
-- `openwrt/` - скрипты и артефакты для Cudy/OpenWrt.
-- `docs/` - документация для разработчика и оператора.
-- `secrets/` - локальные ключи, клиентские профили и QR; игнорируется Git.
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -StartEngine -WaitSeconds 70 -ApkPath "C:\Users\Alexander\Cudy_TR3000\apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk"
+```
 
-## Документация
+## Documentation
+
+Start here:
 
 - [Architecture](docs/architecture.md)
-- [Inventory](docs/inventory.md)
+- [Control server](docs/control-server.md)
+- [Control app](docs/control-app.md)
 - [Operations](docs/operations.md)
-- [Local control app](docs/control-app.md)
+- [Verification](docs/verification.md)
+- [Android agent](docs/android-agent.md)
+- [Android libbox runtime](docs/android-libbox-runtime.md)
+- [Windows managed transport POC](docs/windows-managed-transport-poc.md)
 - [Security](docs/security.md)
-- [GitHub publishing](docs/github.md)
 
-Исторические рабочие заметки:
+Historical working notes are kept in `MAIN.md` and `BRANCH-*.md`. They are useful
+for context but should not be treated as current operating instructions.
 
-- [MAIN.md](MAIN.md)
-- [BRANCH-1-remote-users.md](BRANCH-1-remote-users.md)
-- [BRANCH-2-lokvpn-happ.md](BRANCH-2-lokvpn-happ.md)
-- [BRANCH-3-auto-channel-selector.md](BRANCH-3-auto-channel-selector.md)
+## Security Rules
 
-Часть старых заметок может быть в неверной кодировке. Актуальная документация находится в `docs/`.
+- Do not commit `secrets/`, `.env`, local SQLite databases, APKs, build outputs,
+  or provider subscription data.
+- Keep real provider/API credentials only in environment variables or ignored
+  files under `secrets/`.
+- Treat any committed credential as compromised and rotate it.

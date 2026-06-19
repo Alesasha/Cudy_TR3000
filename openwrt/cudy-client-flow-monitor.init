@@ -1,0 +1,19 @@
+#!/bin/sh /etc/rc.common
+
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/bin/cudy-client-flow-monitor
+    procd_set_param respawn 30 5 5
+    procd_set_param stdout 0
+    procd_set_param stderr 0
+    procd_set_param env LOG=/tmp/cudy-client-flow-monitor.log
+    procd_set_param env INTERVAL=2
+    procd_set_param env MAX_LINES=8000
+    procd_set_param env CLIENT_IP=10.77.0.3
+    procd_set_param env WATCH_IPS="213.180.204.183 89.108.110.121"
+    procd_close_instance
+}

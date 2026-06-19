@@ -105,9 +105,14 @@ http://127.0.0.1:8765/admin
   - lets `Auto` routes resolve to a real interface during route plan/export;
   - can be edited from the admin UI or the `auto-cache-*` CLI commands.
 - Auto candidate lists:
-  - store ordered server candidates for future benchmarking;
+  - store ordered server candidates for Auto probing;
   - support global default, global per-domain, user default, and user per-domain scopes;
   - resolve in this order: user+domain, global+domain, user default, global default.
+- Auto selection:
+  - probes candidate servers from Cudy with `curl --interface`;
+  - chooses the fastest successful candidate for the requested domain;
+  - can save the result into `domain_auto_cache` from CLI or the admin UI;
+  - can optionally deploy routes after saving.
 - Deploy preview:
   - combines global admin routes and per-user routes;
   - per-user route wins when the same domain exists in both layers;
@@ -131,7 +136,6 @@ http://127.0.0.1:8765/admin
 
 ## Not Implemented Yet
 
-- automatic best-server benchmarking;
 - background refresh of cached `Auto` choices;
 - domain discovery for applying `Auto` to domains that do not yet have explicit rules;
 - multi-user invitation or remote sync.

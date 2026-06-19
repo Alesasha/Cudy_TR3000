@@ -1,0 +1,47 @@
+#!/bin/sh
+set -eu
+
+LOG="${LOG:-/tmp/cudy-forward-monitor.log}"
+INTERVAL="${INTERVAL:-5}"
+MAX_LINES="${MAX_LINES:-3000}"
+WAN_IF="${WAN_IF:-eth0}"
+UPSTREAM_IP="${UPSTREAM_IP:-192.168.1.1}"
+INTERNET_IP="${INTERNET_IP:-77.88.55.242}"
+
+ping_status() {
+    local target="$1"
+    if ping -c 1 -W 1 "$target" >/dev/null 2>&1; then
+        printf ok
+    else
+        printf fail
+    fi
+}
+
+trim_log() {
+    local lines
+    lines="$(wc -l < "$LOG" 2>/dev/null || echo 0)"
+    if [ "$lines" -gt "$MAX_LINES" ]; then
+        tail -n "$MAX_LINES" "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+    fi
+}
+
+while true; do
+    ts="$(date '+%Y-%m-%d %H:%M:%S')"
+    uptime_now="$(cut -d' ' -f1 /proc/uptime 2>/dev/null || echo unknown)"
+    load_now="$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || echo unknown)"
+    mem_free="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || echo unknown)"
+    operstate="$(cat "/sys/class/net/$WAN_IF/operstate" 2>/dev/null || echo unknown)"
+    carrier="$(cat "/sys/class/net/$WAN_IF/carrier" 2>/dev/null || echo unknown)"
+    default_route="$(ip -4 route show default 2>/dev/null | head -n 1)"
+    route_inet="$(ip -4 route get "$INTERNET_IP" 2>/dev/null | head -n 1)"
+    forwarding="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo unknown)"
+    pbr_fwmark_rules="$(ip rule show 2>/dev/null | grep -c fwmark || true)"
+    gw_ping="$(ping_status "$UPSTREAM_IP")"
+    inet_ping="$(ping_status "$INTERNET_IP")"
+
+    printf '%s uptime=%s load="%s" mem_available_kb=%s wan=%s carrier=%s ip_forward=%s pbr_fwmark_rules=%s ping_gw=%s ping_inet=%s default="%s" route_inet="%s"\n' \
+        "$ts" "$uptime_now" "$load_now" "$mem_free" "$operstate" "$carrier" "$forwarding" "$pbr_fwmark_rules" "$gw_ping" "$inet_ping" "$default_route" "$route_inet" >> "$LOG"
+
+    trim_log
+    sleep "$INTERVAL"
+done

@@ -1,0 +1,356 @@
+#!/bin/sh
+set -eu
+
+STATE_DIR="${STATE_DIR:-/etc/lokvpn-slots}"
+STATE_FILE="${STATE_FILE:-$STATE_DIR/state.tsv}"
+LOCK_DIR="${LOCK_DIR:-/tmp/lokvpn-slot.lock}"
+BASE_OCTET="${LOKVPN_SLOT_BASE_OCTET:-39}"
+MAX_SLOT="${LOKVPN_SLOT_MAX:-99}"
+
+usage() {
+  cat >&2 <<EOF
+Usage:
+  lokvpn-slot list
+  lokvpn-slot status
+  lokvpn-slot ensure PROFILE [SLOT]
+  lokvpn-slot remove SLOT
+  lokvpn-slot gc KEEP_PROFILE[,KEEP_PROFILE...]
+
+Profiles: smart1 de1 ru1 nl1 fr1 se1 smart2 de2 ru2 nl2 fr2 se2
+EOF
+  exit 2
+}
+
+valid_profile() {
+  case "$1" in
+    smart1|de1|ru1|nl1|fr1|se1|smart2|de2|ru2|nl2|fr2|se2) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+valid_slot() {
+  case "$1" in
+    lok[0-9]|lok[1-9][0-9]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+slot_index() {
+  printf '%s\n' "$1" | sed 's/^lok//'
+}
+
+slot_address() {
+  idx="$(slot_index "$1")"
+  printf '172.%s.%s.1/30\n' "$BASE_OCTET" "$idx"
+}
+
+mkdir -p "$STATE_DIR"
+touch "$STATE_FILE"
+
+lock() {
+  if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+    pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+      echo "lokvpn-slot is already running" >&2
+      exit 1
+    fi
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR" 2>/dev/null || {
+      echo "lokvpn-slot stale lock could not be cleared" >&2
+      exit 1
+    }
+  fi
+  printf '%s\n' "$$" > "$LOCK_DIR/pid"
+  trap 'rm -f "$LOCK_DIR/pid"; rmdir "$LOCK_DIR"' EXIT
+}
+
+state_without_slot() {
+  slot="$1"
+  awk -F '\t' -v slot="$slot" 'NF >= 2 && $1 != slot { print }' "$STATE_FILE"
+}
+
+state_profile_slot() {
+  profile="$1"
+  awk -F '\t' -v profile="$profile" 'NF >= 2 && $2 == profile { print $1; exit }' "$STATE_FILE"
+}
+
+state_slot_profile() {
+  slot="$1"
+  awk -F '\t' -v slot="$slot" 'NF >= 2 && $1 == slot { print $2; exit }' "$STATE_FILE"
+}
+
+slot_exists_anywhere() {
+  slot="$1"
+  [ -f "/etc/sing-box/$slot.json" ] && return 0
+  [ -f "/etc/init.d/sing-box-$slot" ] && return 0
+  uci -q get "network.$slot" >/dev/null 2>&1 && return 0
+  awk -F '\t' -v slot="$slot" 'NF >= 1 && $1 == slot { found = 1 } END { exit found ? 0 : 1 }' "$STATE_FILE"
+}
+
+first_free_slot() {
+  idx=1
+  while [ "$idx" -le "$MAX_SLOT" ]; do
+    slot="lok$idx"
+    if ! slot_exists_anywhere "$slot"; then
+      printf '%s\n' "$slot"
+      return 0
+    fi
+    idx=$((idx + 1))
+  done
+  echo "No free LokVPN slot up to lok$MAX_SLOT" >&2
+  return 1
+}
+
+ensure_forwarding() {
+  src="$1"
+  dest="$2"
+  name="${src}_${dest}_forward"
+  if ! uci -q get "firewall.$name" >/dev/null 2>&1; then
+    uci set "firewall.$name=forwarding"
+  fi
+  uci set "firewall.$name.src=$src"
+  uci set "firewall.$name.dest=$dest"
+}
+
+ensure_quic_reject() {
+  src="$1"
+  dest="$2"
+  name="${src}_${dest}_quic_reject"
+  if ! uci -q get "firewall.$name" >/dev/null 2>&1; then
+    uci set "firewall.$name=rule"
+  fi
+  uci set "firewall.$name.name=Reject QUIC from $src to $dest"
+  uci set "firewall.$name.src=$src"
+  uci set "firewall.$name.dest=$dest"
+  uci set "firewall.$name.proto=udp"
+  uci set "firewall.$name.dest_port=443"
+  uci set "firewall.$name.target=REJECT"
+  uci set "firewall.$name.family=ipv4"
+}
+
+add_supported_interface() {
+  slot="$1"
+  supported="$(uci -q get pbr.config.supported_interface 2>/dev/null || true)"
+  case " $supported " in
+    *" $slot "*) ;;
+    *)
+      uci add_list pbr.config.supported_interface="$slot"
+      uci commit pbr
+      ;;
+  esac
+}
+
+remove_supported_interface() {
+  slot="$1"
+  uci del_list pbr.config.supported_interface="$slot" 2>/dev/null || true
+  uci commit pbr 2>/dev/null || true
+}
+
+reload_routing_stack() {
+  /etc/init.d/network reload 2>/dev/null || true
+  /etc/init.d/firewall reload 2>/dev/null || true
+  [ -x /etc/init.d/pbr ] && /etc/init.d/pbr restart 2>/dev/null || true
+}
+
+write_service() {
+  slot="$1"
+  cat > "/etc/init.d/sing-box-$slot" <<EOF
+#!/bin/sh /etc/rc.common
+USE_PROCD=1
+START=95
+STOP=10
+
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/bin/sing-box run -c /etc/sing-box/$slot.json
+  procd_set_param respawn 3600 5 5
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+EOF
+  chmod +x "/etc/init.d/sing-box-$slot"
+}
+
+write_switcher() {
+  slot="$1"
+  cat > "/usr/bin/vpn-$slot" <<EOF
+#!/bin/sh
+/etc/init.d/sing-box-$slot start || true
+sleep 1
+/usr/bin/vpn-switch $slot
+sleep 1
+ip route replace default dev $slot table pbr_$slot 2>/dev/null || true
+EOF
+  chmod +x "/usr/bin/vpn-$slot"
+}
+
+configure_uci() {
+  slot="$1"
+  if ! uci -q get "network.$slot" >/dev/null 2>&1; then
+    uci set "network.$slot=interface"
+  fi
+  uci set "network.$slot.proto=none"
+  uci set "network.$slot.device=$slot"
+  uci commit network
+
+  if ! uci -q get "firewall.${slot}_zone" >/dev/null 2>&1; then
+    uci set "firewall.${slot}_zone=zone"
+  fi
+  uci set "firewall.${slot}_zone.name=$slot"
+  uci set "firewall.${slot}_zone.network=$slot"
+  uci set "firewall.${slot}_zone.input=REJECT"
+  uci set "firewall.${slot}_zone.output=ACCEPT"
+  uci set "firewall.${slot}_zone.forward=REJECT"
+  uci set "firewall.${slot}_zone.masq=1"
+  uci set "firewall.${slot}_zone.mtu_fix=1"
+
+  ensure_forwarding lan "$slot"
+  ensure_quic_reject lan "$slot"
+  if uci -q get firewall.friends >/dev/null 2>&1 || uci show firewall 2>/dev/null | grep -q "name='friends'"; then
+    ensure_forwarding friends "$slot"
+    ensure_quic_reject friends "$slot"
+  fi
+  uci commit firewall
+  add_supported_interface "$slot"
+}
+
+write_state() {
+  slot="$1"
+  profile="$2"
+  address="$3"
+  tmp="$(mktemp /tmp/lokvpn-slot-state.XXXXXX)"
+  state_without_slot "$slot" > "$tmp"
+  printf '%s\t%s\t%s\t%s\n' "$slot" "$profile" "$address" "$(date +%Y-%m-%dT%H:%M:%S%z)" >> "$tmp"
+  mv "$tmp" "$STATE_FILE"
+}
+
+ensure_slot() {
+  profile="$1"
+  requested_slot="${2:-}"
+  valid_profile "$profile" || {
+    echo "Invalid LokVPN profile: $profile" >&2
+    exit 2
+  }
+  existing="$(state_profile_slot "$profile" || true)"
+  if [ -n "$existing" ]; then
+    printf 'exists\t%s\t%s\n' "$existing" "$profile"
+    return 0
+  fi
+
+  if [ -n "$requested_slot" ]; then
+    valid_slot "$requested_slot" || {
+      echo "Invalid slot: $requested_slot" >&2
+      exit 2
+    }
+    if [ -n "$(state_slot_profile "$requested_slot" || true)" ]; then
+      echo "Slot already exists in state: $requested_slot" >&2
+      exit 1
+    fi
+    slot="$requested_slot"
+  else
+    slot="$(first_free_slot)"
+  fi
+
+  address="$(slot_address "$slot")"
+  mkdir -p /etc/sing-box
+  slot_sub_cache="/tmp/lokvpn-subscription-$slot.json"
+  if [ -z "${SUB_URL:-}" ]; then
+    slot_sub_cache="/tmp/lokvpn-subscription.json"
+  fi
+  CONFIG="/etc/sing-box/$slot.json" \
+  SUB_CACHE="$slot_sub_cache" \
+  INTERFACE_NAME="$slot" \
+  TUN_ADDRESS="$address" \
+  TAG_PREFIX="$slot" \
+    /usr/bin/lokvpn-refresh "$profile"
+
+  write_service "$slot"
+  write_switcher "$slot"
+  configure_uci "$slot"
+  "/etc/init.d/sing-box-$slot" enable
+  "/etc/init.d/sing-box-$slot" restart
+  sleep 2
+  reload_routing_stack
+  ip route replace default dev "$slot" table "pbr_$slot" 2>/dev/null || true
+  write_state "$slot" "$profile" "$address"
+  printf 'created\t%s\t%s\t%s\n' "$slot" "$profile" "$address"
+}
+
+remove_slot() {
+  slot="$1"
+  valid_slot "$slot" || {
+    echo "Invalid slot: $slot" >&2
+    exit 2
+  }
+  [ -x "/etc/init.d/sing-box-$slot" ] && "/etc/init.d/sing-box-$slot" stop 2>/dev/null || true
+  [ -x "/etc/init.d/sing-box-$slot" ] && "/etc/init.d/sing-box-$slot" disable 2>/dev/null || true
+  rm -f "/etc/init.d/sing-box-$slot" "/etc/sing-box/$slot.json" "/usr/bin/vpn-$slot"
+  uci -q delete "network.$slot" 2>/dev/null || true
+  uci -q delete "firewall.${slot}_zone" 2>/dev/null || true
+  uci -q delete "firewall.lan_${slot}_forward" 2>/dev/null || true
+  uci -q delete "firewall.lan_${slot}_quic_reject" 2>/dev/null || true
+  uci -q delete "firewall.friends_${slot}_forward" 2>/dev/null || true
+  uci -q delete "firewall.friends_${slot}_quic_reject" 2>/dev/null || true
+  uci commit network 2>/dev/null || true
+  uci commit firewall 2>/dev/null || true
+  remove_supported_interface "$slot"
+  tmp="$(mktemp /tmp/lokvpn-slot-state.XXXXXX)"
+  state_without_slot "$slot" > "$tmp"
+  mv "$tmp" "$STATE_FILE"
+  ip route flush table "pbr_$slot" 2>/dev/null || true
+  reload_routing_stack
+  printf 'removed\t%s\n' "$slot"
+}
+
+list_slots() {
+  printf 'slot\tprofile\taddress\tupdated_at\tservice\tlink\n'
+  while IFS="$(printf '\t')" read -r slot profile address updated_at; do
+    [ -n "${slot:-}" ] || continue
+    service="missing"
+    if [ -x "/etc/init.d/sing-box-$slot" ]; then
+      service="$(/etc/init.d/sing-box-$slot status 2>/dev/null | head -1 || true)"
+      [ -n "$service" ] || service="unknown"
+    fi
+    link="down"
+    ip link show "$slot" >/dev/null 2>&1 && link="up"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$slot" "$profile" "$address" "${updated_at:-}" "$service" "$link"
+  done < "$STATE_FILE"
+}
+
+gc_slots() {
+  keep_csv="$1"
+  keep=",$keep_csv,"
+  while IFS="$(printf '\t')" read -r slot profile address updated_at; do
+    [ -n "${slot:-}" ] || continue
+    case "$keep" in
+      *",$profile,"*) ;;
+      *) remove_slot "$slot" ;;
+    esac
+  done < "$STATE_FILE"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  list|status)
+    list_slots
+    ;;
+  ensure)
+    [ $# -ge 2 ] || usage
+    lock
+    ensure_slot "$2" "${3:-}"
+    ;;
+  remove)
+    [ $# -eq 2 ] || usage
+    lock
+    remove_slot "$2"
+    ;;
+  gc)
+    [ $# -eq 2 ] || usage
+    lock
+    gc_slots "$2"
+    ;;
+  *)
+    usage
+    ;;
+esac

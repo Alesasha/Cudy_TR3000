@@ -27,6 +27,7 @@ DEFAULT_INVENTORY = ROOT / "config" / "vpn_inventory.json"
 DEFAULT_RUNTIME = ROOT / "config" / "cudy-runtime.json"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
+DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
 
 REMOTE_REFRESH_MARKER = "@@VPN_PROVIDER_REFRESH_COMMAND"
 
@@ -34,6 +35,16 @@ REMOTE_REFRESH_MARKER = "@@VPN_PROVIDER_REFRESH_COMMAND"
 REMOTE_SCRIPT = r"""#!/bin/sh
 section() {
   printf '\n@@VPN_INVENTORY_SECTION:%s@@\n' "$1"
+}
+
+run_limited() {
+  seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@" </dev/null
+  else
+    "$@" </dev/null
+  fi
 }
 
 section supported_interfaces
@@ -56,7 +67,7 @@ for s in sing-box-vpntype sing-box-lokvpn \
   sing-box-proxynl sing-box-proxyal sing-box-proxyru sing-box-proxyus \
   sing-box-proxyde pbr; do
   if [ -x "/etc/init.d/$s" ]; then
-    status="$(/etc/init.d/$s status 2>/dev/null | head -1 || true)"
+    status="$(run_limited 3 /etc/init.d/$s status 2>/dev/null | head -1 || true)"
     printf '%s\t%s\n' "$s" "$status"
   else
     printf '%s\tmissing\n' "$s"
@@ -65,14 +76,14 @@ done
 
 section vpntype_status
 if [ -x /usr/bin/vpntype-server ]; then
-  /usr/bin/vpntype-server status 2>&1 || true
+  run_limited 5 /usr/bin/vpntype-server status 2>&1 || true
 else
   echo missing
 fi
 
 section vpntype_list
 if [ -x /usr/bin/vpntype-server ]; then
-  /usr/bin/vpntype-server list 2>&1 || true
+  run_limited 5 /usr/bin/vpntype-server list 2>&1 || true
 else
   echo missing
 fi
@@ -126,6 +137,19 @@ def write_json(path: Path, data: dict[str, Any]) -> None:
     with path.open("w", encoding="utf-8", newline="\n") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=2)
         fh.write("\n")
+
+
+def load_cudy_ssh_password(explicit_password: str | None = None) -> str | None:
+    if explicit_password:
+        return explicit_password
+    env_password = os.environ.get("CUDY_SSH_PASSWORD")
+    if env_password:
+        return env_password
+    if DEFAULT_CUDY_PASSWORD_FILE.exists():
+        password = DEFAULT_CUDY_PASSWORD_FILE.read_text(encoding="utf-8-sig").strip()
+        if password:
+            return password
+    return None
 
 
 def user_choices(inventory: dict[str, Any], *, include_disabled: bool = False) -> list[dict[str, Any]]:
@@ -364,8 +388,13 @@ def ssh_run_refresh_plan(host: str, user: str, password: str, timeout: int, plan
         allow_agent=False,
     )
     try:
-        stdin, stdout, stderr = client.exec_command("sh -s", timeout=timeout * max(3, len(plan) * 3))
+        remote_command = (
+            'tmp="/tmp/vpn_provider_refresh_$$.sh"; '
+            'cat > "$tmp"; sh "$tmp"; rc="$?"; rm -f "$tmp"; exit "$rc"'
+        )
+        stdin, stdout, stderr = client.exec_command(remote_command, timeout=timeout * max(3, len(plan) * 3))
         stdin.write(script)
+        stdin.flush()
         stdin.channel.shutdown_write()
         out = stdout.read().decode("utf-8", "replace")
         err = stderr.read().decode("utf-8", "replace")
@@ -427,8 +456,13 @@ def ssh_collect(host: str, user: str, password: str, timeout: int) -> str:
         allow_agent=False,
     )
     try:
-        stdin, stdout, stderr = client.exec_command("sh -s", timeout=timeout * 3)
+        remote_command = (
+            'tmp="/tmp/vpn_inventory_collect_$$.sh"; '
+            'cat > "$tmp"; sh "$tmp"; rc="$?"; rm -f "$tmp"; exit "$rc"'
+        )
+        stdin, stdout, stderr = client.exec_command(remote_command, timeout=timeout * 3)
         stdin.write(REMOTE_SCRIPT)
+        stdin.flush()
         stdin.channel.shutdown_write()
         out = stdout.read().decode("utf-8", "replace")
         err = stderr.read().decode("utf-8", "replace")
@@ -492,7 +526,7 @@ def command_validate(args: argparse.Namespace) -> int:
 
 
 def command_refresh_cudy(args: argparse.Namespace) -> int:
-    password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+    password = load_cudy_ssh_password(args.ssh_password)
     if not password:
         password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
     raw = ssh_collect(args.ssh_host, args.ssh_user, password, args.ssh_timeout)
@@ -535,7 +569,7 @@ def command_refresh_provider(args: argparse.Namespace) -> int:
                 print(f"{item['provider']}: {item['shell']}")
         return 0
 
-    password = args.ssh_password or os.environ.get("CUDY_SSH_PASSWORD")
+    password = load_cudy_ssh_password(args.ssh_password)
     if not password:
         password = getpass.getpass(f"SSH password for {args.ssh_user}@{args.ssh_host}: ")
 

@@ -159,6 +159,26 @@ Remove-Item Env:CUDY_SSH_PASSWORD
 
 This creates `/etc/cudy-user-routes/routes.tsv` and installs `/usr/bin/cudy-user-routes-apply`. The apply script reads PBR marks from `ip rule show`, creates nft rules matching `ip saddr <client_ip> ip daddr <resolved-domain-ip>`, and sets the corresponding PBR mark. If there are zero user routes, `--apply` requires `--allow-empty`.
 
+Per-user domain routes can be managed from CLI without opening the admin panel:
+
+```powershell
+python tools\vpn_control_app.py user-domain-route-list
+python tools\vpn_control_app.py user-domain-route-set DC_via_Cudy speedtest.net aktau
+python tools\vpn_control_app.py user-domain-route-delete DC_via_Cudy speedtest.net
+python tools\vpn_control_app.py deploy-user-routes --apply --install-script
+```
+
+Per-user routes can also target literal IPv4/CIDR ranges. This is useful for services such as Telegram where the routing decision is IP-list based, not domain based:
+
+```powershell
+python tools\vpn_control_app.py user-ip-route-list
+python tools\vpn_control_app.py user-ip-route-set DC_via_Cudy 149.154.160.0/20 aktau
+python tools\vpn_control_app.py user-ip-route-delete DC_via_Cudy 149.154.160.0/20
+python tools\vpn_control_app.py deploy-user-routes --apply --install-script
+```
+
+The route target is stored as normalized IPv4/CIDR and exported into the same `/etc/cudy-user-routes/routes.tsv` file as domain routes. The Cudy apply script accepts both domains and IPv4/CIDR values in the `target` column.
+
 Check deployed per-user route counters:
 
 ```powershell
@@ -218,11 +238,11 @@ Cudy/OpenWrt services should come back after a Cudy reboot when their init scrip
 - `firewall`;
 - `cron`.
 
-The inbound Cudy AmneziaWG server is the UCI interface `network.awg_in`, so OpenWrt `network` brings it up. Provider refresh is cron-driven:
+The inbound Cudy AmneziaWG server is the UCI interface `network.awg_in`, so OpenWrt `network` brings it up. Provider refresh is cron-driven, but it must stay off the hot path. Refreshing LokVPN or all VPNtype proxies can restart sing-box/netifd interfaces, which makes PBR temporarily disable forwarding while it rebuilds routing. Keep these jobs at night unless the refresh scripts become change-aware and non-disruptive.
 
 ```text
-*/15 * * * * /usr/bin/vpntype-proxy-refresh-all
-*/30 * * * * /usr/bin/lokvpn-refresh-current
+7 5 * * * /usr/bin/vpntype-proxy-refresh-all
+29 5 * * * /usr/bin/lokvpn-refresh-current
 ```
 
 The local control panel is different: `vpn_control_app.py serve` runs on this Windows machine. It does not automatically start after a Windows reboot unless a Windows Scheduled Task or service wrapper starts it.
