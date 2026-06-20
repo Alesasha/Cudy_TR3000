@@ -4185,6 +4185,10 @@ def parse_curl_probe_output(text: str) -> dict[str, Any]:
         result["time_total_ms"] = int(float(result.get("time_total", "0")) * 1000)
     except ValueError:
         result["time_total_ms"] = None
+    try:
+        result["speed_mbps"] = round(float(result.get("speed_download") or "0") * 8 / 1_000_000, 2)
+    except ValueError:
+        result["speed_mbps"] = None
     return result
 
 
@@ -4201,7 +4205,8 @@ def run_cudy_curl_probe(
         "out=$(curl -4 -L -sS -o /dev/null "
         f"--interface {shlex.quote(iface)} "
         f"--connect-timeout {int(connect_timeout)} --max-time {int(max_time)} "
-        "-w 'http_code=%{http_code}\\ntime_total=%{time_total}\\nremote_ip=%{remote_ip}\\n' "
+        "-w 'http_code=%{http_code}\\ntime_total=%{time_total}\\nremote_ip=%{remote_ip}\\n"
+        "size_download=%{size_download}\\nspeed_download=%{speed_download}\\n' "
         f"{shlex.quote(url)} 2>&1); "
         "rc=$?; printf 'rc=%s\\n%s\\n' \"$rc\" \"$out\""
     )

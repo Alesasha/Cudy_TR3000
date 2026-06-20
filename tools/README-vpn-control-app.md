@@ -179,6 +179,10 @@ service alias and it shows the current control-plane decision:
 - candidate list that would be used for Auto;
 - `direct` when no managed route currently matches.
 
+When Auto probe jobs include an HTTP URL with enough response body to measure,
+new results also store `speed_download` and `speed_mbps`. TCP probes, such as
+Telegram CIDR reachability checks, report latency only.
+
 Built-in aliases include:
 
 ```text

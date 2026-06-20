@@ -241,16 +241,34 @@ public sealed class CudyAndroidProbeRunner
             var bytes = 0;
             var egressIp = "";
             await using var stream = await reply.Content.ReadAsStreamAsync(cts.Token);
-            var buffer = new byte[4096];
-            var read = await stream.ReadAsync(buffer, cts.Token);
-            bytes += read;
-            var bodyPrefix = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
-            var ipMatch = IpBodyPattern.Match(bodyPrefix);
-            if (ipMatch.Success && IPAddress.TryParse(ipMatch.Groups[1].Value, out var parsedIp))
+            var buffer = new byte[16384];
+            var prefixBytes = new List<byte>();
+            const int maxProbeBytes = 1024 * 1024;
+            while (bytes < maxProbeBytes)
             {
-                egressIp = parsedIp.ToString();
+                var read = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, maxProbeBytes - bytes)), cts.Token);
+                if (read <= 0)
+                {
+                    break;
+                }
+                if (prefixBytes.Count < 256)
+                {
+                    prefixBytes.AddRange(buffer.Take(Math.Min(read, 256 - prefixBytes.Count)));
+                }
+                bytes += read;
+            }
+            if (prefixBytes.Count > 0)
+            {
+                var bodyPrefix = System.Text.Encoding.UTF8.GetString(prefixBytes.ToArray());
+                var ipMatch = IpBodyPattern.Match(bodyPrefix);
+                if (ipMatch.Success && IPAddress.TryParse(ipMatch.Groups[1].Value, out var parsedIp))
+                {
+                    egressIp = parsedIp.ToString();
+                }
             }
             stopwatch.Stop();
+            var elapsedSeconds = Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
+            var speedMbps = Math.Round(bytes * 8.0 / elapsedSeconds / 1_000_000, 2);
             return new Dictionary<string, object?>
             {
                 ["ok"] = ((int)reply.StatusCode) >= 200 && ((int)reply.StatusCode) < 400,
@@ -259,6 +277,7 @@ public sealed class CudyAndroidProbeRunner
                 ["http_code"] = (int)reply.StatusCode,
                 ["time_total_ms"] = (int)Math.Round(stopwatch.Elapsed.TotalMilliseconds),
                 ["bytes"] = bytes,
+                ["speed_mbps"] = speedMbps,
                 ["egress_ip"] = egressIp,
             };
         }

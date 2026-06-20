@@ -460,7 +460,13 @@ def curl_probe(
         "--max-time",
         str(max_time),
         "-w",
-        "http_code=%{http_code}\ntime_total=%{time_total}\nremote_ip=%{remote_ip}\nsize_download=%{size_download}\n",
+        (
+            "http_code=%{http_code}\n"
+            "time_total=%{time_total}\n"
+            "remote_ip=%{remote_ip}\n"
+            "size_download=%{size_download}\n"
+            "speed_download=%{speed_download}\n"
+        ),
         url,
     ]
     if bind_value:
@@ -488,6 +494,10 @@ def curl_probe(
         parsed["time_total_ms"] = int(float(parsed.get("time_total") or "0") * 1000)
     except ValueError:
         parsed["time_total_ms"] = None
+    try:
+        parsed["speed_mbps"] = round(float(parsed.get("speed_download") or "0") * 8 / 1_000_000, 2)
+    except ValueError:
+        parsed["speed_mbps"] = None
     parsed["ok"] = rc == 0 and 200 <= int(parsed["http_code_int"]) < 500
     return parsed
 
