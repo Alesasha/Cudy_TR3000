@@ -179,6 +179,13 @@ service alias and it shows the current control-plane decision:
 - candidate list that would be used for Auto;
 - `direct` when no managed route currently matches.
 
+The same lookup is available from the CLI:
+
+```powershell
+python tools\vpn_control_app.py route-lookup telegram --user-id isasha_R7_Cudy
+python tools\vpn_control_app.py route-lookup https://ifconfig.me/ip --user-id isasha_R7_Cudy --json
+```
+
 When Auto probe jobs include an HTTP URL with enough response body to measure,
 new results also store `speed_download` and `speed_mbps`. TCP probes, such as
 Telegram CIDR reachability checks, report latency only.

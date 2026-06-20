@@ -955,7 +955,7 @@ ADMIN_HTML = r"""<!doctype html>
         <button id="runAutoWorker" type="button">Run Worker Once</button>
         <button id="refreshAutoJobs" class="secondary" type="button">Refresh</button>
         <div class="field"><label>Max Jobs</label><input id="autoWorkerMaxJobs" type="number" min="1" max="50" step="1" value="5"></div>
-        <div class="field"><label>Max Candidates</label><input id="autoWorkerMaxCandidates" type="number" min="1" max="50" step="1" value="8"></div>
+        <div class="field"><label>Max Candidates</label><input id="autoWorkerMaxCandidates" type="number" min="1" max="50" step="1" value="4"></div>
         <div class="field"><label>Cache TTL sec</label><input id="autoWorkerCacheTtl" type="number" min="0" step="60" value="3600"></div>
       </div>
       <p id="autoProbeStatus" class="status"></p>
@@ -1716,7 +1716,7 @@ ADMIN_HTML = r"""<!doctype html>
           method: "POST",
           body: JSON.stringify({
             max_jobs: Number(document.getElementById("autoWorkerMaxJobs").value || 5),
-            max_candidates_per_job: Number(document.getElementById("autoWorkerMaxCandidates").value || 8),
+            max_candidates_per_job: Number(document.getElementById("autoWorkerMaxCandidates").value || 4),
             cache_ttl_seconds: Number(document.getElementById("autoWorkerCacheTtl").value || 3600)
           })
         });
@@ -4092,7 +4092,7 @@ def select_auto_probe_candidates(
     domain: str,
     candidates: list[str],
     max_candidates: int,
-    leader_count: int = 5,
+    leader_count: int = 3,
 ) -> list[str]:
     if max_candidates <= 0 or len(candidates) <= max_candidates:
         return candidates
@@ -4125,7 +4125,7 @@ def create_auto_probe_jobs_once(
     job_stale_seconds: int = 900,
     agent_stale_seconds: int = 600,
     max_jobs: int = 5,
-    max_candidates_per_job: int = 8,
+    max_candidates_per_job: int = 4,
     connect_timeout: int = 5,
     max_time: int = 12,
 ) -> dict[str, Any]:
@@ -7424,7 +7424,7 @@ class Handler(BaseHTTPRequestHandler):
             job_stale_seconds=max(60, min(int(data.get("job_stale_seconds") or 900), 24 * 3600)),
             agent_stale_seconds=max(60, min(int(data.get("agent_stale_seconds") or 600), 24 * 3600)),
             max_jobs=max(1, min(int(data.get("max_jobs") or 5), 50)),
-            max_candidates_per_job=max(1, min(int(data.get("max_candidates_per_job") or 8), 50)),
+            max_candidates_per_job=max(1, min(int(data.get("max_candidates_per_job") or 4), 50)),
             connect_timeout=max(1, min(int(data.get("connect_timeout") or 5), 60)),
             max_time=max(1, min(int(data.get("max_time") or 12), 120)),
         )
@@ -7659,6 +7659,11 @@ def build_parser() -> argparse.ArgumentParser:
     route_plan_parser = sub.add_parser("route-plan", help="Print effective per-user route plan.")
     route_plan_parser.add_argument("--json", action="store_true", help="Print full JSON plan.")
 
+    route_lookup_parser = sub.add_parser("route-lookup", help="Show the effective route for a domain, URL, IP, CIDR, or service alias.")
+    route_lookup_parser.add_argument("target")
+    route_lookup_parser.add_argument("--user-id", required=True)
+    route_lookup_parser.add_argument("--json", action="store_true", help="Print full JSON lookup result.")
+
     auto_cache_list_parser = sub.add_parser("auto-cache-list", help="List cached Auto domain choices.")
     auto_cache_list_parser.add_argument("--json", action="store_true", help="Print JSON cache entries.")
 
@@ -7729,7 +7734,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_worker_once_parser.add_argument("--job-stale-seconds", type=int, default=900)
     auto_worker_once_parser.add_argument("--agent-stale-seconds", type=int, default=600)
     auto_worker_once_parser.add_argument("--max-jobs", type=int, default=5)
-    auto_worker_once_parser.add_argument("--max-candidates-per-job", type=int, default=8)
+    auto_worker_once_parser.add_argument("--max-candidates-per-job", type=int, default=4)
     auto_worker_once_parser.add_argument("--connect-timeout", type=int, default=5)
     auto_worker_once_parser.add_argument("--max-time", type=int, default=12)
     auto_worker_once_parser.add_argument("--json", action="store_true", help="Print JSON result.")
@@ -7873,7 +7878,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--auto-worker-job-stale-seconds", type=int, default=900)
     serve_parser.add_argument("--auto-worker-agent-stale-seconds", type=int, default=600)
     serve_parser.add_argument("--auto-worker-max-jobs", type=int, default=5)
-    serve_parser.add_argument("--auto-worker-max-candidates-per-job", type=int, default=8)
+    serve_parser.add_argument("--auto-worker-max-candidates-per-job", type=int, default=4)
     serve_parser.add_argument("--auto-worker-connect-timeout", type=int, default=5)
     serve_parser.add_argument("--auto-worker-max-time", type=int, default=12)
     serve_parser.add_argument("--no-provider-refresh-worker", action="store_true", help="Disable background VPNtype/LokVPN transport refresh.")
@@ -8125,6 +8130,26 @@ def main() -> int:
                     print(f"  {route['domain']}\t{route['server_id']}\t{route['source']}{via}")
                 for warning in user["warnings"]:
                     print(f"  WARNING: {warning}")
+        return 0
+    if args.command == "route-lookup":
+        result = route_lookup(args.db, args.inventory, user_id=args.user_id, target=args.target)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            if result.get("alias"):
+                alias = result["alias"]
+                print(f"alias={alias['alias']} label={alias['label']} targets={len(alias.get('targets') or [])}")
+            for item in result["results"]:
+                rule = item.get("matched_rule") or {}
+                rule_label = rule.get("target_cidr") or rule.get("domain") or "-"
+                auto = item.get("auto_cache") or {}
+                auto_label = ""
+                if auto:
+                    auto_label = f" auto={auto.get('selected_server_id') or '-'} score={auto.get('score_ms') if auto.get('score_ms') is not None else '-'}"
+                print(
+                    f"{item['target']}\tstate={item['route_state']}\tserver={item['server_id']}"
+                    f"\trule={rule_label}{auto_label}"
+                )
         return 0
     if args.command == "auto-cache-list":
         init_db(args.db, args.inventory)
