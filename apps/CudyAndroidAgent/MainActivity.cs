@@ -2,7 +2,9 @@ namespace CudyAndroidAgent;
 
 using Android.App;
 using Android.Content;
+using Android.Net;
 using Android.OS;
+using Android.Provider;
 using Android.Widget;
 using System.Text;
 
@@ -66,6 +68,7 @@ public class MainActivity : Activity
         statusText.Text = "Ready";
 
         RequireButton(Resource.Id.saveButton).Click += (_, _) => SaveSettings();
+        RequireButton(Resource.Id.setupPermissionsButton).Click += (_, _) => SetupBackgroundPermissions();
         RequireButton(Resource.Id.fetchButton).Click += async (_, _) => await FetchPolicyAsync();
         RequireButton(Resource.Id.checkButton).Click += async (_, _) => await CheckControlAsync();
         RequireButton(Resource.Id.prepareButton).Click += (_, _) => PrepareVpn();
@@ -73,6 +76,7 @@ public class MainActivity : Activity
         RequireButton(Resource.Id.stopButton).Click += (_, _) => StopAgent();
         ApplyIntentSettings(Intent);
         RenderStoredStatus();
+        MaybePromptBackgroundPermissions();
     }
 
     protected override void OnNewIntent(Intent? intent)
@@ -249,6 +253,109 @@ public class MainActivity : Activity
     private static string InputText(EditText? input)
     {
         return input?.Text ?? "";
+    }
+
+    private void MaybePromptBackgroundPermissions()
+    {
+        if (preferences?.GetBoolean("background_permissions_prompt_shown", false) == true)
+        {
+            return;
+        }
+
+        preferences?.Edit()?.PutBoolean("background_permissions_prompt_shown", true)?.Apply();
+        var dialog = new AlertDialog.Builder(this);
+        dialog.SetTitle("Background permissions");
+        dialog.SetMessage("For automatic reconnect after phone reboot, allow battery unrestricted mode and enable Autostart for Cudy Agent.");
+        dialog.SetPositiveButton("Setup", (_, _) => SetupBackgroundPermissions());
+        dialog.SetNegativeButton("Later", (_, _) => { });
+        dialog.Show();
+    }
+
+    private void SetupBackgroundPermissions()
+    {
+        if (!IsIgnoringBatteryOptimizations())
+        {
+            if (OpenBatteryOptimizationRequest())
+            {
+                statusText!.Text = "Battery permission requested";
+                outputText!.Text = "Allow battery unrestricted mode, then tap Setup permissions again to open Autostart.";
+                return;
+            }
+        }
+
+        if (OpenMiuiAutostartSettings())
+        {
+            statusText!.Text = "Autostart settings opened";
+            outputText!.Text = "Enable Autostart for Cudy Agent. If this screen is not available, use app settings and set Battery saver to No restrictions.";
+            return;
+        }
+
+        OpenApplicationSettings();
+        statusText!.Text = "Application settings opened";
+        outputText!.Text = "Set Battery saver to No restrictions and enable Autostart if your Android build exposes it.";
+    }
+
+    private bool IsIgnoringBatteryOptimizations()
+    {
+        if ((int)Build.VERSION.SdkInt < 23)
+        {
+            return true;
+        }
+
+        var powerManager = GetSystemService(PowerService) as PowerManager;
+        return powerManager?.IsIgnoringBatteryOptimizations(PackageName) ?? false;
+    }
+
+    private bool OpenBatteryOptimizationRequest()
+    {
+        if ((int)Build.VERSION.SdkInt < 23)
+        {
+            return false;
+        }
+
+        try
+        {
+            var intent = new Intent(Settings.ActionRequestIgnoreBatteryOptimizations);
+            intent.SetData(Uri.Parse($"package:{PackageName}"));
+            StartActivity(intent);
+            return true;
+        }
+        catch (Exception)
+        {
+            try
+            {
+                StartActivity(new Intent(Settings.ActionIgnoreBatteryOptimizationSettings));
+                return true;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+        }
+    }
+
+    private bool OpenMiuiAutostartSettings()
+    {
+        try
+        {
+            var intent = new Intent();
+            intent.SetComponent(new ComponentName(
+                "com.miui.securitycenter",
+                "com.miui.permcenter.autostart.AutoStartManagementActivity"));
+            StartActivity(intent);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    private void OpenApplicationSettings()
+    {
+        var intent = new Intent(Settings.ActionApplicationDetailsSettings);
+        intent.SetData(Uri.Parse($"package:{PackageName}"));
+        StartActivity(intent);
     }
 
     private void PrepareVpn()

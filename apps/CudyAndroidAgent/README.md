@@ -29,11 +29,12 @@ Current MVP:
 - registers a boot/reconnect receiver for `BOOT_COMPLETED`,
   `MY_PACKAGE_REPLACED`, and the smoke-test action
   `com.nashvpn.cudyagent.TEST_BOOT_START`.
+- shows a first-run background permissions prompt and a `Setup permissions`
+  button for battery optimization and MIUI Autostart setup.
 
 Next implementation step:
 
 - add a richer user-facing status screen;
-- add battery optimization instructions or an in-app warning;
 - verify behavior after a real phone reboot on each target Android/MIUI build.
 
 Safety note:
@@ -63,10 +64,15 @@ Manual smoke test:
 
 1. Install the signed APK.
 2. Enter `Control URL`, `Device ID`, device token, SSH host, SSH user, and SSH private key.
-3. Tap `Save`, then `Check control`.
-4. Tap `Fetch policy`.
-5. Tap `Prepare VPN` and grant Android VPN permission.
-6. Tap `Start agent`.
+3. Tap `Save`, then `Setup permissions`.
+4. Allow Android battery unrestricted mode when prompted.
+5. On MIUI/Xiaomi/POCO/Redmi, enable Autostart when the app opens the vendor
+   settings screen. Android does not allow the app to grant this vendor
+   permission by itself.
+6. Tap `Check control`.
+7. Tap `Fetch policy`.
+8. Tap `Prepare VPN` and grant Android VPN permission.
+9. Tap `Start agent`.
 
 Expected MVP status:
 
