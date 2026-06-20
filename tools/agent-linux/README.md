@@ -12,6 +12,9 @@ posts status/probe results back to the control server.
 - `managed_agent.sh`: long-running agent loop.
 - `start_tunnel.sh`: pins the control-server route and opens SSH forwarding.
 - `start_singbox_transport.sh`: starts one `sing-box` TUN by config.
+- `stop_singbox_transport.sh`: stops one managed `sing-box` TUN by name.
+- `restore_direct.sh`: restores direct half-default routes and stops managed
+  provider TUN exits.
 - `write_transport_plan.py`: converts control-server `transport_plan` into local `sing-box` configs.
 - `install_systemd.sh`: installs a systemd service.
 - `test_prod_agent.sh`: smoke test.
@@ -34,6 +37,17 @@ RUN_ONCE=1 ./managed_agent.sh
 ./test_prod_agent.sh
 ```
 
+If internet disappears during a test, run:
+
+```bash
+./restore_direct.sh
+```
+
+The restore script uses the first non-VPN IPv4 default route, rewrites
+`0.0.0.0/1` and `128.0.0.0/1` to that gateway, stops managed provider TUN
+exits, and resets `systemd-resolved` DNS on that physical interface when
+`resolvectl` is available.
+
 ## Install
 
 ```bash
@@ -51,5 +65,5 @@ tail -f managed-agent.log
 
 ```bash
 sudo systemctl disable --now cudy-managed-agent.service
-sudo ./restore_direct.sh
+./restore_direct.sh
 ```

@@ -65,6 +65,21 @@ PY
   done
 }
 
+stop_unused_transports() {
+  local desired_file="$1"
+  local pid_file name
+  shopt -s nullglob
+  for pid_file in run/*.pid; do
+    name="$(basename "$pid_file" .pid)"
+    [ "$name" = "control-tunnel" ] && continue
+    if ! grep -Fxq "$name" "$desired_file"; then
+      log "stopping unused sing-box transport: $name"
+      ./stop_singbox_transport.sh "$name" || true
+    fi
+  done
+  shopt -u nullglob
+}
+
 mkdir -p run logs transports
 log "managed linux agent starting pid=$$ control=${VPN_CONTROL_URL}"
 
@@ -76,6 +91,15 @@ while true; do
       map_file="run/interface-maps.txt"
       build_interface_args run/fresh-config.json > "$map_file"
       start_transports
+      python3 - run/transport-plan.json <<'PY' > run/desired-transports.txt
+import json
+import sys
+for row in json.load(open(sys.argv[1], encoding="utf-8")):
+    name = row.get("interface_name") or ""
+    if name:
+        print(name)
+PY
+      stop_unused_transports run/desired-transports.txt
       args=()
       while IFS= read -r map; do
         [ -n "$map" ] && args+=(--interface-map "$map")
