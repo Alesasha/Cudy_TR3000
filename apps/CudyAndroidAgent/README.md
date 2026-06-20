@@ -24,12 +24,17 @@ Current MVP:
 - keeps `final=direct`, so only matching policy rules use provider exits;
 - adds control-server `ip_routes` into Android `VpnService.Builder`, so Android
   system routing sends those CIDRs into the app TUN.
+- claims and completes control-server probe jobs through local mixed proxy
+  inbounds;
+- registers a boot/reconnect receiver for `BOOT_COMPLETED`,
+  `MY_PACKAGE_REPLACED`, and the smoke-test action
+  `com.nashvpn.cudyagent.TEST_BOOT_START`.
 
 Next implementation step:
 
-- report unified config/rule summary in `/api/agent/status`;
-- harden probe jobs for mobile foreground/battery constraints;
-- add boot/reconnect handling.
+- add a richer user-facing status screen;
+- add battery optimization instructions or an in-app warning;
+- verify behavior after a real phone reboot on each target Android/MIUI build.
 
 Safety note:
 

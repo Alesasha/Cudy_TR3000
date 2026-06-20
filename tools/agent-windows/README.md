@@ -222,17 +222,22 @@ Current production default for this package is control-server driven:
 .\Install-ManagedAgentTask.ps1 -RunNow
 ```
 
-This installs a highest-privilege logon task that runs:
+This installs a logon task that runs the managed agent with the local package
+settings. The current production bundle uses:
 
 ```text
-Start-ManagedAgent.ps1 -DirectTransport aktau=AmneziaVPN=aktau-awg.conf
+Start-ManagedAgent.ps1 -NoDirectTransports -ExtraInterfaceMap aktau=AmneziaVPN
 ```
 
 That means:
 
 - control-server decides which sing-box transports are needed;
-- `proxyde` and future provider exits are started from `transport_plan`;
-- existing direct `aktau` rules use a managed AmneziaWG transport named `AmneziaVPN`;
+- VPNtype/LokVPN exits are started from `transport_plan` and unused exits are
+  stopped automatically;
+- existing direct `aktau` rules map to the local AmneziaWG interface named
+  `AmneziaVPN`;
+- provider API refresh on the Windows agent is fallback-only and is not needed
+  in normal production mode;
 - the agent keeps the SSH tunnel to `uswest` alive;
 - route apply status is posted back to the control-server.
 

@@ -50,6 +50,9 @@ This is the current implementation order for the managed VPN control project.
   domain. If no live agent is available, test from the control-server.
 - Keep winner history and a TTL cache.
 - Show recent winners with latency and throughput near candidate-list editing.
+- Current implementation expands `all-rest` on the control-server and sends
+  bounded probe windows to agents (`8` candidates by default), so agents do not
+  start every provider transport at once.
 
 ## 5. Provider Transports
 
@@ -61,9 +64,10 @@ This is the current implementation order for the managed VPN control project.
 
 ## 6. Windows Agent
 
-- Production install/uninstall.
-- Self-heal SSH tunnel.
-- Self-heal sing-box transports.
+- Production install/uninstall is implemented through scheduled task helpers.
+- SSH tunnel self-heal is implemented through endpoint manifest/fallback logic.
+- Sing-box transport self-heal is implemented for control-server
+  `transport_plan`; unused exits are stopped automatically.
 - Clear logs and status command.
 - Smoke-test after Windows reboot.
 - Verify Telegram, Gemini, ifconfig, speedtest, and direct traffic.
@@ -73,8 +77,12 @@ This is the current implementation order for the managed VPN control project.
 - Prepare a normal user instruction.
 - Verify behavior after phone reboot.
 - Document battery restrictions and foreground service behavior.
-- Add production probe-job support, not only debug probes.
-- Build release APK with clear name and version.
+- Production probe-job support is implemented through Android local mixed proxy
+  probes.
+- Boot/reconnect receiver is implemented; real reboot behavior still needs
+  device-level verification and battery/autostart guidance.
+- Release APK build is available with a versioned local copy under
+  `build/releases/`.
 
 ## 8. Linux Agent
 
