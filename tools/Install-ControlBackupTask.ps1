@@ -10,9 +10,7 @@ $ErrorActionPreference = "Stop"
 function Assert-Admin {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = [Security.Principal.WindowsPrincipal]::new($identity)
-    if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "Install-ControlBackupTask.ps1 must be run as Administrator."
-    }
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
 
 function Quote-Arg {
@@ -23,7 +21,7 @@ function Quote-Arg {
     return '"' + $Value.Replace('"', '\"') + '"'
 }
 
-Assert-Admin
+$isAdmin = Assert-Admin
 
 $runner = Join-Path $PSScriptRoot "Run-ControlBackup.ps1"
 if (-not (Test-Path -LiteralPath $runner)) {
@@ -46,7 +44,14 @@ $triggerTime = [DateTime]::ParseExact($At, "HH:mm", [Globalization.CultureInfo]:
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ($argsList -join " ")
 $trigger = New-ScheduledTaskTrigger -Daily -At $triggerTime
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$principalDef = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+$principalArgs = @{
+    UserId = $currentUser
+    LogonType = "Interactive"
+}
+if ($isAdmin) {
+    $principalArgs.RunLevel = "Highest"
+}
+$principalDef = New-ScheduledTaskPrincipal @principalArgs
 $settings = New-ScheduledTaskSettingsSet `
     -AllowStartIfOnBatteries `
     -DontStopIfGoingOnBatteries `

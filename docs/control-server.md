@@ -259,7 +259,9 @@ powershell -ExecutionPolicy Bypass -File tools\Install-ControlBackupTask.ps1 -Ru
 The scheduled task does not store the SSH password in its command-line
 arguments. `tools\Run-ControlBackup.ps1` reads it from
 `secrets\control_backup_ssh_password.txt` or from `CONTROL_BACKUP_SSH_PASSWORD`.
-The file is under ignored `secrets/` and must not be committed.
+The file is under ignored `secrets/` and must not be committed. The installer
+can run from a normal user PowerShell; when it is run elevated, the task uses
+the highest available run level.
 
 Current disaster-recovery layers:
 
@@ -376,6 +378,9 @@ Install a repeated Windows sync task:
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\Install-CudyFallbackSyncTask.ps1 -RunNow
 ```
+
+This installer also works from a normal user PowerShell and uses highest run
+level only when the caller is already elevated.
 
 ## Transport Plan
 
