@@ -177,7 +177,7 @@ the production SQLite database:
 
 ```powershell
 $env:USWEST_SSH_PASSWORD = "<root password>"
-python tools\deploy_control_server.py --no-upload-db --skip-package-install
+python tools\deploy_control_server.py --no-upload-db --skip-package-install --connect-attempts 5
 Remove-Item Env:USWEST_SSH_PASSWORD
 ```
 
@@ -229,7 +229,7 @@ Create a local disaster-recovery archive from the live uswest control-server:
 
 ```powershell
 $env:CONTROL_BACKUP_SSH_PASSWORD = "<root password>"
-python tools\backup_control_server.py
+python tools\backup_control_server.py --connect-attempts 5
 Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD
 ```
 

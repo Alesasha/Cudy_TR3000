@@ -40,20 +40,30 @@ def password_from_env_or_prompt(explicit: str | None, *, env_names: tuple[str, .
     return getpass.getpass(prompt)
 
 
-def connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        host,
-        username=user,
-        password=password,
-        timeout=timeout,
-        banner_timeout=timeout,
-        auth_timeout=timeout,
-        look_for_keys=False,
-        allow_agent=False,
-    )
-    return client
+def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                host,
+                username=user,
+                password=password,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+            if attempt >= attempts:
+                break
+            time.sleep(min(20, 2 * attempt))
+    raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
@@ -208,8 +218,8 @@ def clone(args: argparse.Namespace) -> dict[str, Any]:
         archive_dir.mkdir(parents=True, exist_ok=True)
         local_archive = archive_dir / f"cudy-control-clone-{int(time.time())}.tgz"
         source_label = args.source_host
-        source = connect(args.source_host, args.source_user, source_password, args.timeout)
-    target = connect(args.target_host, args.target_user, target_password, args.timeout)
+        source = connect(args.source_host, args.source_user, source_password, args.timeout, attempts=args.connect_attempts)
+    target = connect(args.target_host, args.target_user, target_password, args.timeout, attempts=args.connect_attempts)
     try:
         if source is not None:
             source_archive = create_source_archive(
@@ -269,6 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target-host", required=True)
     parser.add_argument("--target-user", default=DEFAULT_USER)
     parser.add_argument("--target-password")
+    parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE)
     parser.add_argument("--service-user", default=DEFAULT_SERVICE_USER)

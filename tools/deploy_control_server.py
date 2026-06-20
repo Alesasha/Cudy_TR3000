@@ -14,6 +14,7 @@ import posixpath
 import shlex
 import stat
 import sys
+import time
 from pathlib import Path
 
 import paramiko
@@ -46,20 +47,30 @@ def ssh_password(explicit: str | None) -> str:
     return getpass.getpass("SSH password for uswest: ")
 
 
-def connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        host,
-        username=user,
-        password=password,
-        timeout=timeout,
-        banner_timeout=timeout,
-        auth_timeout=timeout,
-        look_for_keys=False,
-        allow_agent=False,
-    )
-    return client
+def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                host,
+                username=user,
+                password=password,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+            if attempt >= attempts:
+                break
+            time.sleep(min(20, 2 * attempt))
+    raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
@@ -123,7 +134,7 @@ def remote_file_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
 
 def deploy(args: argparse.Namespace) -> dict[str, object]:
     password = ssh_password(args.ssh_password)
-    client = connect(args.host, args.user, password, args.timeout)
+    client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
     uploaded = 0
     try:
         package_step = ""
@@ -194,6 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--ssh-password")
+    parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE)
