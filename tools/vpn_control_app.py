@@ -955,6 +955,7 @@ ADMIN_HTML = r"""<!doctype html>
         <button id="runAutoWorker" type="button">Run Worker Once</button>
         <button id="refreshAutoJobs" class="secondary" type="button">Refresh</button>
         <div class="field"><label>Max Jobs</label><input id="autoWorkerMaxJobs" type="number" min="1" max="50" step="1" value="5"></div>
+        <div class="field"><label>Max Candidates</label><input id="autoWorkerMaxCandidates" type="number" min="1" max="50" step="1" value="8"></div>
         <div class="field"><label>Cache TTL sec</label><input id="autoWorkerCacheTtl" type="number" min="0" step="60" value="3600"></div>
       </div>
       <p id="autoProbeStatus" class="status"></p>
@@ -1715,6 +1716,7 @@ ADMIN_HTML = r"""<!doctype html>
           method: "POST",
           body: JSON.stringify({
             max_jobs: Number(document.getElementById("autoWorkerMaxJobs").value || 5),
+            max_candidates_per_job: Number(document.getElementById("autoWorkerMaxCandidates").value || 8),
             cache_ttl_seconds: Number(document.getElementById("autoWorkerCacheTtl").value || 3600)
           })
         });
@@ -4084,6 +4086,37 @@ def auto_probe_domain_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     return result
 
 
+def select_auto_probe_candidates(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    candidates: list[str],
+    max_candidates: int,
+    leader_count: int = 5,
+) -> list[str]:
+    if max_candidates <= 0 or len(candidates) <= max_candidates:
+        return candidates
+    leader_count = max(1, min(int(leader_count), max_candidates))
+    leaders = candidates[:leader_count]
+    rest = [server_id for server_id in candidates[leader_count:] if server_id not in leaders]
+    remaining_slots = max_candidates - len(leaders)
+    if remaining_slots <= 0 or not rest:
+        return leaders[:max_candidates]
+    history = row(
+        conn,
+        """
+        SELECT COUNT(*) AS count
+        FROM agent_probe_jobs
+        WHERE domain = ?
+          AND status IN ('done', 'failed')
+        """,
+        (domain,),
+    )
+    offset = (int((history or {}).get("count") or 0) * remaining_slots) % len(rest)
+    rotated = rest[offset:] + rest[:offset]
+    return leaders + rotated[:remaining_slots]
+
+
 def create_auto_probe_jobs_once(
     db_path: Path,
     inventory_path: Path,
@@ -4092,6 +4125,7 @@ def create_auto_probe_jobs_once(
     job_stale_seconds: int = 900,
     agent_stale_seconds: int = 600,
     max_jobs: int = 5,
+    max_candidates_per_job: int = 8,
     connect_timeout: int = 5,
     max_time: int = 12,
 ) -> dict[str, Any]:
@@ -4150,11 +4184,22 @@ def create_auto_probe_jobs_once(
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "cache_fresh", "age_seconds": cached_age})
                 continue
             policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
-            candidates = list((policy or {}).get("candidate_server_ids") or default_candidates)
+            candidates = list(
+                (policy or {}).get("expanded_candidate_server_ids")
+                or (policy or {}).get("candidate_server_ids")
+                or default_candidates
+            )
+            candidates = expand_auto_candidate_ids(servers, candidates)
             candidates = [server_id for server_id in candidates if server_id in servers and servers[server_id].get("enabled") and servers[server_id].get("user_visible")]
             if not candidates:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "no_candidates"})
                 continue
+            probe_candidates = select_auto_probe_candidates(
+                conn,
+                domain=domain,
+                candidates=candidates,
+                max_candidates=max(1, int(max_candidates_per_job)),
+            )
             assigned_device_id = choose_probe_agent(agents, domain=domain, user_id=user_id)
             if not assigned_device_id and not agents:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "no_active_agent"})
@@ -4163,9 +4208,10 @@ def create_auto_probe_jobs_once(
                 {
                     "domain": domain,
                     "url": spec.get("url") or None,
-                    "candidate_server_ids": candidates,
+                    "candidate_server_ids": probe_candidates,
                     "user_id": user_id,
                     "assigned_device_id": assigned_device_id,
+                    "expanded_candidate_count": len(candidates),
                 }
             )
             planned_domains.add(domain)
@@ -4192,6 +4238,7 @@ def create_auto_probe_jobs_once(
         "active_agents": active_agent_count,
         "cache_ttl_seconds": cache_ttl_seconds,
         "max_jobs": max_jobs,
+        "max_candidates_per_job": max_candidates_per_job,
     }
 
 
@@ -4205,6 +4252,7 @@ def auto_probe_worker_loop(
     job_stale_seconds: int,
     agent_stale_seconds: int,
     max_jobs: int,
+    max_candidates_per_job: int,
     connect_timeout: int,
     max_time: int,
 ) -> None:
@@ -4217,6 +4265,7 @@ def auto_probe_worker_loop(
                 job_stale_seconds=job_stale_seconds,
                 agent_stale_seconds=agent_stale_seconds,
                 max_jobs=max_jobs,
+                max_candidates_per_job=max_candidates_per_job,
                 connect_timeout=connect_timeout,
                 max_time=max_time,
             )
@@ -7375,6 +7424,7 @@ class Handler(BaseHTTPRequestHandler):
             job_stale_seconds=max(60, min(int(data.get("job_stale_seconds") or 900), 24 * 3600)),
             agent_stale_seconds=max(60, min(int(data.get("agent_stale_seconds") or 600), 24 * 3600)),
             max_jobs=max(1, min(int(data.get("max_jobs") or 5), 50)),
+            max_candidates_per_job=max(1, min(int(data.get("max_candidates_per_job") or 8), 50)),
             connect_timeout=max(1, min(int(data.get("connect_timeout") or 5), 60)),
             max_time=max(1, min(int(data.get("max_time") or 12), 120)),
         )
@@ -7679,6 +7729,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_worker_once_parser.add_argument("--job-stale-seconds", type=int, default=900)
     auto_worker_once_parser.add_argument("--agent-stale-seconds", type=int, default=600)
     auto_worker_once_parser.add_argument("--max-jobs", type=int, default=5)
+    auto_worker_once_parser.add_argument("--max-candidates-per-job", type=int, default=8)
     auto_worker_once_parser.add_argument("--connect-timeout", type=int, default=5)
     auto_worker_once_parser.add_argument("--max-time", type=int, default=12)
     auto_worker_once_parser.add_argument("--json", action="store_true", help="Print JSON result.")
@@ -7822,6 +7873,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--auto-worker-job-stale-seconds", type=int, default=900)
     serve_parser.add_argument("--auto-worker-agent-stale-seconds", type=int, default=600)
     serve_parser.add_argument("--auto-worker-max-jobs", type=int, default=5)
+    serve_parser.add_argument("--auto-worker-max-candidates-per-job", type=int, default=8)
     serve_parser.add_argument("--auto-worker-connect-timeout", type=int, default=5)
     serve_parser.add_argument("--auto-worker-max-time", type=int, default=12)
     serve_parser.add_argument("--no-provider-refresh-worker", action="store_true", help="Disable background VPNtype/LokVPN transport refresh.")
@@ -8266,6 +8318,7 @@ def main() -> int:
             job_stale_seconds=args.job_stale_seconds,
             agent_stale_seconds=args.agent_stale_seconds,
             max_jobs=args.max_jobs,
+            max_candidates_per_job=args.max_candidates_per_job,
             connect_timeout=args.connect_timeout,
             max_time=args.max_time,
         )
@@ -8689,6 +8742,7 @@ def main() -> int:
                     job_stale_seconds=args.auto_worker_job_stale_seconds,
                     agent_stale_seconds=args.auto_worker_agent_stale_seconds,
                     max_jobs=args.auto_worker_max_jobs,
+                    max_candidates_per_job=args.auto_worker_max_candidates_per_job,
                     connect_timeout=args.auto_worker_connect_timeout,
                     max_time=args.auto_worker_max_time,
                 )
@@ -8707,6 +8761,7 @@ def main() -> int:
                     "job_stale_seconds": args.auto_worker_job_stale_seconds,
                     "agent_stale_seconds": args.auto_worker_agent_stale_seconds,
                     "max_jobs": args.auto_worker_max_jobs,
+                    "max_candidates_per_job": args.auto_worker_max_candidates_per_job,
                     "connect_timeout": args.auto_worker_connect_timeout,
                     "max_time": args.auto_worker_max_time,
                 },

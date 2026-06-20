@@ -388,6 +388,14 @@ Provider API work belongs on the control server in normal mode. Agents should
 not need VPNtype or LokVPN secrets. The control server stores the latest ready
 transport config and sends only the exits needed by the current user's routes.
 
+Auto probe jobs use bounded candidate windows. A policy such as
+`proxyde, proxynl, all-rest` is expanded on the control server, but each
+background job sends only the configured maximum number of candidates
+(`--auto-worker-max-candidates-per-job`, default `8`) to the assigned agent.
+The first candidates remain the stable leaders; the remaining slots rotate
+through the expanded `all-rest` tail across later jobs. This keeps Windows and
+mobile agents from starting every provider transport at once.
+
 Set a VPNtype HTTP proxy endpoint:
 
 ```powershell
