@@ -66,6 +66,35 @@ DOMAIN_RE = re.compile(
 )
 SAFE_INTERFACE_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 SAFE_CLIENT_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{2,64}$")
+TELEGRAM_CIDRS = [
+    "149.154.160.0/20",
+    "91.105.192.0/23",
+    "91.108.12.0/22",
+    "91.108.16.0/22",
+    "91.108.20.0/22",
+    "91.108.4.0/22",
+    "91.108.56.0/22",
+    "91.108.8.0/22",
+]
+SERVICE_ALIAS_SEEDS = [
+    {
+        "aliases": ["telegram", "tg", "телеграм"],
+        "label": "Telegram",
+        "targets": TELEGRAM_CIDRS,
+    },
+    {
+        "aliases": ["youtube", "yt", "ютуб"],
+        "label": "YouTube",
+        "targets": [
+            "youtube.com",
+            "www.youtube.com",
+            "youtu.be",
+            "googlevideo.com",
+            "ytimg.com",
+            "youtubei.googleapis.com",
+        ],
+    },
+]
 
 
 SCHEMA = """
@@ -241,6 +270,14 @@ CREATE TABLE IF NOT EXISTS agent_probe_jobs (
   started_at TEXT,
   finished_at TEXT,
   FOREIGN KEY(winner_server_id) REFERENCES servers(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS service_aliases (
+  alias TEXT PRIMARY KEY,
+  label TEXT NOT NULL,
+  targets_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 """
 
@@ -432,6 +469,7 @@ USER_HTML = r"""<!doctype html>
       max-width: 100%;
     }
     .priority-list select { min-width: 180px; }
+    .winner-list { margin-top: 6px; font-size: 12px; line-height: 1.45; max-width: 720px; }
     .priority-list[hidden], .field[hidden] { display: none; }
     @media (max-width: 720px) {
       header { align-items: flex-start; flex-direction: column; }
@@ -475,9 +513,35 @@ USER_HTML = r"""<!doctype html>
         <tbody id="routesBody"></tbody>
       </table>
     </section>
+    <section>
+      <h2>Route Lookup</h2>
+      <form id="lookupForm" class="row">
+        <input id="lookupTarget" type="text" placeholder="telegram, youtube, example.com, 1.1.1.1" autocomplete="off">
+        <button type="submit">Check</button>
+      </form>
+      <p id="lookupStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Target</th><th>State</th><th>Server</th><th>Rule</th><th>Auto</th><th>Notes</th></tr></thead>
+        <tbody id="lookupBody"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Service Aliases</h2>
+      <form id="aliasForm" class="row">
+        <input id="aliasInput" type="text" placeholder="alias, e.g. телеграм" autocomplete="off">
+        <input id="aliasLabel" type="text" placeholder="label" autocomplete="off">
+        <input id="aliasTargets" type="text" placeholder="targets: domain, IP/CIDR, ..." autocomplete="off">
+        <button type="submit">Save</button>
+      </form>
+      <p id="aliasStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Alias</th><th>Label</th><th>Targets</th><th></th></tr></thead>
+        <tbody id="aliasesBody"></tbody>
+      </table>
+    </section>
   </main>
   <script>
-    const state = { servers: [], routes: [], user: null };
+    const state = { servers: [], routes: [], user: null, aliases: [] };
     const serverLabel = id => (state.servers.find(s => s.id === id) || { label: id }).label;
     const serverProvider = id => (state.servers.find(s => s.id === id) || { provider: "" }).provider || "";
 
@@ -521,14 +585,48 @@ USER_HTML = r"""<!doctype html>
       });
     }
 
+    function renderLookup(result) {
+      const body = document.getElementById("lookupBody");
+      body.innerHTML = (result.results || []).map(item => `
+        <tr>
+          <td data-label="Target">${item.target}</td>
+          <td data-label="State">${item.route_state}</td>
+          <td data-label="Server">${item.server_id === "direct" ? "direct" : serverLabel(item.server_id)}</td>
+          <td data-label="Rule">${item.matched_rule ? `${item.matched_rule.source}:${item.matched_rule.target_cidr || item.matched_rule.domain}` : "-"}</td>
+          <td data-label="Auto">${item.auto_cache ? `${item.auto_cache.selected_server_id || "-"} ${item.auto_cache.score_ms ?? ""}` : (item.auto_candidate_policy ? (item.auto_candidate_policy.candidate_server_ids || []).join(" -> ") : "-")}</td>
+          <td data-label="Notes">${(item.warnings || []).join("; ")}</td>
+        </tr>
+      `).join("") || '<tr><td colspan="6" class="muted">No result.</td></tr>';
+    }
+
+    function renderAliases() {
+      const body = document.getElementById("aliasesBody");
+      body.innerHTML = state.aliases.length ? state.aliases.map(item => `
+        <tr>
+          <td data-label="Alias">${item.alias}</td>
+          <td data-label="Label">${item.label}</td>
+          <td data-label="Targets">${(item.targets || []).join(", ")}</td>
+          <td><button class="danger" data-delete-alias="${item.alias}">Delete</button></td>
+        </tr>
+      `).join("") : '<tr><td data-label="Alias" colspan="4" class="muted">No aliases.</td></tr>';
+      body.querySelectorAll("[data-delete-alias]").forEach(button => {
+        button.addEventListener("click", async () => {
+          await api(`/api/service-aliases?alias=${encodeURIComponent(button.dataset.deleteAlias)}`, { method: "DELETE" });
+          await load();
+        });
+      });
+    }
+
     async function load() {
       const data = await api("/api/bootstrap");
       state.servers = data.servers;
       state.routes = data.routes;
       state.user = data.user;
+      state.aliases = data.aliases || [];
       fillServerSelect(document.getElementById("defaultServer"), state.user.default_server_id);
       fillServerSelect(document.getElementById("routeServer"), "auto");
       renderRoutes();
+      renderAliases();
     }
 
     document.getElementById("logoutButton").addEventListener("click", async () => {
@@ -567,6 +665,44 @@ USER_HTML = r"""<!doctype html>
         });
         document.getElementById("domainInput").value = "";
         status.textContent = "Saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+
+    document.getElementById("lookupForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("lookupStatus");
+      status.className = "status";
+      try {
+        const result = await api(`/api/route-lookup?target=${encodeURIComponent(document.getElementById("lookupTarget").value)}`);
+        renderLookup(result);
+        status.textContent = result.alias ? `Alias ${result.alias.label}: ${result.alias.targets.length} target(s).` : "Lookup complete.";
+        status.className = "status ok";
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+
+    document.getElementById("aliasForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("aliasStatus");
+      status.className = "status";
+      try {
+        await api("/api/service-aliases", {
+          method: "POST",
+          body: JSON.stringify({
+            alias: document.getElementById("aliasInput").value,
+            label: document.getElementById("aliasLabel").value,
+            targets: document.getElementById("aliasTargets").value
+          })
+        });
+        event.target.reset();
+        status.textContent = "Alias saved.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -697,6 +833,31 @@ ADMIN_HTML = r"""<!doctype html>
       </table>
     </section>
     <section>
+      <h2>Route Lookup</h2>
+      <form id="adminLookupForm" class="toolbar">
+        <div class="field"><label>User</label><select id="lookupUser"></select></div>
+        <div class="field"><label>IP / URL / Alias</label><input id="adminLookupTarget" type="text" placeholder="telegram, youtube, example.com, 1.1.1.1" autocomplete="off"></div>
+        <button type="submit">Check Route</button>
+      </form>
+      <p id="adminLookupStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Target</th><th>State</th><th>Server</th><th>Rule</th><th>Auto</th><th>Notes</th></tr></thead>
+        <tbody id="adminLookupBody"></tbody>
+      </table>
+      <h3>Service Aliases</h3>
+      <form id="adminAliasForm" class="toolbar">
+        <div class="field"><label>Alias</label><input id="adminAliasInput" type="text" placeholder="телеграм" autocomplete="off"></div>
+        <div class="field"><label>Label</label><input id="adminAliasLabel" type="text" placeholder="Telegram" autocomplete="off"></div>
+        <div class="field"><label>Targets</label><input id="adminAliasTargets" type="text" placeholder="domain, IP/CIDR, ..." autocomplete="off"></div>
+        <button type="submit">Save Alias</button>
+      </form>
+      <p id="adminAliasStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Alias</th><th>Label</th><th>Targets</th><th></th></tr></thead>
+        <tbody id="adminAliasesBody"></tbody>
+      </table>
+    </section>
+    <section>
       <h2>Global Domain Routes</h2>
       <form id="globalDefaultPriorityForm" class="toolbar">
         <div id="globalDefaultAutoField" class="field">
@@ -714,6 +875,7 @@ ADMIN_HTML = r"""<!doctype html>
           <label>Priority</label>
           <div id="globalRouteAutoList" class="priority-list"></div>
           <input id="globalRouteAutoText" type="text" placeholder="proxyde, uswest, all-rest" autocomplete="off">
+          <div id="globalRouteAutoWinners" class="winner-list muted"></div>
         </div>
         <button type="submit">Save Global</button>
       </form>
@@ -743,6 +905,7 @@ ADMIN_HTML = r"""<!doctype html>
           <label>Priority</label>
           <div id="adminRouteAutoList" class="priority-list"></div>
           <input id="adminRouteAutoText" type="text" placeholder="proxyde, uswest, all-rest" autocomplete="off">
+          <div id="adminRouteAutoWinners" class="winner-list muted"></div>
         </div>
         <button type="submit">Save Route</button>
       </form>
@@ -825,7 +988,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [] };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [] };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     async function api(path, options) {
@@ -893,6 +1056,36 @@ ADMIN_HTML = r"""<!doctype html>
       const input = document.getElementById(`${prefix}AutoText`);
       if (input && document.activeElement !== input) {
         input.value = formatPriorityText(autoEditors[prefix] || []);
+      }
+    }
+    function renderRecentWinners(prefix, data) {
+      const container = document.getElementById(`${prefix}AutoWinners`);
+      if (!container) return;
+      const winners = (data && data.winners) || [];
+      if (!winners.length) {
+        container.textContent = "";
+        return;
+      }
+      container.innerHTML = "Last winners: " + winners.map(item => {
+        const latency = item.latency_ms == null ? "-" : `${item.latency_ms}ms`;
+        const speed = item.speed_mbps == null ? "" : `, ${item.speed_mbps}Mbps`;
+        const target = item.domain || "";
+        return `${item.winner_server_id} (${latency}${speed}, ${target})`;
+      }).join(" | ");
+    }
+    async function loadRecentWinners(prefix, target) {
+      const container = document.getElementById(`${prefix}AutoWinners`);
+      if (!container) return;
+      const normalized = (target || "").trim();
+      if (!normalized) {
+        container.textContent = "";
+        return;
+      }
+      try {
+        const data = await api(`/api/admin/auto-winners?target=${encodeURIComponent(normalized)}&limit=10`);
+        renderRecentWinners(prefix, data);
+      } catch (error) {
+        container.textContent = `Last winners unavailable: ${error.message}`;
       }
     }
     function expandAutoCandidates(values) {
@@ -990,12 +1183,14 @@ ADMIN_HTML = r"""<!doctype html>
         const domain = document.getElementById("globalRouteDomain").value;
         const policy = autoPolicyFor("", domain);
         setAutoEditor(prefix, policy ? policy.candidate_server_ids : []);
+        loadRecentWinners(prefix, domain);
         return;
       }
       const userId = document.getElementById("routeUser").value;
       const domain = document.getElementById("adminRouteDomain").value;
       const policy = autoPolicyFor(userId, domain);
       setAutoEditor(prefix, policy ? policy.candidate_server_ids : []);
+      loadRecentWinners(prefix, domain);
     }
     function renderServers() {
       const body = document.getElementById("serversBody");
@@ -1131,6 +1326,37 @@ ADMIN_HTML = r"""<!doctype html>
         });
       });
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
+      document.getElementById("lookupUser").innerHTML = userOptions(document.getElementById("lookupUser").value);
+    }
+    function renderLookupResult(result) {
+      const body = document.getElementById("adminLookupBody");
+      body.innerHTML = (result.results || []).map(item => `
+        <tr>
+          <td>${item.target}</td>
+          <td>${item.route_state}</td>
+          <td>${item.server_id === "direct" ? "direct" : serverLabel(item.server_id)}</td>
+          <td>${item.matched_rule ? `${item.matched_rule.source}:${item.matched_rule.target_cidr || item.matched_rule.domain}` : "-"}</td>
+          <td>${item.auto_cache ? `${item.auto_cache.selected_server_id || "-"} ${item.auto_cache.score_ms ?? ""}` : (item.auto_candidate_policy ? (item.auto_candidate_policy.candidate_server_ids || []).join(" -> ") : "-")}</td>
+          <td>${(item.warnings || []).join("; ")}</td>
+        </tr>
+      `).join("") || '<tr><td colspan="6" class="muted">No result.</td></tr>';
+    }
+    function renderServiceAliases() {
+      const body = document.getElementById("adminAliasesBody");
+      body.innerHTML = state.serviceAliases.length ? state.serviceAliases.map(item => `
+        <tr>
+          <td>${item.alias}</td>
+          <td>${item.label}</td>
+          <td>${(item.targets || []).join(", ")}</td>
+          <td><button class="danger" data-delete-alias="${item.alias}">Delete</button></td>
+        </tr>
+      `).join("") : '<tr><td colspan="4" class="muted">No aliases.</td></tr>';
+      body.querySelectorAll("[data-delete-alias]").forEach(button => {
+        button.addEventListener("click", async () => {
+          await api(`/api/service-aliases?alias=${encodeURIComponent(button.dataset.deleteAlias)}`, { method: "DELETE" });
+          await load();
+        });
+      });
     }
     function renderGlobalRoutes() {
       const body = document.getElementById("globalRoutesBody");
@@ -1251,8 +1477,10 @@ ADMIN_HTML = r"""<!doctype html>
       state.probeJobs = data.probe_jobs || [];
       state.agentStatus = data.agent_status || [];
       state.transportConfigs = data.transport_configs || [];
+      state.serviceAliases = data.service_aliases || [];
       renderServers();
       renderUsers();
+      renderServiceAliases();
       renderGlobalRoutes();
       renderRoutes();
       renderAutoCache();
@@ -1307,6 +1535,42 @@ ADMIN_HTML = r"""<!doctype html>
         const result = await api("/api/admin/sync-cudy-clients", { method: "POST", body: "{}" });
         status.textContent = `Synced Cudy clients: ${result.synced.length}, warnings: ${result.warnings.length}`;
         status.className = result.warnings.length ? "status error" : "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("adminLookupForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("adminLookupStatus");
+      status.className = "status";
+      try {
+        const result = await api(`/api/route-lookup?user_id=${encodeURIComponent(document.getElementById("lookupUser").value)}&target=${encodeURIComponent(document.getElementById("adminLookupTarget").value)}`);
+        renderLookupResult(result);
+        status.textContent = result.alias ? `Alias ${result.alias.label}: ${result.alias.targets.length} target(s).` : "Lookup complete.";
+        status.className = "status ok";
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("adminAliasForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("adminAliasStatus");
+      status.className = "status";
+      try {
+        await api("/api/service-aliases", {
+          method: "POST",
+          body: JSON.stringify({
+            alias: document.getElementById("adminAliasInput").value,
+            label: document.getElementById("adminAliasLabel").value,
+            targets: document.getElementById("adminAliasTargets").value
+          })
+        });
+        event.target.reset();
+        status.textContent = "Alias saved.";
+        status.className = "status ok";
         await load();
       } catch (error) {
         status.textContent = error.message;
@@ -1772,6 +2036,17 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS service_aliases (
+          alias TEXT PRIMARY KEY,
+          label TEXT NOT NULL,
+          targets_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        )
+        """
+    )
 
 
 def init_db(db_path: Path, inventory_path: Path, *, reset_from_inventory: bool = False) -> None:
@@ -1780,6 +2055,7 @@ def init_db(db_path: Path, inventory_path: Path, *, reset_from_inventory: bool =
         conn.executescript(SCHEMA)
         migrate_db(conn)
         seed_inventory(conn, inventory, reset_from_inventory=reset_from_inventory)
+        seed_service_aliases(conn)
         ensure_default_user(conn)
 
 
@@ -2108,6 +2384,47 @@ def seed_inventory(conn: sqlite3.Connection, inventory: dict[str, Any], *, reset
                         row["id"],
                     ),
                 )
+
+
+def normalize_alias(value: str) -> str:
+    alias = re.sub(r"\s+", " ", (value or "").strip().lower())
+    if not alias or len(alias) > 80:
+        raise ValueError("Alias must be 1-80 characters")
+    return alias
+
+
+def parse_alias_targets(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [item.strip() for item in re.split(r"[\s,;]+", value) if item.strip()]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise ValueError("targets must be a list or a comma-separated string")
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = normalize_lookup_target(item)["target"]
+        if normalized not in seen:
+            result.append(normalized)
+            seen.add(normalized)
+    if not result:
+        raise ValueError("Alias targets cannot be empty")
+    return result
+
+
+def seed_service_aliases(conn: sqlite3.Connection) -> None:
+    timestamp = now()
+    for seed in SERVICE_ALIAS_SEEDS:
+        targets_json = json.dumps(seed["targets"], ensure_ascii=False)
+        for alias in seed["aliases"]:
+            conn.execute(
+                """
+                INSERT INTO service_aliases (alias, label, targets_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(alias) DO NOTHING
+                """,
+                (normalize_alias(alias), seed["label"], targets_json, timestamp, timestamp),
+            )
 
 
 def ensure_default_user(conn: sqlite3.Connection) -> None:
@@ -5608,6 +5925,356 @@ def normalize_domain(value: str) -> str:
     return domain
 
 
+def normalize_lookup_target(value: str) -> dict[str, str]:
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("Target is required")
+    try:
+        network = ipaddress.ip_network(raw, strict=False)
+        if network.version != 4:
+            raise ValueError("Only IPv4 targets are supported")
+        return {"kind": "ip", "target": str(network)}
+    except ValueError:
+        pass
+    parsed = urlparse(raw if "://" in raw else f"//{raw}")
+    host = parsed.hostname
+    path_candidate = parsed.path.strip("/") if not host else ""
+    candidate = host or path_candidate or raw
+    candidate = candidate.strip().strip("[]").rstrip(".")
+    try:
+        network = ipaddress.ip_network(candidate, strict=False)
+        if network.version != 4:
+            raise ValueError("Only IPv4 targets are supported")
+        return {"kind": "ip", "target": str(network)}
+    except ValueError:
+        pass
+    return {"kind": "domain", "target": normalize_domain(candidate)}
+
+
+def service_alias_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    entries = rows(
+        conn,
+        """
+        SELECT alias, label, targets_json, updated_at
+        FROM service_aliases
+        ORDER BY label, alias
+        """,
+    )
+    for entry in entries:
+        try:
+            entry["targets"] = json.loads(entry.pop("targets_json") or "[]")
+        except json.JSONDecodeError:
+            entry["targets"] = []
+    return entries
+
+
+def save_service_alias(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    alias: str,
+    label: str,
+    targets: Any,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_alias = normalize_alias(alias)
+    normalized_label = (label or normalized_alias).strip()[:80]
+    normalized_targets = parse_alias_targets(targets)
+    timestamp = now()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO service_aliases (alias, label, targets_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(alias)
+            DO UPDATE SET label = excluded.label,
+                          targets_json = excluded.targets_json,
+                          updated_at = excluded.updated_at
+            """,
+            (
+                normalized_alias,
+                normalized_label,
+                json.dumps(normalized_targets, ensure_ascii=False),
+                timestamp,
+                timestamp,
+            ),
+        )
+    return {"ok": True, "alias": normalized_alias, "label": normalized_label, "targets": normalized_targets}
+
+
+def delete_service_alias(db_path: Path, inventory_path: Path, *, alias: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_alias = normalize_alias(alias)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM service_aliases WHERE alias = ?", (normalized_alias,))
+    return {"ok": True, "alias": normalized_alias}
+
+
+def domain_rule_for_user(conn: sqlite3.Connection, *, user_id: str, domain: str) -> dict[str, Any] | None:
+    user_route = row(
+        conn,
+        """
+        SELECT domain, server_id, enabled, updated_at, 'user' AS source
+        FROM user_domain_routes
+        WHERE user_id = ? AND domain = ? AND enabled = 1
+        """,
+        (user_id, domain),
+    )
+    if user_route:
+        return user_route
+    return row(
+        conn,
+        """
+        SELECT domain, server_id, enabled, updated_at, 'global' AS source
+        FROM global_domain_routes
+        WHERE domain = ? AND enabled = 1
+        """,
+        (domain,),
+    )
+
+
+def ip_rule_for_user(conn: sqlite3.Connection, *, user_id: str, target: str) -> dict[str, Any] | None:
+    network = ipaddress.ip_network(target, strict=False)
+    address = network.network_address
+    candidates = rows(
+        conn,
+        """
+        SELECT user_id, target_cidr, server_id, enabled, updated_at, 'user' AS source
+        FROM user_ip_routes
+        WHERE user_id = ? AND enabled = 1
+        UNION ALL
+        SELECT '' AS user_id, target_cidr, server_id, enabled, updated_at, 'global' AS source
+        FROM global_ip_routes
+        WHERE enabled = 1
+        """,
+        (user_id,),
+    )
+    best: tuple[int, int, dict[str, Any]] | None = None
+    for item in candidates:
+        route_network = ipaddress.ip_network(item["target_cidr"], strict=False)
+        if address not in route_network:
+            continue
+        source_rank = 1 if item["source"] == "user" else 0
+        current = (route_network.prefixlen, source_rank, item)
+        if best is None or current[:2] > best[:2]:
+            best = current
+    return best[2] if best else None
+
+
+def resolve_lookup_rule(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    target_info: dict[str, str],
+    servers: dict[str, dict[str, Any]],
+    cached_auto: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    warnings: list[str] = []
+    kind = target_info["kind"]
+    target = target_info["target"]
+    rule = domain_rule_for_user(conn, user_id=user_id, domain=target) if kind == "domain" else ip_rule_for_user(conn, user_id=user_id, target=target)
+    cache_key = ""
+    if kind == "ip":
+        cache_key = auto_cache_key_for_ip_route((rule or {}).get("target_cidr") or target)
+    else:
+        cache_key = target
+    if rule:
+        requested_server_id = str(rule["server_id"])
+        auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=cache_key) if requested_server_id == "auto" else None
+        resolved_server_id, cached = resolve_route_server(
+            domain=cache_key,
+            requested_server_id=requested_server_id,
+            servers=servers,
+            auto_cache=cached_auto,
+            auto_policy=auto_policy,
+            context=f"{user_id}/{target}",
+            warnings=warnings,
+        )
+        server_id = resolved_server_id or requested_server_id
+        return {
+            "target": target,
+            "kind": kind,
+            "route_state": "managed",
+            "matched_rule": rule,
+            "requested_server_id": requested_server_id,
+            "server_id": server_id,
+            "resolved_server_id": resolved_server_id,
+            "server": compact_server(servers.get(server_id)),
+            "auto_cache_key": cache_key if requested_server_id == "auto" else "",
+            "auto_cache": cached,
+            "auto_candidate_policy": auto_policy,
+            "warnings": warnings,
+        }
+
+    default_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=cache_key)
+    return {
+        "target": target,
+        "kind": kind,
+        "route_state": "direct",
+        "matched_rule": None,
+        "requested_server_id": "direct",
+        "server_id": "direct",
+        "resolved_server_id": None,
+        "server": None,
+        "auto_cache_key": cache_key,
+        "auto_cache": cached_auto.get(cache_key),
+        "auto_candidate_policy": default_policy,
+        "warnings": ["No managed route matches this target; traffic stays on the normal/direct route."],
+    }
+
+
+def route_lookup(db_path: Path, inventory_path: Path, *, user_id: str, target: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    target_raw = (target or "").strip()
+    with connect(db_path) as conn:
+        user = row(conn, "SELECT id, display_name, default_server_id, client_ip FROM users WHERE id = ? AND enabled = 1", (user_id,))
+        if not user:
+            raise ValueError(f"Unknown or disabled user: {user_id}")
+        alias_key = ""
+        try:
+            alias_key = normalize_alias(target_raw)
+        except ValueError:
+            alias_key = ""
+        alias = row(conn, "SELECT alias, label, targets_json, updated_at FROM service_aliases WHERE alias = ?", (alias_key,)) if alias_key else None
+        servers = server_map(conn)
+        cached_auto = auto_cache_map(conn)
+        expanded_targets: list[dict[str, str]]
+        alias_info = None
+        if alias:
+            try:
+                raw_targets = json.loads(alias.get("targets_json") or "[]")
+            except json.JSONDecodeError:
+                raw_targets = []
+            expanded_targets = [normalize_lookup_target(str(item)) for item in raw_targets]
+            alias_info = {"alias": alias["alias"], "label": alias["label"], "targets": raw_targets}
+        else:
+            expanded_targets = [normalize_lookup_target(target_raw)]
+        results = [
+            resolve_lookup_rule(
+                conn,
+                user_id=user_id,
+                target_info=item,
+                servers=servers,
+                cached_auto=cached_auto,
+            )
+            for item in expanded_targets
+        ]
+    return {
+        "ok": True,
+        "user": user,
+        "input": target_raw,
+        "alias": alias_info,
+        "results": results,
+    }
+
+
+def lookup_cache_keys_for_target(conn: sqlite3.Connection, target: str) -> list[str]:
+    target_raw = (target or "").strip()
+    if not target_raw:
+        return []
+    alias_key = ""
+    try:
+        alias_key = normalize_alias(target_raw)
+    except ValueError:
+        alias_key = ""
+    alias = row(conn, "SELECT targets_json FROM service_aliases WHERE alias = ?", (alias_key,)) if alias_key else None
+    raw_targets: list[str]
+    if alias:
+        try:
+            raw_targets = [str(item) for item in json.loads(alias.get("targets_json") or "[]")]
+        except json.JSONDecodeError:
+            raw_targets = []
+    else:
+        raw_targets = [target_raw]
+    result: list[str] = []
+    seen: set[str] = set()
+    for raw in raw_targets:
+        try:
+            info = normalize_lookup_target(raw)
+        except ValueError:
+            continue
+        key = auto_cache_key_for_ip_route(info["target"]) if info["kind"] == "ip" else info["target"]
+        if key not in seen:
+            result.append(key)
+            seen.add(key)
+    return result
+
+
+def speed_mbps_from_check(check: dict[str, Any]) -> float | None:
+    for key in ("speed_mbps", "download_mbps", "mbps"):
+        value = check.get(key)
+        if value not in (None, ""):
+            try:
+                return round(float(value), 2)
+            except (TypeError, ValueError):
+                pass
+    for key in ("speed_Bps", "speed_download"):
+        value = check.get(key)
+        if value not in (None, ""):
+            try:
+                return round(float(value) * 8 / 1_000_000, 2)
+            except (TypeError, ValueError):
+                pass
+    size = check.get("size_download")
+    total = check.get("time_total")
+    if size not in (None, "", "0") and total not in (None, "", "0"):
+        try:
+            return round(float(size) * 8 / float(total) / 1_000_000, 2)
+        except (TypeError, ValueError, ZeroDivisionError):
+            return None
+    return None
+
+
+def recent_auto_winners(db_path: Path, inventory_path: Path, *, target: str = "", limit: int = 10) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    limit = max(1, min(int(limit), 50))
+    with connect(db_path) as conn:
+        keys = lookup_cache_keys_for_target(conn, target)
+        params: list[Any] = []
+        where = "status = 'done' AND winner_server_id IS NOT NULL"
+        if keys:
+            where += " AND domain IN (%s)" % ",".join("?" for _ in keys)
+            params.extend(keys)
+        entries = rows(
+            conn,
+            f"""
+            SELECT id, domain, user_id, candidate_server_ids, claimed_by_device_id,
+                   winner_server_id, score_ms, result_json, updated_at, finished_at
+            FROM agent_probe_jobs
+            WHERE {where}
+            ORDER BY COALESCE(finished_at, updated_at) DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+    result: list[dict[str, Any]] = []
+    for item in entries:
+        try:
+            payload = json.loads(item.pop("result_json") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        winner = payload.get("winner") if isinstance(payload.get("winner"), dict) else {}
+        checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+        ok_checks = [check for check in checks if isinstance(check, dict) and check.get("ok")]
+        try:
+            candidates = json.loads(item.get("candidate_server_ids") or "[]")
+        except json.JSONDecodeError:
+            candidates = []
+        result.append(
+            {
+                **item,
+                "candidate_server_ids": candidates,
+                "winner": winner,
+                "latency_ms": winner.get("time_total_ms") or winner.get("elapsed_ms") or item.get("score_ms"),
+                "speed_mbps": speed_mbps_from_check(winner),
+                "remote_ip": winner.get("remote_ip") or "",
+                "ok_candidates": len(ok_checks),
+                "checks": checks,
+            }
+        )
+    return {"ok": True, "target": target, "cache_keys": keys, "winners": result}
+
+
 class App:
     def __init__(self, db_path: Path, inventory_path: Path):
         self.db_path = db_path
@@ -5827,6 +6494,17 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/bootstrap":
                 user = self.require_user()
                 self.send_json(self.api_bootstrap(user["id"]))
+            elif parsed.path == "/api/route-lookup":
+                user = self.require_user()
+                query = parse_qs(parsed.query)
+                lookup_user_id = user["id"]
+                if user.get("role") == "admin" and query.get("user_id", [""])[0]:
+                    lookup_user_id = query.get("user_id", [""])[0]
+                self.send_json(route_lookup(self.app.db_path, self.app.inventory_path, user_id=lookup_user_id, target=query.get("target", [""])[0]))
+            elif parsed.path == "/api/service-aliases":
+                self.require_user()
+                with self.app.conn() as conn:
+                    self.send_json({"ok": True, "aliases": service_alias_rows(conn)})
             elif parsed.path == "/api/admin":
                 self.require_admin()
                 self.send_json(self.api_admin())
@@ -5836,6 +6514,17 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/deploy-preview":
                 self.require_admin()
                 self.send_json(build_combined_deploy_preview(self.app.db_path, self.app.inventory_path))
+            elif parsed.path == "/api/admin/auto-winners":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    recent_auto_winners(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        target=query.get("target", [""])[0],
+                        limit=int(query.get("limit", ["10"])[0] or "10"),
+                    )
+                )
             elif parsed.path == "/api/agent/config":
                 device = self.require_agent()
                 with self.app.conn() as conn:
@@ -5877,6 +6566,17 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/domain-routes":
                 self.require_user()
                 self.send_json(self.api_save_domain_route(data))
+            elif parsed.path == "/api/service-aliases":
+                self.require_user()
+                self.send_json(
+                    save_service_alias(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        alias=str(data.get("alias") or ""),
+                        label=str(data.get("label") or ""),
+                        targets=data.get("targets") or "",
+                    )
+                )
             elif parsed.path == "/api/admin/servers":
                 self.require_admin()
                 self.send_json(self.api_update_server(data))
@@ -5989,6 +6689,10 @@ class Handler(BaseHTTPRequestHandler):
                         domain=query.get("domain", [""])[0],
                     )
                 )
+            elif parsed.path == "/api/service-aliases":
+                self.require_user()
+                query = parse_qs(parsed.query)
+                self.send_json(delete_service_alias(self.app.db_path, self.app.inventory_path, alias=query.get("alias", [""])[0]))
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -6089,7 +6793,7 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (user_id,),
             )
-            return {"user": user, "servers": user_servers(conn), "routes": routes}
+            return {"user": user, "servers": user_servers(conn), "routes": routes, "aliases": service_alias_rows(conn)}
 
     def api_admin(self) -> dict[str, Any]:
         with self.app.conn() as conn:
@@ -6150,6 +6854,7 @@ class Handler(BaseHTTPRequestHandler):
                 ),
                 "auto_candidates": auto_candidate_policy_rows(conn),
                 "transport_configs": transport_config_summaries(conn),
+                "service_aliases": service_alias_rows(conn),
                 "probe_jobs": [
                     probe_job_row_to_dict(item)
                     for item in rows(

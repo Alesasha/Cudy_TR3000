@@ -169,6 +169,27 @@ python tools\vpn_control_app.py deploy-user-routes --apply --install-script
 
 These routes are exported to the same Cudy `routes.tsv` as per-user domain routes.
 
+## Route Lookup And Aliases
+
+The web UI includes a route lookup tool. Enter an IP, CIDR, URL, domain, or
+service alias and it shows the current control-plane decision:
+
+- matched user/global domain or IP rule;
+- resolved server for `auto` routes from the Auto cache;
+- candidate list that would be used for Auto;
+- `direct` when no managed route currently matches.
+
+Built-in aliases include:
+
+```text
+telegram, tg, телеграм
+youtube, yt, ютуб
+```
+
+Aliases are editable from the user and admin UI. Each alias expands to a
+comma-separated list of domains, IPv4 addresses, or CIDRs. For example, the
+Telegram alias expands to the known Telegram IPv4 CIDR set.
+
 ## Route Testing
 
 Measure selected Cudy exits from the router itself:
