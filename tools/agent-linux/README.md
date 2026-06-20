@@ -17,6 +17,11 @@ posts status/probe results back to the control server.
   provider TUN exits.
 - `write_transport_plan.py`: converts control-server `transport_plan` into local `sing-box` configs.
 - `install_systemd.sh`: installs a systemd service.
+- `one_click_install.sh`: restores direct baseline, runs a one-shot smoke, and
+  installs the systemd service.
+- `status.sh`: prints service, control tunnel, route, transport, and log status.
+- `uninstall_systemd.sh`: disables the service, stops managed processes, and
+  restores direct routing.
 - `test_prod_agent.sh`: smoke test.
 
 ## Requirements
@@ -29,7 +34,26 @@ posts status/probe results back to the control server.
 
 The agent should run as root, or it will use `sudo` for route and TUN changes.
 
-## One-Shot Test
+## One-Click Install
+
+```bash
+chmod +x *.sh
+./one_click_install.sh
+```
+
+If the one-shot smoke was already done and you only want to install the service:
+
+```bash
+./one_click_install.sh --skip-smoke
+```
+
+Check status:
+
+```bash
+./status.sh
+```
+
+## Manual One-Shot Test
 
 ```bash
 chmod +x *.sh
@@ -57,13 +81,12 @@ sudo ./install_systemd.sh
 Check logs:
 
 ```bash
+./status.sh
 journalctl -u cudy-managed-agent.service -f
-tail -f managed-agent.log
 ```
 
 ## Rollback
 
 ```bash
-sudo systemctl disable --now cudy-managed-agent.service
-./restore_direct.sh
+sudo ./uninstall_systemd.sh
 ```

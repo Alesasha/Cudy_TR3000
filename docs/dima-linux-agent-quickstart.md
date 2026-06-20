@@ -1,4 +1,4 @@
-# Инструкция для Димы: Linux Agent Test
+# Инструкция для Димы: Linux Agent
 
 1. Распаковать архив `DC_via_Cudy-linux-prod.zip`.
 
@@ -6,29 +6,31 @@
 
 ```bash
 chmod +x *.sh
-RUN_ONCE=1 ./managed_agent.sh
-./test_prod_agent.sh
+./one_click_install.sh
 ```
 
-3. Если попросит пароль `sudo`, ввести пароль Linux-пользователя.
+Если попросит пароль `sudo`, ввести пароль Linux-пользователя.
 
-4. Если в выводе будет ошибка `sing-box not found`, остановиться и прислать этот вывод.
-
-5. Если тест прошёл, можно включить автозапуск:
+3. Проверить состояние:
 
 ```bash
-sudo ./install_systemd.sh
+./status.sh
 ```
 
-Проверка после автозапуска:
+Нормальные признаки:
+
+- `control` отвечает `{"ok": true}`;
+- в `managed transports` есть только реально нужные транспорты;
+- в конце лога есть строка `cycle applied`.
+
+Если интернет сломался или надо полностью откатить агент:
 
 ```bash
-tail -f managed-agent.log
+sudo ./uninstall_systemd.sh
 ```
 
-Откат, если интернет сломался:
+Если надо только вернуть прямой маршрут без удаления сервиса:
 
 ```bash
-sudo systemctl disable --now cudy-managed-agent.service
 sudo ./restore_direct.sh
 ```
