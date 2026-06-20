@@ -32,6 +32,10 @@ Latest Release APK smoke on the physical phone:
 - Android VPN was established on `tun2`;
 - control-server reported `isasha_X7Pro_Cudy-android` online and healthy;
 - debug probe for `ifconfig.me` over `proxyde,proxynl` selected `proxynl`.
+- boot/reconnect receiver is registered for `BOOT_COMPLETED` and
+  `MY_PACKAGE_REPLACED`;
+- receiver start path was verified through the explicit test broadcast
+  `com.nashvpn.cudyagent.TEST_BOOT_START`.
 
 Latest verified Android VPN routes included the Telegram CIDRs:
 
@@ -100,6 +104,30 @@ The smoke script:
 For Release APKs Android normally denies `run-as`; the script tolerates that and
 uses logcat/dumpsys diagnostics instead.
 
+## Boot/Reconnect Smoke Test
+
+The production receiver listens for Android boot and package-replaced events.
+Android blocks manual `BOOT_COMPLETED` and `MY_PACKAGE_REPLACED` broadcasts from
+ADB, so the app also exposes a test-only equivalent action:
+
+```powershell
+$adb = "C:\Program Files (x86)\Android\android-sdk\platform-tools\adb.exe"
+& $adb -s f88d126d shell am broadcast `
+  -a com.nashvpn.cudyagent.TEST_BOOT_START `
+  -n com.nashvpn.cudyagent/com.nashvpn.cudyagent.BootReceiver
+```
+
+Expected logcat lines:
+
+```text
+Boot receiver requested agent start for com.nashvpn.cudyagent.TEST_BOOT_START.
+Control loop ok ip=... transports=... engine=running ...
+```
+
+On MIUI and other aggressive Android builds, the user may still need to allow
+autostart and disable battery restrictions for reliable background start after a
+real device reboot.
+
 ## Test Defaults
 
 ```text
@@ -137,7 +165,6 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 - Add a user-facing status screen with active route count, active transports,
   last probe winner, and last control-server error.
-- Add Android boot/reconnect handling after device restart.
 - Add battery optimization instructions or an in-app warning.
 - Package release APKs with versioned filenames.
 - Add a simple uninstall/reset procedure for test devices.
