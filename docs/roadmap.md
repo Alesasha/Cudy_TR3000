@@ -25,6 +25,8 @@ This is the current implementation order for the managed VPN control project.
 
 - Keep Cudy as an emergency fallback control path.
 - Sync a lightweight endpoint manifest from primary to Cudy.
+- Sync a secret full control-state archive from primary to Cudy under `/root`,
+  with only a non-secret freshness status under `/www`.
 - Agents should know a primary URL, optional direct fallback URLs, and static
   endpoint manifest URLs.
 - If `uswest` is rebuilt or moved, update the Cudy manifest first; agents can

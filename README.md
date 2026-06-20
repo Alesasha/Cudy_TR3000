@@ -33,6 +33,8 @@ Linux, and Cudy fallback routing.
   control-server restore and future Amnezia/Docker exit setup.
 - `tools/Run-ControlBackup.ps1` and `tools/Install-ControlBackupTask.ps1` -
   local Windows scheduled backup wrapper for the production control-server.
+- `tools/sync_control_state_to_cudy.py` plus `Run/Install-CudyFallbackSync*.ps1`
+  - keep an encrypted-at-rest-by-location control-state copy on Cudy fallback.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.

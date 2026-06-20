@@ -320,6 +320,34 @@ $env:VPN_CONTROL_PRIMARY_SSH_HOST = "<new-uswest-ip>"
 python tools\sync_control_manifest_to_cudy.py
 ```
 
+Replicate the full control-state archive to Cudy fallback storage:
+
+```powershell
+$env:CONTROL_BACKUP_SSH_PASSWORD = "<uswest root password>"
+$env:CUDY_SSH_PASSWORD = "<router password>"
+python tools\sync_control_state_to_cudy.py
+Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD,Env:CUDY_SSH_PASSWORD
+```
+
+The secret archive is stored as:
+
+```text
+/root/cudy-control-fallback/control-state-current.tgz
+```
+
+It is not published under `/www`. Only the non-secret status is visible:
+
+```text
+http://192.168.8.1/cudy-control/state.json
+http://10.77.0.1/cudy-control/state.json
+```
+
+Install a repeated Windows sync task:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Install-CudyFallbackSyncTask.ps1 -RunNow
+```
+
 ## Transport Plan
 
 Provider API work belongs on the control server in normal mode. Agents should
