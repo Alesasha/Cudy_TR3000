@@ -64,6 +64,85 @@ def api_url(server_url: str, path: str) -> str:
     return f"{server_url.rstrip('/')}/{path.lstrip('/')}"
 
 
+def parse_server_urls(value: str) -> list[str]:
+    result: list[str] = []
+    for item in re_split_urls(value):
+        if item and item not in result:
+            result.append(item)
+    return result
+
+
+def manifest_url_candidates() -> list[str]:
+    return parse_server_urls(os.environ.get("VPN_CONTROL_ENDPOINT_MANIFEST_URLS", ""))
+
+
+def discover_control_urls_from_manifests() -> list[str]:
+    discovered: list[str] = []
+    for manifest_url in manifest_url_candidates():
+        try:
+            request = Request(manifest_url, headers={"User-Agent": f"cudy-route-agent/{AGENT_VERSION}"})
+            with urlopen(request, timeout=min(DEFAULT_HTTP_TIMEOUT, 10)) as response:
+                raw = response.read().decode("utf-8")
+            payload = json.loads(raw)
+            endpoints = payload.get("endpoints") if isinstance(payload, dict) else None
+            if not isinstance(endpoints, list):
+                continue
+            ordered = sorted(
+                (item for item in endpoints if isinstance(item, dict)),
+                key=lambda item: int(item.get("priority") or 999),
+            )
+            for item in ordered:
+                url = str(item.get("url") or "").strip()
+                if url and url not in discovered:
+                    discovered.append(url)
+        except Exception:
+            continue
+    return discovered
+
+
+def re_split_urls(value: str) -> list[str]:
+    # URLs do not contain spaces in our config; commas/semicolons are accepted
+    # so PowerShell env files stay easy to edit.
+    items: list[str] = []
+    for part in value.replace(";", ",").split(","):
+        part = part.strip()
+        if part:
+            items.append(part)
+    return items
+
+
+def server_url_candidates(args: argparse.Namespace) -> list[str]:
+    raw = getattr(args, "server_urls", "") or os.environ.get("VPN_CONTROL_URLS", "")
+    urls = parse_server_urls(raw)
+    primary = (getattr(args, "server_url", "") or "").strip()
+    if primary and primary not in urls:
+        urls.insert(0, primary)
+    for discovered in discover_control_urls_from_manifests():
+        if discovered not in urls:
+            urls.append(discovered)
+    return urls or [DEFAULT_SERVER_URL]
+
+
+def request_json_failover(
+    args: argparse.Namespace,
+    path: str,
+    *,
+    token: str,
+    method: str = "GET",
+    data: dict[str, Any] | None = None,
+) -> Any:
+    errors: list[str] = []
+    for server_url in server_url_candidates(args):
+        try:
+            payload = request_json(api_url(server_url, path), token=token, method=method, data=data)
+            args.server_url = server_url
+            os.environ["VPN_CONTROL_ACTIVE_URL"] = server_url
+            return payload
+        except Exception as exc:
+            errors.append(f"{server_url}: {exc}")
+    raise RuntimeError("All control URLs failed: " + " | ".join(errors))
+
+
 def load_token(args: argparse.Namespace) -> str:
     token = args.token or os.environ.get("VPN_AGENT_TOKEN") or ""
     if not token:
@@ -73,7 +152,7 @@ def load_token(args: argparse.Namespace) -> str:
 
 def fetch_config(args: argparse.Namespace) -> dict[str, Any]:
     token = load_token(args)
-    config = request_json(api_url(args.server_url, "/api/agent/config"), token=token)
+    config = request_json_failover(args, "/api/agent/config", token=token)
     if args.cache:
         args.cache.parent.mkdir(parents=True, exist_ok=True)
         args.cache.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -82,7 +161,7 @@ def fetch_config(args: argparse.Namespace) -> dict[str, Any]:
 
 def fetch_probe_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
     token = load_token(args)
-    payload = request_json(api_url(args.server_url, f"/api/agent/probe-jobs?limit={int(args.limit)}"), token=token)
+    payload = request_json_failover(args, f"/api/agent/probe-jobs?limit={int(args.limit)}", token=token)
     jobs = payload.get("jobs") if isinstance(payload, dict) else None
     if not isinstance(jobs, list):
         raise RuntimeError("Control server returned invalid probe job payload")
@@ -91,8 +170,9 @@ def fetch_probe_jobs(args: argparse.Namespace) -> list[dict[str, Any]]:
 
 def post_probe_job_result(args: argparse.Namespace, *, job_id: str, result: dict[str, Any]) -> dict[str, Any]:
     token = load_token(args)
-    payload = request_json(
-        api_url(args.server_url, "/api/agent/probe-jobs/result"),
+    payload = request_json_failover(
+        args,
+        "/api/agent/probe-jobs/result",
         token=token,
         method="POST",
         data={"job_id": job_id, "result": result},
@@ -1006,7 +1086,7 @@ def post_status(args: argparse.Namespace, plan: dict[str, Any] | None = None) ->
     }
     if plan and plan.get("apply_errors"):
         payload["errors"] = plan["apply_errors"]
-    return request_json(api_url(args.server_url, "/api/agent/status"), token=token, method="POST", data=payload)
+    return request_json_failover(args, "/api/agent/status", token=token, method="POST", data=payload)
 
 
 def try_post_status(args: argparse.Namespace, plan: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1151,6 +1231,7 @@ def apply_plan(plan: dict[str, Any], *, yes: bool, direct_baseline: bool) -> dic
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Managed route-agent prototype.")
     parser.add_argument("--server-url", default=os.environ.get("VPN_CONTROL_URL", DEFAULT_SERVER_URL))
+    parser.add_argument("--server-urls", default=os.environ.get("VPN_CONTROL_URLS", ""), help="Comma-separated failover control URLs. --server-url is still tried first.")
     parser.add_argument("--token", help="Device token. Defaults to VPN_AGENT_TOKEN.")
     parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
     sub = parser.add_subparsers(dest="command", required=True)

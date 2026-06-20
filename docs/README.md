@@ -3,6 +3,7 @@
 This folder is the onboarding map for developers and operators.
 
 - [Architecture](architecture.md) explains the routing model and the planned user/admin control plane.
+- [Roadmap](roadmap.md) tracks the current production/failover/agent work plan.
 - [Inventory](inventory.md) explains the static server catalog and Cudy runtime snapshot.
 - [Operations](operations.md) lists day-to-day commands.
 - [Local control app](control-app.md) describes the web UI MVP.

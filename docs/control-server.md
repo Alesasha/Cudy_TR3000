@@ -278,6 +278,7 @@ Before exposing it directly to the internet:
 
 - `user`: user identity and default server id;
 - `device`: authenticated device metadata;
+- `control.endpoints`: primary/fallback control endpoint manifest;
 - `servers`: user-visible exits;
 - `domain_routes`: global routes overridden by user-specific routes;
 - `ip_routes`: user-specific IPv4/CIDR routes;
@@ -288,6 +289,36 @@ Before exposing it directly to the internet:
 The first Linux/Windows agents should treat this as desired state and keep a
 local cache so routing can continue when the control server is temporarily
 unavailable.
+
+The endpoint manifest is also available without agent auth:
+
+```text
+GET /api/control/endpoints
+```
+
+Publish the same manifest as a static Cudy fallback file:
+
+```powershell
+$env:CUDY_SSH_PASSWORD = "<router password>"
+python tools\sync_control_manifest_to_cudy.py
+Remove-Item Env:CUDY_SSH_PASSWORD
+```
+
+Agents can use the static URLs as discovery fallbacks:
+
+```powershell
+$env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS = "http://10.77.0.1/cudy-control/endpoints.json,http://192.168.8.1/cudy-control/endpoints.json"
+```
+
+Windows `Start-ManagedAgent.ps1` reads this manifest before opening the SSH
+control tunnel. If the manifest advertises a different
+`endpoints[].ssh_tunnel.host`, the agent starts the tunnel to that host. This is
+the intended migration path after `uswest` is rebuilt or receives a new IP:
+
+```powershell
+$env:VPN_CONTROL_PRIMARY_SSH_HOST = "<new-uswest-ip>"
+python tools\sync_control_manifest_to_cudy.py
+```
 
 ## Transport Plan
 

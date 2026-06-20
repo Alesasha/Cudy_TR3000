@@ -24,7 +24,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -47,6 +47,10 @@ DEFAULT_VPNTYPE_UUID_FILE = ROOT / "secrets" / "vpntype_uuid.txt"
 DEFAULT_LOKVPN_SUB_URL_FILE = ROOT / "secrets" / "lokvpn_sub_url.txt"
 DEFAULT_CUDY_HOST = "192.168.8.1"
 DEFAULT_CUDY_USER = "root"
+DEFAULT_CONTROL_PRIMARY_URL = "http://127.0.0.1:8765"
+DEFAULT_CONTROL_PRIMARY_SSH_HOST = "95.182.91.203"
+DEFAULT_CONTROL_PRIMARY_SSH_USER = "cudy-tunnel-windows"
+DEFAULT_CONTROL_FALLBACK_URLS = "http://10.77.0.1:8765,http://192.168.8.1:8765"
 AGENT_TOKEN_CACHE_SECONDS = 300
 DEFAULT_CUDY_FRIEND_ENDPOINT = "195.170.35.108:51830"
 CUDY_CLIENT_OUTPUT_DIR = ROOT / "secrets" / "clients" / "cudy-home"
@@ -1831,6 +1835,58 @@ ADMIN_HTML = r"""<!doctype html>
 
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def split_csv_env(value: str) -> list[str]:
+    result: list[str] = []
+    for item in re.split(r"[\s,;]+", value or ""):
+        item = item.strip()
+        if item:
+            result.append(item)
+    return result
+
+
+def control_endpoints_manifest() -> dict[str, Any]:
+    generated_at = now()
+    valid_until = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=600)).isoformat()
+    primary_url = os.environ.get("VPN_CONTROL_PRIMARY_URL", DEFAULT_CONTROL_PRIMARY_URL).strip()
+    primary_host = os.environ.get("VPN_CONTROL_PRIMARY_SSH_HOST", DEFAULT_CONTROL_PRIMARY_SSH_HOST).strip()
+    primary_user = os.environ.get("VPN_CONTROL_PRIMARY_SSH_USER", DEFAULT_CONTROL_PRIMARY_SSH_USER).strip()
+    primary_remote_port = int(os.environ.get("VPN_CONTROL_PRIMARY_REMOTE_PORT", "8765"))
+    fallback_urls = split_csv_env(os.environ.get("VPN_CONTROL_FALLBACK_URLS", DEFAULT_CONTROL_FALLBACK_URLS))
+    endpoints: list[dict[str, Any]] = []
+    if primary_url:
+        primary: dict[str, Any] = {
+            "id": "primary",
+            "role": "primary",
+            "url": primary_url,
+            "priority": 10,
+        }
+        if primary_host:
+            primary["ssh_tunnel"] = {
+                "host": primary_host,
+                "user": primary_user,
+                "remote_host": "127.0.0.1",
+                "remote_port": primary_remote_port,
+            }
+        endpoints.append(primary)
+    for index, url in enumerate(fallback_urls, start=1):
+        endpoints.append(
+            {
+                "id": f"fallback-{index}",
+                "role": "fallback",
+                "url": url,
+                "priority": 100 + index,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "generation": os.environ.get("VPN_CONTROL_GENERATION", "manual"),
+        "generated_at": generated_at,
+        "valid_until": valid_until,
+        "cache_seconds": 300,
+        "endpoints": endpoints,
+    }
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -4879,6 +4935,7 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         "control": {
             "poll_seconds": 60,
             "status_seconds": 60,
+            "endpoints": control_endpoints_manifest(),
             "reserved_targets": [
                 {"id": "direct", "label": "Direct internet", "kind": "local"},
                 {"id": "auto", "label": "Auto", "kind": "virtual"},
@@ -6510,6 +6567,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.require_user()
                 with self.app.conn() as conn:
                     self.send_json({"ok": True, "aliases": service_alias_rows(conn)})
+            elif parsed.path == "/api/control/endpoints":
+                self.send_json(control_endpoints_manifest())
             elif parsed.path == "/api/admin":
                 self.require_admin()
                 self.send_json(self.api_admin())
@@ -7273,6 +7332,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     summary_parser = sub.add_parser("summary", help="Print database summary.")
 
+    control_endpoints_parser = sub.add_parser("control-endpoints", help="Print advertised primary/fallback control endpoints.")
+    control_endpoints_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     create_user_parser = sub.add_parser("create-user", help="Create or update a login user.")
     create_user_parser.add_argument("user_id")
     create_user_parser.add_argument("--display-name")
@@ -7588,6 +7650,15 @@ def main() -> int:
     if args.command == "summary":
         init_db(args.db, args.inventory)
         print_db_summary(args.db)
+        return 0
+    if args.command == "control-endpoints":
+        manifest = control_endpoints_manifest()
+        if args.json:
+            print(json.dumps(manifest, ensure_ascii=False, indent=2))
+        else:
+            print(f"generation: {manifest['generation']}")
+            for endpoint in manifest["endpoints"]:
+                print(f"{endpoint['role']:8} priority={endpoint['priority']:3} url={endpoint['url']}")
         return 0
     if args.command == "create-user":
         password = None if args.no_password_change else read_password_arg(args.password, confirm=args.password is None)

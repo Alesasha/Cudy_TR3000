@@ -6,6 +6,10 @@ param(
     [string[]]$LokVpnTransport = @(),
     [string[]]$SingBoxTransport = @(),
     [string[]]$ExtraInterfaceMap = @(),
+    [string]$ControlHostName = "95.182.91.203",
+    [string]$ControlSshUser = "cudy-tunnel-windows",
+    [string]$ControlKeyPath = "$PSScriptRoot\uswest_control_tunnel_ed25519",
+    [string]$ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS,
     [int]$PollSeconds = 60,
     [int]$LocalPort = 18765,
     [string]$LogPath = "$PSScriptRoot\managed-agent.log",
@@ -17,6 +21,18 @@ param(
 
 $ErrorActionPreference = "Stop"
 . "$PSScriptRoot\agent.env.ps1"
+if (-not $ControlEndpointManifestUrls -and $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS) {
+    $ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS
+}
+if ($ControlHostName -eq "95.182.91.203" -and $env:VPN_CONTROL_PRIMARY_SSH_HOST) {
+    $ControlHostName = $env:VPN_CONTROL_PRIMARY_SSH_HOST
+}
+if ($ControlSshUser -eq "cudy-tunnel-windows" -and $env:VPN_CONTROL_PRIMARY_SSH_USER) {
+    $ControlSshUser = $env:VPN_CONTROL_PRIMARY_SSH_USER
+}
+if ($ControlKeyPath -eq "$PSScriptRoot\uswest_control_tunnel_ed25519" -and $env:VPN_CONTROL_PRIMARY_SSH_KEY) {
+    $ControlKeyPath = $env:VPN_CONTROL_PRIMARY_SSH_KEY
+}
 try {
     [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
     $OutputEncoding = [Console]::OutputEncoding
@@ -94,6 +110,33 @@ function Stop-LocalTunnelListener {
     }
 }
 
+function Get-ControlTunnelHostFromManifest {
+    if (-not $ControlEndpointManifestUrls) {
+        return $ControlHostName
+    }
+    foreach ($url in ($ControlEndpointManifestUrls -split "[,;]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+        try {
+            $manifest = Invoke-RestMethod -UseBasicParsing -Uri $url -TimeoutSec 5
+            $endpoint = @($manifest.endpoints |
+                Sort-Object @{ Expression = { [int]($_.priority) } } |
+                Where-Object { $_.role -eq "primary" -and $_.ssh_tunnel -and $_.ssh_tunnel.host } |
+                Select-Object -First 1)
+            if ($endpoint.Count -gt 0) {
+                $hostFromManifest = [string]$endpoint[0].ssh_tunnel.host
+                if ($hostFromManifest) {
+                    if ($hostFromManifest -ne $ControlHostName) {
+                        Write-AgentLine "Control manifest selected SSH host $hostFromManifest from $url"
+                    }
+                    return $hostFromManifest
+                }
+            }
+        } catch {
+            Write-AgentLine "Control manifest unavailable: $url $($_.Exception.Message)" -Level WARN
+        }
+    }
+    return $ControlHostName
+}
+
 function Ensure-ControlTunnel {
     if (Test-ControlServer) {
         return
@@ -102,11 +145,15 @@ function Ensure-ControlTunnel {
     Stop-LocalTunnelListener
 
     $script = Join-Path $PSScriptRoot "Start-Tunnel.ps1"
-    Write-AgentLine "Starting SSH control tunnel on 127.0.0.1:$LocalPort"
+    $selectedHost = Get-ControlTunnelHostFromManifest
+    Write-AgentLine "Starting SSH control tunnel on 127.0.0.1:$LocalPort via $selectedHost"
     Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
         "-File", "`"$script`"",
+        "-HostName", "$selectedHost",
+        "-User", "$ControlSshUser",
+        "-KeyPath", "`"$ControlKeyPath`"",
         "-LocalPort", "$LocalPort"
     ) | Out-Null
 

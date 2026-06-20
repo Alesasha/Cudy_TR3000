@@ -94,6 +94,7 @@ powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -StartEng
 Start here:
 
 - [Architecture](docs/architecture.md)
+- [Roadmap](docs/roadmap.md)
 - [Control server](docs/control-server.md)
 - [Control app](docs/control-app.md)
 - [Operations](docs/operations.md)
