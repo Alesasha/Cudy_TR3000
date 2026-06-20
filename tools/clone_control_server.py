@@ -184,37 +184,48 @@ def clone(args: argparse.Namespace) -> dict[str, Any]:
             "custom --remote-dir is not supported yet because the systemd unit "
             f"is pinned to {DEFAULT_REMOTE_DIR}"
         )
-    source_password = password_from_env_or_prompt(
-        args.source_password,
-        env_names=("SOURCE_SSH_PASSWORD", "USWEST_SSH_PASSWORD", "AWG_SSH_PASSWORD_HOSTVDS_USWEST", "AWG_SSH_PASSWORD"),
-        prompt=f"SSH password for source {args.source_host}: ",
-    )
     target_password = password_from_env_or_prompt(
         args.target_password,
         env_names=("TARGET_SSH_PASSWORD",),
         prompt=f"SSH password for target {args.target_host}: ",
     )
-    archive_dir = Path(args.archive_dir)
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    local_archive = archive_dir / f"cudy-control-clone-{int(time.time())}.tgz"
     source_archive = ""
-    source = connect(args.source_host, args.source_user, source_password, args.timeout)
+    source: paramiko.SSHClient | None = None
+    keep_local_archive = args.keep_archive
+    if args.source_archive:
+        local_archive = Path(args.source_archive).resolve()
+        if not local_archive.is_file():
+            raise FileNotFoundError(f"backup archive not found: {local_archive}")
+        source_label = f"archive:{local_archive}"
+        keep_local_archive = True
+    else:
+        source_password = password_from_env_or_prompt(
+            args.source_password,
+            env_names=("SOURCE_SSH_PASSWORD", "USWEST_SSH_PASSWORD", "AWG_SSH_PASSWORD_HOSTVDS_USWEST", "AWG_SSH_PASSWORD"),
+            prompt=f"SSH password for source {args.source_host}: ",
+        )
+        archive_dir = Path(args.archive_dir)
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        local_archive = archive_dir / f"cudy-control-clone-{int(time.time())}.tgz"
+        source_label = args.source_host
+        source = connect(args.source_host, args.source_user, source_password, args.timeout)
     target = connect(args.target_host, args.target_user, target_password, args.timeout)
     try:
-        source_archive = create_source_archive(
-            source,
-            remote_dir=args.remote_dir,
-            service_name=args.service_name,
-            stop_source=not args.no_stop_source,
-            timeout=args.timeout * 3,
-        )
-        sftp_source = source.open_sftp()
-        try:
-            if not remote_file_exists(sftp_source, source_archive):
-                raise RuntimeError(f"source archive was not created: {source_archive}")
-            sftp_source.get(source_archive, str(local_archive))
-        finally:
-            sftp_source.close()
+        if source is not None:
+            source_archive = create_source_archive(
+                source,
+                remote_dir=args.remote_dir,
+                service_name=args.service_name,
+                stop_source=not args.no_stop_source,
+                timeout=args.timeout * 3,
+            )
+            sftp_source = source.open_sftp()
+            try:
+                if not remote_file_exists(sftp_source, source_archive):
+                    raise RuntimeError(f"source archive was not created: {source_archive}")
+                sftp_source.get(source_archive, str(local_archive))
+            finally:
+                sftp_source.close()
         prepare_target(
             target,
             remote_dir=args.remote_dir,
@@ -230,20 +241,21 @@ def clone(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
         )
     finally:
-        if source_archive:
+        if source is not None and source_archive:
             try:
                 ssh_exec(source, f"rm -f {shlex.quote(source_archive)}", args.timeout)
             except Exception:
                 pass
-        source.close()
+        if source is not None:
+            source.close()
         target.close()
-        if local_archive.exists() and not args.keep_archive:
+        if local_archive.exists() and not keep_local_archive:
             local_archive.unlink()
     return {
-        "source_host": args.source_host,
+        "source_host": source_label,
         "target_host": args.target_host,
         "remote_dir": args.remote_dir,
-        "archive": str(local_archive) if args.keep_archive else "",
+        "archive": str(local_archive) if keep_local_archive else "",
         "target_output": output,
     }
 
@@ -253,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-host", default=DEFAULT_SOURCE_HOST)
     parser.add_argument("--source-user", default=DEFAULT_USER)
     parser.add_argument("--source-password")
+    parser.add_argument("--source-archive", help="Restore target from an existing local backup/clone archive instead of connecting to source.")
     parser.add_argument("--target-host", required=True)
     parser.add_argument("--target-user", default=DEFAULT_USER)
     parser.add_argument("--target-password")

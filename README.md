@@ -27,6 +27,8 @@ Linux, and Cudy fallback routing.
   scripts.
 - `tools/clone_control_server.py` - disaster-recovery clone tool for moving the
   production control-server to a replacement VPS.
+- `tools/backup_control_server.py` - online SQLite/control-server backup tool
+  for disaster recovery archives.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.
@@ -57,6 +59,12 @@ Clone the production control-server to a replacement VPS:
 
 ```powershell
 python tools\clone_control_server.py --target-host <new-vps-ip>
+```
+
+Create a local disaster-recovery backup of the live control-server:
+
+```powershell
+python tools\backup_control_server.py
 ```
 
 Build the Android release APK:

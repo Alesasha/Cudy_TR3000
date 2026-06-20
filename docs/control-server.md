@@ -129,6 +129,10 @@ This avoids public HTTP and avoids the need to know each client's changing IP.
 
 ## One-Click Clone To A New VPS
 
+This tool assumes the target VPS already exists, has Ubuntu installed by the
+provider, and accepts root SSH. Selecting/reinstalling the OS is still done in
+the provider panel or provider API before this script can connect.
+
 The control-server can be cloned from the current uswest host to a replacement
 VPS with:
 
@@ -165,6 +169,57 @@ After a clone to a different IP:
 The local transfer archive is deleted after upload by default. `--keep-archive`
 is available for debugging, but the archive is sensitive and must not be
 committed or shared.
+
+Restore a replacement VPS from an existing local backup archive:
+
+```powershell
+$env:TARGET_SSH_PASSWORD = "<target root password>"
+python tools\clone_control_server.py `
+  --source-archive backups\control-server\cudy-control-95-182-91-203-YYYYMMDD-HHMMSS.tgz `
+  --target-host <new-vps-ip>
+Remove-Item Env:TARGET_SSH_PASSWORD
+```
+
+This is the fallback path when the old control-server is unavailable.
+
+## Backups
+
+Create a local disaster-recovery archive from the live uswest control-server:
+
+```powershell
+$env:CONTROL_BACKUP_SSH_PASSWORD = "<root password>"
+python tools\backup_control_server.py
+Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD
+```
+
+The backup uses SQLite's online backup API, so `vpn-control` does not need to be
+stopped. The archive includes, by default:
+
+- `data/vpn_control.db`;
+- `secrets/`;
+- `config/`, `deploy/`, `docs/`, `openwrt/`, `tools/`;
+- `requirements.txt`;
+- `backup-metadata.txt`.
+
+Local backup archives are written to `backups/control-server/` and the newest 10
+are kept by default. These files contain secrets and are ignored by git.
+
+Use `--no-secrets` only for a shareable diagnostic archive. A no-secrets backup
+is not sufficient for a seamless restore because provider refresh credentials
+and agent/transport private material may be missing.
+
+Current disaster-recovery layers:
+
+1. Create or reinstall the VPS with Ubuntu in the provider panel/API.
+2. Restore the control-server with `clone_control_server.py` from live source or
+   from a backup archive.
+3. Recreate or migrate the AmneziaWG/exit-server layer separately if the new
+   host must also carry traffic.
+4. Update operator tunnels and agent bundles to the new control-server host.
+
+The control-server backup covers the control plane. It does not by itself
+install a fresh Amnezia server or migrate external provider accounts. That
+should be automated as the next disaster-recovery layer.
 
 ## Later HTTPS Mode
 

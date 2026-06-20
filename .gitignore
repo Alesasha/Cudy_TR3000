@@ -12,6 +12,7 @@ data/*.sqlite
 data/*.sqlite-*
 data/*.pid
 build/
+backups/
 **/bin/
 **/obj/
 *.apk
