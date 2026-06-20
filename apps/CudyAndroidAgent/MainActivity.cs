@@ -21,6 +21,9 @@ public class MainActivity : Activity
     private EditText? sshUserInput;
     private EditText? sshKeyInput;
     private TextView? statusText;
+    private TextView? serviceStatusText;
+    private TextView? policyStatusText;
+    private TextView? probeStatusText;
     private TextView? outputText;
     private ISharedPreferences? preferences;
     private bool? pendingStartAfterPrepare;
@@ -42,10 +45,14 @@ public class MainActivity : Activity
         sshUserInput = FindViewById<EditText>(Resource.Id.sshUserInput);
         sshKeyInput = FindViewById<EditText>(Resource.Id.sshKeyInput);
         statusText = FindViewById<TextView>(Resource.Id.statusText);
+        serviceStatusText = FindViewById<TextView>(Resource.Id.serviceStatusText);
+        policyStatusText = FindViewById<TextView>(Resource.Id.policyStatusText);
+        probeStatusText = FindViewById<TextView>(Resource.Id.probeStatusText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshKeyInput is null
-            || statusText is null || outputText is null)
+            || statusText is null || serviceStatusText is null || policyStatusText is null
+            || probeStatusText is null || outputText is null)
         {
             throw new InvalidOperationException("Required layout controls are missing.");
         }
@@ -334,7 +341,8 @@ public class MainActivity : Activity
 
     private void RenderStoredStatus()
     {
-        if (preferences is null || outputText is null)
+        if (preferences is null || serviceStatusText is null || policyStatusText is null
+            || probeStatusText is null || outputText is null)
         {
             return;
         }
@@ -343,6 +351,17 @@ public class MainActivity : Activity
         var serviceAt = preferences.GetString("service_status_at", "");
         var policySummary = preferences.GetString("last_policy_summary", "");
         var policyAt = preferences.GetString("last_policy_at", "");
+        var debugProbe = preferences.GetString("debug_probe_result", "");
+        var debugProbeAt = preferences.GetString("debug_probe_at", "");
+        serviceStatusText.Text = string.IsNullOrWhiteSpace(serviceStatus)
+            ? "Service: -"
+            : $"Service: {serviceStatus}";
+        policyStatusText.Text = string.IsNullOrWhiteSpace(policyAt)
+            ? "Policy: -"
+            : $"Policy: {policyAt}";
+        probeStatusText.Text = string.IsNullOrWhiteSpace(debugProbeAt)
+            ? "Probe: -"
+            : $"Probe: {debugProbeAt}";
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(serviceStatus))
         {
@@ -364,6 +383,19 @@ public class MainActivity : Activity
                 lines.Add($"policy_at: {policyAt}");
             }
             lines.Add(policySummary);
+        }
+        if (!string.IsNullOrWhiteSpace(debugProbe))
+        {
+            if (lines.Count > 0)
+            {
+                lines.Add("");
+            }
+            lines.Add("last_probe:");
+            if (!string.IsNullOrWhiteSpace(debugProbeAt))
+            {
+                lines.Add($"probe_at: {debugProbeAt}");
+            }
+            lines.Add(debugProbe);
         }
         if (lines.Count > 0)
         {

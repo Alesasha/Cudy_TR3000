@@ -96,19 +96,28 @@ if (-not $NoStart) {
     $controlOnly = -not $StartEngine
     $controlOnlyArg = $controlOnly.ToString().ToLowerInvariant()
     Invoke-Adb logcat -c
-    Invoke-Adb shell am start `
-        -n "com.nashvpn.cudyagent/com.nashvpn.cudyagent.MainActivity" `
-        --es control_url $ControlUrl `
-        --es device_id $agent.id `
-        --es token $agent.token `
-        --es ssh_host $SshHost `
-        --es ssh_user $SshUser `
-        --es ssh_key_b64 $sshKeyB64 `
-        --es debug_probe_url $DebugProbeUrl `
-        --es debug_probe_candidates $DebugProbeCandidates `
-        --ez fetch_policy false `
-        --ez start_agent true `
-        --ez control_only $controlOnlyArg
+    $startArgs = @(
+        "shell", "am", "start",
+        "-n", "com.nashvpn.cudyagent/com.nashvpn.cudyagent.MainActivity",
+        "--es", "control_url", $ControlUrl,
+        "--es", "device_id", $agent.id,
+        "--es", "token", $agent.token,
+        "--es", "ssh_host", $SshHost,
+        "--es", "ssh_user", $SshUser,
+        "--es", "ssh_key_b64", $sshKeyB64
+    )
+    if ($DebugProbeUrl) {
+        $startArgs += @("--es", "debug_probe_url", $DebugProbeUrl)
+    }
+    if ($DebugProbeCandidates) {
+        $startArgs += @("--es", "debug_probe_candidates", $DebugProbeCandidates)
+    }
+    $startArgs += @(
+        "--ez", "fetch_policy", "false",
+        "--ez", "start_agent", "true",
+        "--ez", "control_only", $controlOnlyArg
+    )
+    Invoke-Adb @startArgs
 }
 
 Write-Host ""

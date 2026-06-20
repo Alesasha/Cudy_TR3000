@@ -14,6 +14,27 @@
             android:layout_height="wrap_content"
             android:text="Not configured"
             android:textSize="18sp" />
+        <TextView
+            android:id="@+id/serviceStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="10dp"
+            android:text="Service: -"
+            android:textSize="14sp" />
+        <TextView
+            android:id="@+id/policyStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="Policy: -"
+            android:textSize="14sp" />
+        <TextView
+            android:id="@+id/probeStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="Probe: -"
+            android:textSize="14sp" />
         <EditText
             android:id="@+id/controlUrlInput"
             android:layout_width="match_parent"
