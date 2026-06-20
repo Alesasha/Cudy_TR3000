@@ -65,6 +65,8 @@ This is the current implementation order for the managed VPN control project.
 ## 6. Windows Agent
 
 - Production install/uninstall is implemented through scheduled task helpers.
+- Full rollback helper is implemented: it can stop the task, stop the control
+  tunnel listener, stop managed sing-box transports, and restore direct routes.
 - SSH tunnel self-heal is implemented through endpoint manifest/fallback logic.
 - Sing-box transport self-heal is implemented for control-server
   `transport_plan`; unused exits are stopped automatically.
@@ -74,21 +76,24 @@ This is the current implementation order for the managed VPN control project.
 
 ## 7. Android Agent
 
-- Prepare a normal user instruction.
-- Verify behavior after phone reboot.
-- Document battery restrictions and foreground service behavior.
+- Normal user instruction exists in `docs/android-agent.md`.
+- Real reboot on the MIUI test phone was verified after enabling Autostart and
+  unrestricted battery mode.
+- Battery/VPN/MIUI Autostart readiness is shown on the app main screen.
+- Battery restrictions and foreground service behavior are documented.
 - Production probe-job support is implemented through Android local mixed proxy
   probes.
-- Boot/reconnect receiver is implemented; real reboot behavior still needs
-  device-level verification and battery/autostart guidance.
+- Boot/reconnect receiver is implemented and verified through both explicit
+  test broadcast and a real reboot on the current test phone.
 - Release APK build is available with a versioned local copy under
   `build/releases/`.
 
 ## 8. Linux Agent
 
-- Return after Windows/Android are stable.
-- Make the Dima scenario one-click.
-- Avoid manual routes.
+- The Dima scenario has a one-click wrapper: `./one_click_install.sh`.
+- Status and rollback helpers exist: `./status.sh`, `sudo ./uninstall_systemd.sh`,
+  and `sudo ./restore_direct.sh`.
+- Manual routes should not be required in the normal install path.
 - Check conflicts with Amnezia, Zapret, and UFW.
 - Move toward standalone agent behavior similar to Android/Windows.
 
