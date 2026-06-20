@@ -65,6 +65,11 @@ SESSION_COOKIE = "vpn_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 210_000
 DEVICE_TOKEN_PREFIX = "vca_"
+APP_STARTED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+CUDY_FALLBACK_STATE_URL = os.environ.get("CUDY_FALLBACK_STATE_URL", "http://192.168.8.1/cudy-control/state.json")
+CUDY_FALLBACK_MAX_AGE_SECONDS = int(os.environ.get("CUDY_FALLBACK_MAX_AGE_SECONDS", "3600"))
+CUDY_FALLBACK_STATUS_WARN = os.environ.get("CUDY_FALLBACK_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
+AUTO_ALL_REST = "all-rest"
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
 )
@@ -546,7 +551,7 @@ USER_HTML = r"""<!doctype html>
   </main>
   <script>
     const state = { servers: [], routes: [], user: null, aliases: [] };
-    const serverLabel = id => (state.servers.find(s => s.id === id) || { label: id }).label;
+    const serverLabel = id => (id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
     const serverProvider = id => (state.servers.find(s => s.id === id) || { provider: "" }).provider || "";
 
     async function api(path, options) {
@@ -995,6 +1000,7 @@ ADMIN_HTML = r"""<!doctype html>
     const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [] };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
+    const serverLabel = id => (id === ALL_REST || id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
     async function api(path, options) {
       const response = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -1037,7 +1043,7 @@ ADMIN_HTML = r"""<!doctype html>
       return (policy.candidate_server_ids || []).map(serverLabel).join(" -> ");
     }
     function setAutoEditor(prefix, serverIds) {
-      autoEditors[prefix] = [...(serverIds || [])];
+      autoEditors[prefix] = [...(serverIds || [])].map(value => value === "all-rest" ? ALL_REST : value);
       renderAutoEditor(prefix);
     }
     function parsePriorityText(text) {
@@ -1092,22 +1098,10 @@ ADMIN_HTML = r"""<!doctype html>
         container.textContent = `Last winners unavailable: ${error.message}`;
       }
     }
-    function expandAutoCandidates(values) {
-      const result = [];
-      for (const value of values) {
-        if (!value) break;
-        if (value === ALL_REST) {
-          for (const server of physicalServers()) {
-            if (!result.includes(server.id)) result.push(server.id);
-          }
-          break;
-        }
-        if (!result.includes(value)) result.push(value);
-      }
-      return result;
-    }
     function selectedAutoCandidates(prefix) {
-      return expandAutoCandidates(autoEditors[prefix] || []);
+      return [...(autoEditors[prefix] || [])]
+        .filter(Boolean)
+        .map(value => value === ALL_REST ? "all-rest" : value);
     }
     async function savePriorityPolicy(userId, domain, prefix, statusId) {
       const status = document.getElementById(statusId);
@@ -1887,6 +1881,45 @@ def control_endpoints_manifest() -> dict[str, Any]:
         "cache_seconds": 300,
         "endpoints": endpoints,
     }
+
+
+def fetch_json_url(url: str, *, timeout: int = 3) -> dict[str, Any]:
+    request = Request(url, headers={"User-Agent": "cudy-control-status/1"})
+    with urlopen(request, timeout=timeout) as response:
+        raw = response.read().decode("utf-8")
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise ValueError(f"Expected object from {url}")
+    return payload
+
+
+def cudy_fallback_state_status() -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "url": CUDY_FALLBACK_STATE_URL,
+        "reachable": False,
+        "ok": False,
+    }
+    if not CUDY_FALLBACK_STATE_URL:
+        result["error"] = "CUDY_FALLBACK_STATE_URL is empty"
+        return result
+    try:
+        payload = fetch_json_url(CUDY_FALLBACK_STATE_URL, timeout=3)
+        age = timestamp_age_seconds(str(payload.get("created_at") or ""))
+        result.update(
+            {
+                "reachable": True,
+                "created_at": payload.get("created_at"),
+                "age_seconds": age,
+                "bytes": payload.get("bytes"),
+                "archive_name": payload.get("archive_name"),
+                "source_host": payload.get("source_host"),
+                "sha256": payload.get("sha256"),
+                "ok": age is not None and age <= CUDY_FALLBACK_MAX_AGE_SECONDS,
+            }
+        )
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
 
 
 def parse_timestamp(value: str | None) -> datetime | None:
@@ -3354,13 +3387,31 @@ def parse_candidate_server_ids(value: Any) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
     for item in items:
-        if item == "auto":
+        if item.lower() == "auto":
             raise ValueError("Auto candidate list must contain real servers, not auto")
+        if item.lower() == AUTO_ALL_REST:
+            item = AUTO_ALL_REST
         if item not in seen:
             result.append(item)
             seen.add(item)
     if not result:
         raise ValueError("candidate list cannot be empty")
+    return result
+
+
+def expand_auto_candidate_ids(servers: dict[str, dict[str, Any]], candidates: list[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for server_id in candidates:
+        if server_id == AUTO_ALL_REST:
+            for rest_server_id in default_auto_candidate_ids(servers):
+                if rest_server_id not in seen:
+                    result.append(rest_server_id)
+                    seen.add(rest_server_id)
+            continue
+        if server_id not in seen:
+            result.append(server_id)
+            seen.add(server_id)
     return result
 
 
@@ -3373,11 +3424,13 @@ def auto_candidate_policy_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]
         ORDER BY user_id, domain
         """,
     )
+    servers = server_map(conn)
     for entry in entries:
         try:
             entry["candidate_server_ids"] = json.loads(entry["candidate_server_ids"])
         except json.JSONDecodeError:
             entry["candidate_server_ids"] = []
+        entry["expanded_candidate_server_ids"] = expand_auto_candidate_ids(servers, entry["candidate_server_ids"])
         entry["scope"] = auto_policy_scope(entry.get("user_id") or "", entry.get("domain") or "")
     return entries
 
@@ -3421,6 +3474,7 @@ def resolve_auto_candidate_policy(
         except json.JSONDecodeError:
             server_ids = []
         item["candidate_server_ids"] = server_ids
+        item["expanded_candidate_server_ids"] = expand_auto_candidate_ids(server_map(conn), server_ids)
         item["scope"] = auto_policy_scope(item.get("user_id") or "", item.get("domain") or "")
         return item
     return None
@@ -3444,7 +3498,8 @@ def save_auto_candidate_policy(
         if normalized_user_id and row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
             raise ValueError(f"Unknown user: {normalized_user_id}")
         for server_id in candidates:
-            validate_server_id(conn, server_id, require_user_visible=True)
+            if server_id != AUTO_ALL_REST:
+                validate_server_id(conn, server_id, require_user_visible=True)
         conn.execute(
             """
             INSERT INTO auto_candidate_policies (
@@ -3693,6 +3748,7 @@ def create_probe_job(
             raise ValueError(f"Unknown user: {normalized_user_id}")
         if assigned_device_id and row(conn, "SELECT id FROM agent_devices WHERE id = ?", (assigned_device_id,)) is None:
             raise ValueError(f"Unknown agent device: {assigned_device_id}")
+        candidates = expand_auto_candidate_ids(server_map(conn), candidates)
         for server_id in candidates:
             validate_server_id(conn, server_id, require_user_visible=True)
         conn.execute(
@@ -4315,6 +4371,7 @@ def auto_select_domain(
             else:
                 candidates = default_auto_candidate_ids(servers)
                 policy_source = "all_enabled_user_visible"
+        candidates = expand_auto_candidate_ids(servers, candidates)
         for server_id in candidates:
             validate_server_id(conn, server_id, require_user_visible=True)
 
@@ -4756,6 +4813,137 @@ def agent_status_rows(db_path: Path, inventory_path: Path) -> list[dict[str, Any
         except json.JSONDecodeError:
             entry["status"] = {}
     return entries
+
+
+def count_value(conn: sqlite3.Connection, sql: str, params: Iterable[Any] = ()) -> int:
+    item = row(conn, sql, params)
+    if not item:
+        return 0
+    return int(next(iter(item.values())) or 0)
+
+
+def grouped_counts(conn: sqlite3.Connection, sql: str, params: Iterable[Any] = ()) -> dict[str, int]:
+    result: dict[str, int] = {}
+    for item in rows(conn, sql, params):
+        key = str(item.get("key") or "")
+        result[key] = int(item.get("count") or 0)
+    return result
+
+
+def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    reference = datetime.now(timezone.utc)
+    with connect(db_path) as conn:
+        agent_recent_seconds = 180
+        agent_status_items = rows(
+            conn,
+            """
+            SELECT d.id, d.user_id, d.platform, d.enabled, d.last_seen_at,
+                   s.reported_at, s.status_json
+            FROM agent_devices d
+            LEFT JOIN agent_status s ON s.device_id = d.id
+            ORDER BY d.user_id, d.id
+            """,
+        )
+        agents: list[dict[str, Any]] = []
+        for item in agent_status_items:
+            reported_age = timestamp_age_seconds(item.get("reported_at"), reference=reference)
+            last_seen_age = timestamp_age_seconds(item.get("last_seen_at"), reference=reference)
+            health_ok = None
+            try:
+                status_json = json.loads(item.get("status_json") or "{}")
+                if isinstance(status_json, dict) and isinstance(status_json.get("health"), dict):
+                    health_ok = status_json["health"].get("ok")
+            except json.JSONDecodeError:
+                pass
+            online = bool(item.get("enabled")) and reported_age is not None and reported_age <= agent_recent_seconds
+            agents.append(
+                {
+                    "id": item["id"],
+                    "user_id": item["user_id"],
+                    "platform": item.get("platform") or "",
+                    "enabled": bool(item.get("enabled")),
+                    "online": online,
+                    "health_ok": health_ok,
+                    "last_seen_at": item.get("last_seen_at"),
+                    "last_seen_age_seconds": last_seen_age,
+                    "reported_at": item.get("reported_at"),
+                    "reported_age_seconds": reported_age,
+                }
+            )
+        transports = transport_config_summaries(conn)
+        oldest_transport_age = None
+        newest_transport_age = None
+        transport_ages = [
+            age
+            for age in (timestamp_age_seconds(item.get("updated_at"), reference=reference) for item in transports)
+            if age is not None
+        ]
+        if transport_ages:
+            oldest_transport_age = max(transport_ages)
+            newest_transport_age = min(transport_ages)
+        fallback = cudy_fallback_state_status()
+        warnings: list[str] = []
+        if CUDY_FALLBACK_STATUS_WARN and not fallback.get("ok"):
+            warnings.append("Cudy fallback state is stale or unreachable from this process")
+        pending_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'pending'")
+        failed_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'failed'")
+        offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
+        if offline_enabled_agents:
+            warnings.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
+        return {
+            "ok": not warnings,
+            "generated_at": now(),
+            "service": {
+                "started_at": APP_STARTED_AT,
+                "uptime_seconds": timestamp_age_seconds(APP_STARTED_AT, reference=reference),
+                "pid": os.getpid(),
+            },
+            "database": {
+                "path": str(db_path),
+                "users": count_value(conn, "SELECT COUNT(*) AS count FROM users"),
+                "enabled_users": count_value(conn, "SELECT COUNT(*) AS count FROM users WHERE enabled = 1"),
+                "servers": count_value(conn, "SELECT COUNT(*) AS count FROM servers"),
+                "enabled_servers": count_value(conn, "SELECT COUNT(*) AS count FROM servers WHERE enabled = 1"),
+                "global_domain_routes": count_value(conn, "SELECT COUNT(*) AS count FROM global_domain_routes WHERE enabled = 1"),
+                "user_domain_routes": count_value(conn, "SELECT COUNT(*) AS count FROM user_domain_routes WHERE enabled = 1"),
+                "global_ip_routes": count_value(conn, "SELECT COUNT(*) AS count FROM global_ip_routes WHERE enabled = 1"),
+                "auto_cache": count_value(conn, "SELECT COUNT(*) AS count FROM domain_auto_cache"),
+            },
+            "agents": {
+                "total": len(agents),
+                "enabled": sum(1 for item in agents if item["enabled"]),
+                "online": sum(1 for item in agents if item["online"]),
+                "offline_enabled": offline_enabled_agents,
+                "recent_seconds": agent_recent_seconds,
+                "items": agents[:50],
+            },
+            "probe_jobs": {
+                "by_status": grouped_counts(conn, "SELECT status AS key, COUNT(*) AS count FROM agent_probe_jobs GROUP BY status"),
+                "pending": pending_probe_jobs,
+                "failed": failed_probe_jobs,
+            },
+            "transports": {
+                "total": len(transports),
+                "enabled": sum(1 for item in transports if item["enabled"]),
+                "by_provider": grouped_counts(
+                    conn,
+                    """
+                    SELECT s.provider AS key, COUNT(*) AS count
+                    FROM transport_configs t
+                    JOIN servers s ON s.id = t.server_id
+                    GROUP BY s.provider
+                    """,
+                ),
+                "newest_age_seconds": newest_transport_age,
+                "oldest_age_seconds": oldest_transport_age,
+            },
+            "control": {
+                "endpoints": control_endpoints_manifest(),
+                "cudy_fallback_state": fallback,
+            },
+            "warnings": warnings,
+        }
 
 
 def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[str, Any]) -> dict[str, Any]:
@@ -6569,6 +6757,9 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "aliases": service_alias_rows(conn)})
             elif parsed.path == "/api/control/endpoints":
                 self.send_json(control_endpoints_manifest())
+            elif parsed.path == "/api/status":
+                self.require_admin()
+                self.send_json(build_system_status(self.app.db_path, self.app.inventory_path))
             elif parsed.path == "/api/admin":
                 self.require_admin()
                 self.send_json(self.api_admin())
@@ -7335,6 +7526,9 @@ def build_parser() -> argparse.ArgumentParser:
     control_endpoints_parser = sub.add_parser("control-endpoints", help="Print advertised primary/fallback control endpoints.")
     control_endpoints_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
+    system_status_parser = sub.add_parser("system-status", help="Print production health/status summary.")
+    system_status_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     create_user_parser = sub.add_parser("create-user", help="Create or update a login user.")
     create_user_parser.add_argument("user_id")
     create_user_parser.add_argument("--display-name")
@@ -7659,6 +7853,21 @@ def main() -> int:
             print(f"generation: {manifest['generation']}")
             for endpoint in manifest["endpoints"]:
                 print(f"{endpoint['role']:8} priority={endpoint['priority']:3} url={endpoint['url']}")
+        return 0
+    if args.command == "system-status":
+        status = build_system_status(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(status, ensure_ascii=False, indent=2))
+        else:
+            print(f"ok: {status['ok']}")
+            print(f"uptime_seconds: {status['service']['uptime_seconds']}")
+            print(f"agents: online={status['agents']['online']} enabled={status['agents']['enabled']} total={status['agents']['total']}")
+            print(f"probe_jobs: {status['probe_jobs']['by_status']}")
+            print(f"transports: enabled={status['transports']['enabled']} total={status['transports']['total']}")
+            fallback = status["control"]["cudy_fallback_state"]
+            print(f"cudy_fallback: reachable={fallback.get('reachable')} ok={fallback.get('ok')} age={fallback.get('age_seconds')}")
+            for warning in status["warnings"]:
+                print(f"warning: {warning}")
         return 0
     if args.command == "create-user":
         password = None if args.no_password_change else read_password_arg(args.password, confirm=args.password is None)

@@ -19,7 +19,7 @@ This is the current implementation order for the managed VPN control project.
   jobs.
 - Maintain SQLite/config backups.
 - Add a clear health/status page with provider status, agents, last policy,
-  last probes, and backup age.
+  last probes, and backup age. The first machine-readable API is `/api/status`.
 
 ## 3. Fallback Control Path
 

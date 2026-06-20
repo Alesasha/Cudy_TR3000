@@ -126,12 +126,21 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
     client = connect(args.host, args.user, password, args.timeout)
     uploaded = 0
     try:
+        package_step = ""
+        if not args.skip_package_install:
+            package_step = (
+                "if command -v apt-get >/dev/null 2>&1; then\n"
+                "  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import paramiko' >/dev/null 2>&1; then\n"
+                "    export DEBIAN_FRONTEND=noninteractive\n"
+                "    apt-get update -y\n"
+                "    apt-get install -y python3 python3-paramiko curl tar\n"
+                "  fi\n"
+                "fi\n"
+            )
         ssh_exec(
             client,
             "set -eu\n"
-            "if command -v apt-get >/dev/null 2>&1; then "
-            "apt-get update -y && apt-get install -y python3 python3-paramiko; "
-            "fi\n"
+            f"{package_step}"
             f"id -u {shlex.quote(args.service_user)} >/dev/null 2>&1 || "
             f"useradd --system --home {shlex.quote(args.remote_dir)} --shell /usr/sbin/nologin {shlex.quote(args.service_user)}\n"
             f"mkdir -p {shlex.quote(args.remote_dir)} {shlex.quote(args.remote_dir + '/data')}\n",
@@ -190,6 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-name", default=DEFAULT_SERVICE)
     parser.add_argument("--service-user", default="cudy-control")
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "vpn_control.db")
+    parser.add_argument("--skip-package-install", action="store_true", help="Skip apt/package checks on an already prepared VPS.")
     parser.add_argument("--no-upload-db", dest="upload_db", action="store_false")
     parser.set_defaults(upload_db=True)
     return parser

@@ -261,13 +261,13 @@ Manage ordered server candidate lists for future Auto benchmarks:
 
 ```powershell
 python tools\vpn_control_app.py auto-candidates-list
-python tools\vpn_control_app.py auto-candidates-set "proxyde, proxyus, uswest"
-python tools\vpn_control_app.py auto-candidates-set "proxygb, proxyde" --domain example.com
-python tools\vpn_control_app.py auto-candidates-set "proxynl, proxyde" --user-id test-client-awg --domain example.com
+python tools\vpn_control_app.py auto-candidates-set "proxyde, proxyus, all-rest"
+python tools\vpn_control_app.py auto-candidates-set "proxygb, proxyde, all-rest" --domain example.com
+python tools\vpn_control_app.py auto-candidates-set "proxynl, proxyde, all-rest" --user-id test-client-awg --domain example.com
 python tools\vpn_control_app.py auto-candidates-delete --domain example.com
 ```
 
-Blank `--user-id` means a global policy. Blank `--domain` means the default policy for all domains. Candidate policy resolution order is user+domain, global+domain, user default, global default.
+Blank `--user-id` means a global policy. Blank `--domain` means the default policy for all domains. Candidate policy resolution order is user+domain, user default, global+domain, global default. `all-rest` expands to every remaining enabled user-visible server after the explicitly listed priorities.
 
 `Auto` is not currently applied to every unknown domain automatically. The current deploy model only emits rules for domains present in global or per-user route tables; unknown domains keep following normal Cudy/PBR routing until a discovery or benchmark flow adds them.
 

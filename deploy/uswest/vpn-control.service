@@ -7,11 +7,19 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=/opt/cudy-control
 Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONUTF8=1
 ExecStart=/usr/bin/python3 /opt/cudy-control/tools/vpn_control_app.py --db /opt/cudy-control/data/vpn_control.db --inventory /opt/cudy-control/config/vpn_inventory.json serve --host 127.0.0.1 --port 8765
-Restart=on-failure
+Restart=always
 RestartSec=5
 User=cudy-control
 Group=cudy-control
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/cudy-control
 
 [Install]
 WantedBy=multi-user.target

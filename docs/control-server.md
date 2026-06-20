@@ -172,6 +172,35 @@ The script installs Python/curl/tar on the target when `apt-get` is available,
 creates the `cudy-control` system user, installs `vpn-control.service`, starts
 the service, and checks `http://127.0.0.1:8765/healthz`.
 
+Update code and systemd unit on an already prepared uswest without overwriting
+the production SQLite database:
+
+```powershell
+$env:USWEST_SSH_PASSWORD = "<root password>"
+python tools\deploy_control_server.py --no-upload-db --skip-package-install
+Remove-Item Env:USWEST_SSH_PASSWORD
+```
+
+Check production status:
+
+```bash
+python3 /opt/cudy-control/tools/vpn_control_app.py \
+  --db /opt/cudy-control/data/vpn_control.db \
+  --inventory /opt/cudy-control/config/vpn_inventory.json \
+  system-status
+```
+
+Detailed status is also available to admins through:
+
+```text
+GET /api/status
+```
+
+By default `/api/status` reports Cudy fallback-state reachability but does not
+mark the production service unhealthy when `192.168.8.1` is unreachable from a
+remote VPS. Set `CUDY_FALLBACK_STATUS_WARN=1` only on hosts that should be able
+to read `http://192.168.8.1/cudy-control/state.json` directly.
+
 After a clone to a different IP:
 
 - update operator SSH tunnels to point at the new IP;
