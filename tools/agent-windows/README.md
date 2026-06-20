@@ -268,6 +268,13 @@ Remove the task during rollback:
 .\Uninstall-ManagedAgentTask.ps1 -StopRunning
 ```
 
+Full production rollback also stops the local control tunnel listener, stops all
+managed sing-box transports, and restores direct routes:
+
+```powershell
+.\Uninstall-ManagedAgentTask.ps1 -FullRollback
+```
+
 Terminal 1:
 
 ```powershell
