@@ -37,6 +37,17 @@ Latest Release APK smoke on the physical phone:
 - receiver start path was verified through the explicit test broadcast
   `com.nashvpn.cudyagent.TEST_BOOT_START`.
 
+Real reboot check on the MIUI test phone:
+
+- after a normal phone reboot, `CudyVpnService` did not start automatically;
+- the package was still installed, enabled, not stopped, and
+  `RECEIVE_BOOT_COMPLETED` was granted;
+- sending `com.nashvpn.cudyagent.TEST_BOOT_START` through ADB immediately
+  started the receiver path, opened SSH control, fetched policy, opened Android
+  VPN TUN, and posted status;
+- conclusion: the app boot code works, but MIUI autostart/battery policy is
+  blocking delivery or execution of the normal boot receiver.
+
 Latest verified Android VPN routes included the Telegram CIDRs:
 
 ```text
@@ -127,6 +138,14 @@ Control loop ok ip=... transports=... engine=running ...
 On MIUI and other aggressive Android builds, the user may still need to allow
 autostart and disable battery restrictions for reliable background start after a
 real device reboot.
+
+For MIUI/Xiaomi/POCO/Redmi devices, enable these manually:
+
+```text
+Security -> Manage apps -> Cudy Agent -> Autostart: on
+Settings -> Battery -> Battery saver -> Cudy Agent -> No restrictions
+Recent apps -> Cudy Agent -> Lock, if available
+```
 
 ## Test Defaults
 
