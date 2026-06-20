@@ -10,7 +10,8 @@ Current MVP:
 - requests Android VPN permission and resumes start after the user accepts it;
 - starts a foreground `VpnService`;
 - periodically fetches control policy and posts `/api/agent/status`;
-- shows the last service status and last fetched policy summary on the main screen;
+- shows service, policy, probe, route, transport, engine, runtime, and last
+  error status on the main screen;
 - parses `transport_plan` and prepares compatible sing-box JSON in memory for
   supported transport types.
 - stores prepared sing-box JSON files under app-private `files/transports/`.
@@ -34,7 +35,7 @@ Current MVP:
 
 Next implementation step:
 
-- add a richer user-facing status screen;
+- add a friendlier first-run wizard for Android/MIUI background permissions;
 - verify behavior after a real phone reboot on each target Android/MIUI build.
 
 Safety note:

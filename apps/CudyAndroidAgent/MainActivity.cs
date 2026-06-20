@@ -26,6 +26,9 @@ public class MainActivity : Activity
     private TextView? serviceStatusText;
     private TextView? policyStatusText;
     private TextView? probeStatusText;
+    private TextView? routeStatusText;
+    private TextView? transportStatusText;
+    private TextView? engineStatusText;
     private TextView? outputText;
     private ISharedPreferences? preferences;
     private bool? pendingStartAfterPrepare;
@@ -50,11 +53,15 @@ public class MainActivity : Activity
         serviceStatusText = FindViewById<TextView>(Resource.Id.serviceStatusText);
         policyStatusText = FindViewById<TextView>(Resource.Id.policyStatusText);
         probeStatusText = FindViewById<TextView>(Resource.Id.probeStatusText);
+        routeStatusText = FindViewById<TextView>(Resource.Id.routeStatusText);
+        transportStatusText = FindViewById<TextView>(Resource.Id.transportStatusText);
+        engineStatusText = FindViewById<TextView>(Resource.Id.engineStatusText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshKeyInput is null
             || statusText is null || serviceStatusText is null || policyStatusText is null
-            || probeStatusText is null || outputText is null)
+            || probeStatusText is null || routeStatusText is null || transportStatusText is null
+            || engineStatusText is null || outputText is null)
         {
             throw new InvalidOperationException("Required layout controls are missing.");
         }
@@ -449,7 +456,8 @@ public class MainActivity : Activity
     private void RenderStoredStatus()
     {
         if (preferences is null || serviceStatusText is null || policyStatusText is null
-            || probeStatusText is null || outputText is null)
+            || probeStatusText is null || routeStatusText is null || transportStatusText is null
+            || engineStatusText is null || outputText is null)
         {
             return;
         }
@@ -460,6 +468,16 @@ public class MainActivity : Activity
         var policyAt = preferences.GetString("last_policy_at", "");
         var debugProbe = preferences.GetString("debug_probe_result", "");
         var debugProbeAt = preferences.GetString("debug_probe_at", "");
+        var ipRoutes = preferences.GetInt("last_ip_routes", -1);
+        var cleanupRoutes = preferences.GetInt("last_cleanup_routes", -1);
+        var domainRoutes = preferences.GetInt("last_domain_routes", -1);
+        var transports = preferences.GetInt("last_transports", -1);
+        var storedTransports = preferences.GetInt("last_stored_transports", -1);
+        var engineSummary = preferences.GetString("last_engine_summary", "");
+        var runtimeSummary = preferences.GetString("last_runtime_summary", "");
+        var probeSummary = preferences.GetString("last_probe_summary", "");
+        var controlTunnel = preferences.GetBoolean("last_control_tunnel_established", false);
+        var lastError = preferences.GetString("last_control_error", "");
         serviceStatusText.Text = string.IsNullOrWhiteSpace(serviceStatus)
             ? "Service: -"
             : $"Service: {serviceStatus}";
@@ -467,8 +485,17 @@ public class MainActivity : Activity
             ? "Policy: -"
             : $"Policy: {policyAt}";
         probeStatusText.Text = string.IsNullOrWhiteSpace(debugProbeAt)
-            ? "Probe: -"
+            ? (string.IsNullOrWhiteSpace(probeSummary) ? "Probe: -" : $"Probe: {probeSummary}")
             : $"Probe: {debugProbeAt}";
+        routeStatusText.Text = ipRoutes < 0
+            ? "Routes: -"
+            : $"Routes: ip={ipRoutes} domain={Math.Max(0, domainRoutes)} cleanup={Math.Max(0, cleanupRoutes)}";
+        transportStatusText.Text = transports < 0
+            ? "Transports: -"
+            : $"Transports: plan={transports} stored={Math.Max(0, storedTransports)}";
+        engineStatusText.Text = string.IsNullOrWhiteSpace(engineSummary)
+            ? "Engine: -"
+            : $"Engine: {engineSummary}; control={(controlTunnel ? "ssh" : "http")}";
         var lines = new List<string>();
         if (!string.IsNullOrWhiteSpace(serviceStatus))
         {
@@ -503,6 +530,24 @@ public class MainActivity : Activity
                 lines.Add($"probe_at: {debugProbeAt}");
             }
             lines.Add(debugProbe);
+        }
+        if (!string.IsNullOrWhiteSpace(runtimeSummary))
+        {
+            if (lines.Count > 0)
+            {
+                lines.Add("");
+            }
+            lines.Add("runtime:");
+            lines.Add(runtimeSummary);
+        }
+        if (!string.IsNullOrWhiteSpace(lastError))
+        {
+            if (lines.Count > 0)
+            {
+                lines.Add("");
+            }
+            lines.Add("last_error:");
+            lines.Add(lastError);
         }
         if (lines.Count > 0)
         {

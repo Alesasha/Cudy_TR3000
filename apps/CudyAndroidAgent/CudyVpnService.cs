@@ -328,12 +328,34 @@ public class CudyVpnService : VpnService
                     JsonSerializer.Serialize(status),
                     cancellationToken);
                 ok = true;
+                SaveLoopDetails(
+                    domainRoutes,
+                    ipRoutes,
+                    cleanupRoutes,
+                    transports,
+                    storedTransports,
+                    runtimeSummary,
+                    engineSummary,
+                    probeSummary,
+                    useSshControl && sshClient?.IsConnected == true,
+                    error: "");
                 SaveServiceStatus($"ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
                 Log.Info(LogTag, $"Control loop ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
             }
             catch (Exception ex) when (ex is not System.OperationCanceledException)
             {
                 error = ex.Message;
+                SaveLoopDetails(
+                    domainRoutes,
+                    ipRoutes,
+                    cleanupRoutes,
+                    transports,
+                    storedTransports,
+                    runtimeSummary,
+                    engineSummary,
+                    probeSummary,
+                    useSshControl && sshClient?.IsConnected == true,
+                    error);
                 SaveServiceStatus($"error {error}");
                 Log.Warn(LogTag, $"Control loop error: {error}");
             }
@@ -654,6 +676,33 @@ public class CudyVpnService : VpnService
         preferences?.Edit()
             ?.PutString("last_policy_summary", CudyPolicy.Summarize(json))
             ?.PutString("last_policy_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+            ?.Apply();
+    }
+
+    private void SaveLoopDetails(
+        int domainRoutes,
+        int ipRoutes,
+        int cleanupRoutes,
+        int transports,
+        int storedTransports,
+        string runtimeSummary,
+        string engineSummary,
+        string probeSummary,
+        bool controlTunnelEstablished,
+        string error)
+    {
+        var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
+        preferences?.Edit()
+            ?.PutInt("last_domain_routes", domainRoutes)
+            ?.PutInt("last_ip_routes", ipRoutes)
+            ?.PutInt("last_cleanup_routes", cleanupRoutes)
+            ?.PutInt("last_transports", transports)
+            ?.PutInt("last_stored_transports", storedTransports)
+            ?.PutString("last_runtime_summary", runtimeSummary)
+            ?.PutString("last_engine_summary", engineSummary)
+            ?.PutString("last_probe_summary", probeSummary)
+            ?.PutBoolean("last_control_tunnel_established", controlTunnelEstablished)
+            ?.PutString("last_control_error", error)
             ?.Apply();
     }
 

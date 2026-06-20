@@ -35,6 +35,27 @@
             android:paddingTop="4dp"
             android:text="Probe: -"
             android:textSize="14sp" />
+        <TextView
+            android:id="@+id/routeStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="Routes: -"
+            android:textSize="14sp" />
+        <TextView
+            android:id="@+id/transportStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="Transports: -"
+            android:textSize="14sp" />
+        <TextView
+            android:id="@+id/engineStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="4dp"
+            android:text="Engine: -"
+            android:textSize="14sp" />
         <EditText
             android:id="@+id/controlUrlInput"
             android:layout_width="match_parent"

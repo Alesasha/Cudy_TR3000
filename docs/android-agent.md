@@ -19,6 +19,8 @@ Verified on the physical test phone:
 - adds control-server `ip_routes` into Android `VpnService.Builder`;
 - posts `/api/agent/status`;
 - can run local candidate probes through generated local mixed proxy inbounds.
+- shows service, policy, probe, route, transport, engine, runtime, and last
+  error status on the main screen.
 
 Latest verified smoke status:
 
@@ -190,10 +192,8 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 ## Remaining Work
 
-- Add a user-facing status screen with active route count, active transports,
-  last probe winner, and last control-server error.
-- Add battery optimization instructions or an in-app warning.
-- Package release APKs with versioned filenames.
+- Add a friendlier first-run wizard for Android/MIUI permissions.
 - Add a simple uninstall/reset procedure for test devices.
+- Add broader Android-device smoke coverage outside the current MIUI phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).
