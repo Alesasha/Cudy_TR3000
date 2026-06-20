@@ -133,6 +133,18 @@ This tool assumes the target VPS already exists, has Ubuntu installed by the
 provider, and accepts root SSH. Selecting/reinstalling the OS is still done in
 the provider panel or provider API before this script can connect.
 
+Prepare a fresh Ubuntu/Debian target after SSH is available:
+
+```powershell
+$env:TARGET_SSH_PASSWORD = "<target root password>"
+python tools\bootstrap_control_vps.py --host <new-vps-ip> --hostname cudy-control-2
+Remove-Item Env:TARGET_SSH_PASSWORD
+```
+
+The bootstrap installs Python, SQLite, curl, tar, Docker, Docker Compose plugin,
+and creates `/opt/cudy-control` with the `cudy-control` system user. It does not
+install or overwrite Amnezia server configuration.
+
 The control-server can be cloned from the current uswest host to a replacement
 VPS with:
 
@@ -207,6 +219,18 @@ are kept by default. These files contain secrets and are ignored by git.
 Use `--no-secrets` only for a shareable diagnostic archive. A no-secrets backup
 is not sufficient for a seamless restore because provider refresh credentials
 and agent/transport private material may be missing.
+
+Install a local Windows daily backup task:
+
+```powershell
+Set-Content -NoNewline -Path secrets\control_backup_ssh_password.txt -Value "<root password>"
+powershell -ExecutionPolicy Bypass -File tools\Install-ControlBackupTask.ps1 -RunNow
+```
+
+The scheduled task does not store the SSH password in its command-line
+arguments. `tools\Run-ControlBackup.ps1` reads it from
+`secrets\control_backup_ssh_password.txt` or from `CONTROL_BACKUP_SSH_PASSWORD`.
+The file is under ignored `secrets/` and must not be committed.
 
 Current disaster-recovery layers:
 

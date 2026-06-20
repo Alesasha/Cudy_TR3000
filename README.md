@@ -29,6 +29,10 @@ Linux, and Cudy fallback routing.
   production control-server to a replacement VPS.
 - `tools/backup_control_server.py` - online SQLite/control-server backup tool
   for disaster recovery archives.
+- `tools/bootstrap_control_vps.py` - fresh Ubuntu/Debian VPS bootstrap for
+  control-server restore and future Amnezia/Docker exit setup.
+- `tools/Run-ControlBackup.ps1` and `tools/Install-ControlBackupTask.ps1` -
+  local Windows scheduled backup wrapper for the production control-server.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.
@@ -65,6 +69,12 @@ Create a local disaster-recovery backup of the live control-server:
 
 ```powershell
 python tools\backup_control_server.py
+```
+
+Prepare a fresh Ubuntu VPS after the provider has created it:
+
+```powershell
+python tools\bootstrap_control_vps.py --host <new-vps-ip>
 ```
 
 Build the Android release APK:
