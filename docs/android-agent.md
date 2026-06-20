@@ -21,6 +21,7 @@ Verified on the physical test phone:
 - can run local candidate probes through generated local mixed proxy inbounds.
 - shows service, policy, probe, route, transport, engine, runtime, and last
   error status on the main screen.
+- shows `battery`, `vpn`, and MIUI `autostart` readiness on the main screen.
 
 Latest verified smoke status:
 
@@ -146,9 +147,15 @@ On MIUI and other aggressive Android builds, the user may still need to allow
 autostart and disable battery restrictions for reliable background start after a
 real device reboot.
 
-The app can request standard Android battery optimization exemption and can open
-the MIUI Autostart screen, but Android does not let a third-party app enable
-MIUI Autostart automatically. Use the in-app `Setup permissions` button first.
+The app shows a compact permissions line:
+
+```text
+Permissions: battery=ok|needs setup; vpn=ok|needs allow; autostart=check MIUI|n/a
+```
+
+It can request standard Android battery optimization exemption and can open the
+MIUI Autostart screen, but Android does not let a third-party app enable MIUI
+Autostart automatically. Use the in-app `Setup permissions` button first.
 If vendor settings do not open automatically, use these paths:
 
 ```text

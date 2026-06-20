@@ -12,6 +12,8 @@ Current MVP:
 - periodically fetches control policy and posts `/api/agent/status`;
 - shows service, policy, probe, route, transport, engine, runtime, and last
   error status on the main screen;
+- shows battery, VPN permission, and MIUI Autostart readiness on the main
+  screen;
 - parses `transport_plan` and prepares compatible sing-box JSON in memory for
   supported transport types.
 - stores prepared sing-box JSON files under app-private `files/transports/`.

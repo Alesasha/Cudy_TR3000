@@ -29,6 +29,7 @@ public class MainActivity : Activity
     private TextView? routeStatusText;
     private TextView? transportStatusText;
     private TextView? engineStatusText;
+    private TextView? permissionStatusText;
     private TextView? outputText;
     private ISharedPreferences? preferences;
     private bool? pendingStartAfterPrepare;
@@ -56,12 +57,13 @@ public class MainActivity : Activity
         routeStatusText = FindViewById<TextView>(Resource.Id.routeStatusText);
         transportStatusText = FindViewById<TextView>(Resource.Id.transportStatusText);
         engineStatusText = FindViewById<TextView>(Resource.Id.engineStatusText);
+        permissionStatusText = FindViewById<TextView>(Resource.Id.permissionStatusText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshKeyInput is null
             || statusText is null || serviceStatusText is null || policyStatusText is null
             || probeStatusText is null || routeStatusText is null || transportStatusText is null
-            || engineStatusText is null || outputText is null)
+            || engineStatusText is null || permissionStatusText is null || outputText is null)
         {
             throw new InvalidOperationException("Required layout controls are missing.");
         }
@@ -83,6 +85,7 @@ public class MainActivity : Activity
         RequireButton(Resource.Id.stopButton).Click += (_, _) => StopAgent();
         ApplyIntentSettings(Intent);
         RenderStoredStatus();
+        RenderPermissionStatus();
         MaybePromptBackgroundPermissions();
     }
 
@@ -92,12 +95,14 @@ public class MainActivity : Activity
         Intent = intent;
         ApplyIntentSettings(intent);
         RenderStoredStatus();
+        RenderPermissionStatus();
     }
 
     protected override void OnResume()
     {
         base.OnResume();
         RenderStoredStatus();
+        RenderPermissionStatus();
     }
 
     private Button RequireButton(int resourceId)
@@ -278,6 +283,19 @@ public class MainActivity : Activity
         dialog.Show();
     }
 
+    private void RenderPermissionStatus()
+    {
+        if (permissionStatusText is null)
+        {
+            return;
+        }
+
+        var battery = IsIgnoringBatteryOptimizations() ? "ok" : "needs setup";
+        var vpn = Android.Net.VpnService.Prepare(this) is null ? "ok" : "needs allow";
+        var autostart = IsMiuiDevice() ? "check MIUI" : "n/a";
+        permissionStatusText.Text = $"Permissions: battery={battery}; vpn={vpn}; autostart={autostart}";
+    }
+
     private void SetupBackgroundPermissions()
     {
         if (!IsIgnoringBatteryOptimizations())
@@ -286,6 +304,7 @@ public class MainActivity : Activity
             {
                 statusText!.Text = "Battery permission requested";
                 outputText!.Text = "Allow battery unrestricted mode, then tap Setup permissions again to open Autostart.";
+                RenderPermissionStatus();
                 return;
             }
         }
@@ -294,12 +313,26 @@ public class MainActivity : Activity
         {
             statusText!.Text = "Autostart settings opened";
             outputText!.Text = "Enable Autostart for Cudy Agent. If this screen is not available, use app settings and set Battery saver to No restrictions.";
+            RenderPermissionStatus();
             return;
         }
 
         OpenApplicationSettings();
         statusText!.Text = "Application settings opened";
         outputText!.Text = "Set Battery saver to No restrictions and enable Autostart if your Android build exposes it.";
+        RenderPermissionStatus();
+    }
+
+    private static bool IsMiuiDevice()
+    {
+        var manufacturer = Build.Manufacturer ?? "";
+        var brand = Build.Brand ?? "";
+        return manufacturer.Contains("xiaomi", StringComparison.OrdinalIgnoreCase)
+            || manufacturer.Contains("redmi", StringComparison.OrdinalIgnoreCase)
+            || manufacturer.Contains("poco", StringComparison.OrdinalIgnoreCase)
+            || brand.Contains("xiaomi", StringComparison.OrdinalIgnoreCase)
+            || brand.Contains("redmi", StringComparison.OrdinalIgnoreCase)
+            || brand.Contains("poco", StringComparison.OrdinalIgnoreCase);
     }
 
     private bool IsIgnoringBatteryOptimizations()
