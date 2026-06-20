@@ -127,6 +127,45 @@ python3 tools/route_agent.py plan --post-status
 
 This avoids public HTTP and avoids the need to know each client's changing IP.
 
+## One-Click Clone To A New VPS
+
+The control-server can be cloned from the current uswest host to a replacement
+VPS with:
+
+```powershell
+$env:SOURCE_SSH_PASSWORD = "<source root password>"
+$env:TARGET_SSH_PASSWORD = "<target root password>"
+python tools\clone_control_server.py --target-host <new-vps-ip>
+Remove-Item Env:SOURCE_SSH_PASSWORD,Env:TARGET_SSH_PASSWORD
+```
+
+The clone copies the whole remote `/opt/cudy-control` tree, including:
+
+- `data/vpn_control.db`;
+- provider refresh secrets;
+- agent device token hashes and status;
+- Auto cache, probe history, routes, aliases, and transport configs;
+- deployed code, inventory, docs, and systemd unit.
+
+By default the source service is stopped briefly while the archive is created,
+then started again. This gives a consistent SQLite/WAL copy. Use
+`--no-stop-source` only when brief source downtime is worse than the risk of an
+inconsistent live database copy.
+
+The script installs Python/curl/tar on the target when `apt-get` is available,
+creates the `cudy-control` system user, installs `vpn-control.service`, starts
+the service, and checks `http://127.0.0.1:8765/healthz`.
+
+After a clone to a different IP:
+
+- update operator SSH tunnels to point at the new IP;
+- update agent SSH host settings or regenerate agent bundles;
+- only then decommission the old source.
+
+The local transfer archive is deleted after upload by default. `--keep-archive`
+is available for debugging, but the archive is sensitive and must not be
+committed or shared.
+
 ## Later HTTPS Mode
 
 Use a reverse proxy such as Caddy or nginx when the service needs direct public

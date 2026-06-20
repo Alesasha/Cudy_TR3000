@@ -25,6 +25,8 @@ Linux, and Cudy fallback routing.
 - `tools/agent-linux/` - Linux managed agent prototype and install helpers.
 - `tools/route_agent.py` - shared managed route agent engine used by desktop
   scripts.
+- `tools/clone_control_server.py` - disaster-recovery clone tool for moving the
+  production control-server to a replacement VPS.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.
@@ -49,6 +51,12 @@ Validate core Python code and inventory:
 ```powershell
 python tools\vpn_inventory.py validate
 python -m py_compile tools\vpn_control_app.py tools\vpn_inventory.py tools\route_agent.py tools\awg_client_add.py
+```
+
+Clone the production control-server to a replacement VPS:
+
+```powershell
+python tools\clone_control_server.py --target-host <new-vps-ip>
 ```
 
 Build the Android release APK:
