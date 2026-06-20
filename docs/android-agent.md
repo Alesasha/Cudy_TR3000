@@ -26,6 +26,13 @@ Latest verified smoke status:
 ok ip=8 cleanup=0 transports=2 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 probe_jobs jobs=0 completed=0 failed=0
 ```
 
+Latest Release APK smoke on the physical phone:
+
+- foreground service stayed running;
+- Android VPN was established on `tun2`;
+- control-server reported `isasha_X7Pro_Cudy-android` online and healthy;
+- debug probe for `ifconfig.me` over `proxyde,proxynl` selected `proxynl`.
+
 Latest verified Android VPN routes included the Telegram CIDRs:
 
 ```text
@@ -53,9 +60,16 @@ Release output:
 apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudyagent-Signed.apk
 ```
 
+The operator-friendly versioned copy is written to:
+
+```text
+build/releases/NashVPN-CudyAgent-android-arm64-v1.0-YYYYMMDD.apk
+```
+
 The current release profile intentionally keeps:
 
 - `RunAOTCompilation=false`;
+- `AndroidEnableMarshalMethods=false`;
 - `AndroidLinkMode=None`;
 - `AndroidIncludeDebugSymbols=true`.
 

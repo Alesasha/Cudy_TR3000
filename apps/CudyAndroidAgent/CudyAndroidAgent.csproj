@@ -14,6 +14,7 @@
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <RunAOTCompilation>false</RunAOTCompilation>
+    <AndroidEnableMarshalMethods>false</AndroidEnableMarshalMethods>
     <AndroidIncludeDebugSymbols>true</AndroidIncludeDebugSymbols>
     <AndroidLinkMode>None</AndroidLinkMode>
   </PropertyGroup>
