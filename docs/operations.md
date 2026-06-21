@@ -228,6 +228,29 @@ The user row `Delete` button can revoke the Cudy peer and delete the local user.
 
 The admin `Deploy Preview` block can refresh the effective route plan, refresh the combined deploy dry-run plan, and apply the current plan to Cudy.
 
+## Harden Control-Server SSH
+
+The public control-server SSH port is exposed for operators and roaming agents,
+so it receives constant bot traffic. Apply the managed SSH hardening profile:
+
+```powershell
+$env:USWEST_SSH_PASSWORD = (Get-Content secrets\control_backup_ssh_password.txt -Raw).Trim()
+python tools\harden_control_ssh.py
+Remove-Item Env:USWEST_SSH_PASSWORD
+```
+
+The tool writes `/etc/ssh/sshd_config.d/99-cudy-anti-bruteforce.conf`, reloads
+`sshd`, installs or updates the `sshd` fail2ban jail, and prints the top SSH
+source IPs from the last six hours. Current defaults:
+
+```text
+LoginGraceTime 15
+PerSourceMaxStartups 20
+MaxStartups 100:30:300
+UseDNS no
+fail2ban: maxretry=5, findtime=10m, bantime=1h
+```
+
 ## Autostart
 
 Cudy/OpenWrt services should come back after a Cudy reboot when their init scripts are enabled. On the current router, these services are enabled:
