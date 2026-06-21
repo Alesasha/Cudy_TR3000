@@ -93,6 +93,15 @@ powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -StartEng
 
 If the phone shows the Android VPN permission dialog, unlock it and confirm.
 
+Status/reset helper for test devices:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -Status
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -ForceStop
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -ClearData
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -Uninstall
+```
+
 Current test defaults:
 
 ```text

@@ -128,6 +128,27 @@ The smoke script:
 For Release APKs Android normally denies `run-as`; the script tolerates that and
 uses logcat/dumpsys diagnostics instead.
 
+## ADB Status And Reset
+
+For test devices, use the reset helper. Without destructive flags it only prints
+status:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -Status
+```
+
+Useful reset actions:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -ForceStop
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -ClearData
+powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -Uninstall
+```
+
+`-ClearData` removes locally stored control URL, device id, token, SSH key, and
+saved runtime status from the Android app. It does not revoke the control-server
+device token; revoke that separately in the admin UI if the device is retired.
+
 ## Boot/Reconnect Smoke Test
 
 The production receiver listens for Android boot and package-replaced events.
@@ -206,7 +227,6 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 ## Remaining Work
 
-- Add a simple uninstall/reset procedure for test devices.
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).
