@@ -75,9 +75,27 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-    out = stdout.read().decode("utf-8", errors="replace")
-    err = stderr.read().decode("utf-8", errors="replace")
-    rc = stdout.channel.recv_exit_status()
+    channel = stdout.channel
+    channel.settimeout(1.0)
+    deadline = time.monotonic() + max(1, timeout)
+    out_chunks: list[bytes] = []
+    err_chunks: list[bytes] = []
+    while True:
+        while channel.recv_ready():
+            out_chunks.append(channel.recv(65536))
+        while channel.recv_stderr_ready():
+            err_chunks.append(channel.recv_stderr(65536))
+        if channel.exit_status_ready():
+            break
+        if time.monotonic() >= deadline:
+            channel.close()
+            out = b"".join(out_chunks).decode("utf-8", errors="replace")
+            err = b"".join(err_chunks).decode("utf-8", errors="replace")
+            raise TimeoutError(f"remote command timed out after {timeout}s: {command}\nSTDOUT:\n{out}\nSTDERR:\n{err}")
+        time.sleep(0.1)
+    out = b"".join(out_chunks).decode("utf-8", errors="replace")
+    err = b"".join(err_chunks).decode("utf-8", errors="replace")
+    rc = channel.recv_exit_status()
     if rc != 0:
         raise RuntimeError(f"remote command failed rc={rc}: {command}\nSTDOUT:\n{out}\nSTDERR:\n{err}")
     return out + err
@@ -134,6 +152,7 @@ def remote_file_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
 
 def deploy(args: argparse.Namespace) -> dict[str, object]:
     password = ssh_password(args.ssh_password)
+    print(f"Connecting to {args.user}@{args.host}...", flush=True)
     client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
     uploaded = 0
     try:
@@ -148,6 +167,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
                 "  fi\n"
                 "fi\n"
             )
+        print("Preparing remote directory and service user...", flush=True)
         ssh_exec(
             client,
             "set -eu\n"
@@ -157,15 +177,19 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             f"mkdir -p {shlex.quote(args.remote_dir)} {shlex.quote(args.remote_dir + '/data')}\n",
             args.timeout * 6,
         )
+        print("Opening SFTP...", flush=True)
         sftp = client.open_sftp()
+        sftp.get_channel().settimeout(args.timeout)
         try:
             for dirname in UPLOAD_DIRS:
                 local_dir = ROOT / dirname
                 if local_dir.exists():
+                    print(f"Uploading {dirname}/...", flush=True)
                     uploaded += upload_tree(sftp, local_dir, posixpath.join(args.remote_dir, dirname))
             for filename in UPLOAD_FILES:
                 local_file = ROOT / filename
                 if local_file.exists():
+                    print(f"Uploading {filename}...", flush=True)
                     upload_file(sftp, local_file, posixpath.join(args.remote_dir, filename))
                     uploaded += 1
             local_db = args.db
@@ -173,13 +197,16 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             if args.upload_db and local_db.exists():
                 if remote_file_exists(sftp, remote_db):
                     backup = f"{remote_db}.bak-{int(__import__('time').time())}"
+                    print(f"Backing up remote DB to {backup}...", flush=True)
                     ssh_exec(client, f"cp {shlex.quote(remote_db)} {shlex.quote(backup)}", args.timeout)
+                print("Uploading database...", flush=True)
                 upload_file(sftp, local_db, remote_db)
                 uploaded += 1
         finally:
             sftp.close()
 
-        ssh_exec(
+        print("Installing systemd service and restarting...", flush=True)
+        output = ssh_exec(
             client,
             "set -eu\n"
             f"chown -R {shlex.quote(args.service_user)}:{shlex.quote(args.service_user)} {shlex.quote(args.remote_dir)}\n"
@@ -195,6 +222,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             "cat /tmp/vpn-control-health.json\n",
             args.timeout * 3,
         )
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
     finally:
         client.close()
     return {"host": args.host, "remote_dir": args.remote_dir, "uploaded_files": uploaded}

@@ -69,6 +69,15 @@ APP_STARTED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 CUDY_FALLBACK_STATE_URL = os.environ.get("CUDY_FALLBACK_STATE_URL", "http://192.168.8.1/cudy-control/state.json")
 CUDY_FALLBACK_MAX_AGE_SECONDS = int(os.environ.get("CUDY_FALLBACK_MAX_AGE_SECONDS", "3600"))
 CUDY_FALLBACK_STATUS_WARN = os.environ.get("CUDY_FALLBACK_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
+CONTROL_BACKUP_DIR = ROOT / "backups" / "control-server"
+CONTROL_BACKUP_MAX_AGE_SECONDS = int(os.environ.get("CONTROL_BACKUP_MAX_AGE_SECONDS", str(36 * 60 * 60)))
+CONTROL_BACKUP_STATUS_WARN = os.environ.get("CONTROL_BACKUP_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
+LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
+WORKER_STATUS_LOCK = threading.Lock()
+WORKER_STATUS: dict[str, dict[str, Any]] = {
+    "auto_probe": {"enabled": False, "last_started_at": None, "last_finished_at": None, "last_error": None},
+    "provider_refresh": {"enabled": False, "last_started_at": None, "last_finished_at": None, "last_error": None},
+}
 AUTO_ALL_REST = "all-rest"
 DOMAIN_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$"
@@ -1942,6 +1951,77 @@ def timestamp_age_seconds(value: str | None, *, reference: datetime | None = Non
         return None
     reference = reference or datetime.now(timezone.utc)
     return max(0, int((reference - parsed).total_seconds()))
+
+
+def file_status(path: Path, *, reference: datetime | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "path": str(path),
+        "exists": False,
+    }
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        result["error"] = str(exc)
+        return result
+    modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc).replace(microsecond=0)
+    result.update(
+        {
+            "exists": True,
+            "bytes": stat.st_size,
+            "modified_at": modified.isoformat(),
+            "age_seconds": timestamp_age_seconds(modified.isoformat(), reference=reference),
+        }
+    )
+    return result
+
+
+def latest_file_status(directory: Path, pattern: str, *, reference: datetime | None = None) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "directory": str(directory),
+        "pattern": pattern,
+        "exists": False,
+    }
+    try:
+        candidates = [item for item in directory.glob(pattern) if item.is_file()]
+    except OSError as exc:
+        result["error"] = str(exc)
+        return result
+    if not candidates:
+        return result
+    latest = max(candidates, key=lambda item: item.stat().st_mtime)
+    status = file_status(latest, reference=reference)
+    status.update(
+        {
+            "directory": str(directory),
+            "pattern": pattern,
+            "name": latest.name,
+            "count": len(candidates),
+        }
+    )
+    return status
+
+
+def update_worker_status(name: str, **fields: Any) -> None:
+    timestamp = now()
+    with WORKER_STATUS_LOCK:
+        current = WORKER_STATUS.setdefault(name, {})
+        current.update(fields)
+        if fields.get("started"):
+            current["last_started_at"] = timestamp
+        if fields.get("finished"):
+            current["last_finished_at"] = timestamp
+        current.pop("started", None)
+        current.pop("finished", None)
+
+
+def worker_status_snapshot(*, reference: datetime | None = None) -> dict[str, dict[str, Any]]:
+    reference = reference or datetime.now(timezone.utc)
+    with WORKER_STATUS_LOCK:
+        snapshot = json.loads(json.dumps(WORKER_STATUS))
+    for item in snapshot.values():
+        item["last_started_age_seconds"] = timestamp_age_seconds(item.get("last_started_at"), reference=reference)
+        item["last_finished_age_seconds"] = timestamp_age_seconds(item.get("last_finished_at"), reference=reference)
+    return snapshot
 
 
 def load_inventory(path: Path) -> dict[str, Any]:
@@ -4256,7 +4336,15 @@ def auto_probe_worker_loop(
     connect_timeout: int,
     max_time: int,
 ) -> None:
+    update_worker_status(
+        "auto_probe",
+        enabled=True,
+        interval_seconds=interval_seconds,
+        last_error=None,
+        last_result=None,
+    )
     while not stop_event.wait(interval_seconds):
+        update_worker_status("auto_probe", started=True)
         try:
             result = create_auto_probe_jobs_once(
                 db_path,
@@ -4270,9 +4358,20 @@ def auto_probe_worker_loop(
                 max_time=max_time,
             )
             created_count = len(result.get("created") or [])
+            update_worker_status(
+                "auto_probe",
+                finished=True,
+                last_error=None,
+                last_result={
+                    "created": created_count,
+                    "skipped": len(result.get("skipped") or []),
+                    "active_agents": result.get("active_agents"),
+                },
+            )
             if created_count:
                 print(f"auto-probe worker: created {created_count} job(s)", file=sys.stderr)
         except Exception as exc:
+            update_worker_status("auto_probe", finished=True, last_error=str(exc))
             print(f"auto-probe worker failed: {exc}", file=sys.stderr)
 
 
@@ -4287,7 +4386,16 @@ def provider_refresh_worker_loop(
     connect_timeout: int,
     max_time: int,
 ) -> None:
+    update_worker_status(
+        "provider_refresh",
+        enabled=True,
+        interval_seconds=interval_seconds,
+        provider=provider,
+        last_error=None,
+        last_result=None,
+    )
     while not stop_event.wait(interval_seconds):
+        update_worker_status("provider_refresh", started=True)
         try:
             result = refresh_provider_transports(
                 db_path,
@@ -4306,9 +4414,20 @@ def provider_refresh_worker_loop(
             else:
                 refreshed = len(result.get("refreshed") or [])
                 failed = len(result.get("failed") or [])
+            update_worker_status(
+                "provider_refresh",
+                finished=True,
+                last_error=None,
+                last_result={
+                    "refreshed": refreshed,
+                    "failed": failed,
+                    "provider": provider,
+                },
+            )
             if refreshed or failed:
                 print(f"provider-refresh worker: refreshed={refreshed} failed={failed}", file=sys.stderr)
         except Exception as exc:
+            update_worker_status("provider_refresh", finished=True, last_error=str(exc))
             print(f"provider-refresh worker failed: {exc}", file=sys.stderr)
 
 
@@ -4931,15 +5050,58 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         if transport_ages:
             oldest_transport_age = max(transport_ages)
             newest_transport_age = min(transport_ages)
+        provider_rows = rows(
+            conn,
+            """
+            SELECT COALESCE(NULLIF(s.provider, ''), 'unknown') AS key,
+                   COUNT(*) AS count,
+                   SUM(CASE WHEN t.enabled = 1 THEN 1 ELSE 0 END) AS enabled,
+                   MIN(t.updated_at) AS oldest_updated_at,
+                   MAX(t.updated_at) AS newest_updated_at
+            FROM transport_configs t
+            JOIN servers s ON s.id = t.server_id
+            GROUP BY COALESCE(NULLIF(s.provider, ''), 'unknown')
+            ORDER BY key
+            """,
+        )
+        providers: dict[str, dict[str, Any]] = {}
+        for item in provider_rows:
+            providers[str(item["key"])] = {
+                "total": int(item.get("count") or 0),
+                "enabled": int(item.get("enabled") or 0),
+                "oldest_updated_at": item.get("oldest_updated_at"),
+                "oldest_age_seconds": timestamp_age_seconds(item.get("oldest_updated_at"), reference=reference),
+                "newest_updated_at": item.get("newest_updated_at"),
+                "newest_age_seconds": timestamp_age_seconds(item.get("newest_updated_at"), reference=reference),
+            }
         fallback = cudy_fallback_state_status()
         warnings: list[str] = []
         if CUDY_FALLBACK_STATUS_WARN and not fallback.get("ok"):
             warnings.append("Cudy fallback state is stale or unreachable from this process")
         pending_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'pending'")
         failed_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'failed'")
+        oldest_pending_probe = row(conn, "SELECT MIN(created_at) AS value FROM agent_probe_jobs WHERE status = 'pending'")
+        latest_probe_created = row(conn, "SELECT MAX(created_at) AS value FROM agent_probe_jobs")
+        latest_probe_updated = row(conn, "SELECT MAX(updated_at) AS value FROM agent_probe_jobs")
+        latest_probe_finished = row(conn, "SELECT MAX(finished_at) AS value FROM agent_probe_jobs WHERE finished_at IS NOT NULL")
         offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
         if offline_enabled_agents:
             warnings.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
+        local_backup = latest_file_status(CONTROL_BACKUP_DIR, "cudy-control-*.tgz", reference=reference)
+        backup_task_log = file_status(CONTROL_BACKUP_DIR / "backup-task.log", reference=reference)
+        fallback_sync_log = file_status(CONTROL_BACKUP_DIR / "cudy-fallback-sync.log", reference=reference)
+        if CONTROL_BACKUP_STATUS_WARN and not local_backup.get("exists"):
+            warnings.append("No local control-server backup archive was found")
+        if CONTROL_BACKUP_STATUS_WARN and local_backup.get("age_seconds") is not None and local_backup["age_seconds"] > CONTROL_BACKUP_MAX_AGE_SECONDS:
+            warnings.append("Latest local control-server backup is stale")
+        if LOCAL_FALLBACK_SYNC_STATUS_WARN and not fallback_sync_log.get("exists"):
+            warnings.append("No local Cudy fallback sync log was found")
+        if (
+            LOCAL_FALLBACK_SYNC_STATUS_WARN
+            and fallback_sync_log.get("age_seconds") is not None
+            and fallback_sync_log["age_seconds"] > CUDY_FALLBACK_MAX_AGE_SECONDS
+        ):
+            warnings.append("Latest local Cudy fallback sync run is stale")
         return {
             "ok": not warnings,
             "generated_at": now(),
@@ -4971,21 +5133,36 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "by_status": grouped_counts(conn, "SELECT status AS key, COUNT(*) AS count FROM agent_probe_jobs GROUP BY status"),
                 "pending": pending_probe_jobs,
                 "failed": failed_probe_jobs,
+                "oldest_pending_created_at": (oldest_pending_probe or {}).get("value"),
+                "oldest_pending_age_seconds": timestamp_age_seconds((oldest_pending_probe or {}).get("value"), reference=reference),
+                "latest_created_at": (latest_probe_created or {}).get("value"),
+                "latest_created_age_seconds": timestamp_age_seconds((latest_probe_created or {}).get("value"), reference=reference),
+                "latest_updated_at": (latest_probe_updated or {}).get("value"),
+                "latest_updated_age_seconds": timestamp_age_seconds((latest_probe_updated or {}).get("value"), reference=reference),
+                "latest_finished_at": (latest_probe_finished or {}).get("value"),
+                "latest_finished_age_seconds": timestamp_age_seconds((latest_probe_finished or {}).get("value"), reference=reference),
             },
             "transports": {
                 "total": len(transports),
                 "enabled": sum(1 for item in transports if item["enabled"]),
-                "by_provider": grouped_counts(
-                    conn,
-                    """
-                    SELECT s.provider AS key, COUNT(*) AS count
-                    FROM transport_configs t
-                    JOIN servers s ON s.id = t.server_id
-                    GROUP BY s.provider
-                    """,
-                ),
+                "by_provider": {key: value["total"] for key, value in providers.items()},
+                "providers": providers,
                 "newest_age_seconds": newest_transport_age,
                 "oldest_age_seconds": oldest_transport_age,
+            },
+            "workers": worker_status_snapshot(reference=reference),
+            "operations": {
+                "local_backup": {
+                    "max_age_seconds": CONTROL_BACKUP_MAX_AGE_SECONDS,
+                    "status_warn_enabled": CONTROL_BACKUP_STATUS_WARN,
+                    "latest_archive": local_backup,
+                    "task_log": backup_task_log,
+                },
+                "local_cudy_fallback_sync": {
+                    "max_age_seconds": CUDY_FALLBACK_MAX_AGE_SECONDS,
+                    "status_warn_enabled": LOCAL_FALLBACK_SYNC_STATUS_WARN,
+                    "task_log": fallback_sync_log,
+                },
             },
             "control": {
                 "endpoints": control_endpoints_manifest(),
@@ -7920,9 +8097,22 @@ def main() -> int:
             print(f"uptime_seconds: {status['service']['uptime_seconds']}")
             print(f"agents: online={status['agents']['online']} enabled={status['agents']['enabled']} total={status['agents']['total']}")
             print(f"probe_jobs: {status['probe_jobs']['by_status']}")
-            print(f"transports: enabled={status['transports']['enabled']} total={status['transports']['total']}")
+            print(
+                f"transports: enabled={status['transports']['enabled']} total={status['transports']['total']} "
+                f"oldest_age={status['transports']['oldest_age_seconds']}"
+            )
+            for name, worker in status["workers"].items():
+                print(
+                    f"worker.{name}: enabled={worker.get('enabled')} "
+                    f"last_finished_age={worker.get('last_finished_age_seconds')} "
+                    f"error={worker.get('last_error') or '-'}"
+                )
             fallback = status["control"]["cudy_fallback_state"]
             print(f"cudy_fallback: reachable={fallback.get('reachable')} ok={fallback.get('ok')} age={fallback.get('age_seconds')}")
+            backup = status["operations"]["local_backup"]["latest_archive"]
+            print(f"local_backup: exists={backup.get('exists')} age={backup.get('age_seconds')} name={backup.get('name') or '-'}")
+            sync_log = status["operations"]["local_cudy_fallback_sync"]["task_log"]
+            print(f"local_fallback_sync_log: exists={sync_log.get('exists')} age={sync_log.get('age_seconds')}")
             for warning in status["warnings"]:
                 print(f"warning: {warning}")
         return 0
@@ -8759,7 +8949,14 @@ def main() -> int:
         worker_thread: threading.Thread | None = None
         provider_thread: threading.Thread | None = None
         if not args.no_auto_worker:
+            update_worker_status(
+                "auto_probe",
+                enabled=True,
+                interval_seconds=max(30, args.auto_worker_interval),
+                last_error=None,
+            )
             try:
+                update_worker_status("auto_probe", started=True)
                 initial = create_auto_probe_jobs_once(
                     args.db,
                     args.inventory,
@@ -8771,9 +8968,21 @@ def main() -> int:
                     connect_timeout=args.auto_worker_connect_timeout,
                     max_time=args.auto_worker_max_time,
                 )
+                update_worker_status(
+                    "auto_probe",
+                    finished=True,
+                    last_error=None,
+                    last_result={
+                        "initial": True,
+                        "created": len(initial.get("created") or []),
+                        "skipped": len(initial.get("skipped") or []),
+                        "active_agents": initial.get("active_agents"),
+                    },
+                )
                 if initial.get("created"):
                     print(f"auto-probe worker: created {len(initial['created'])} initial job(s)", file=sys.stderr)
             except Exception as exc:
+                update_worker_status("auto_probe", finished=True, last_error=str(exc))
                 print(f"auto-probe worker initial run failed: {exc}", file=sys.stderr)
             worker_thread = threading.Thread(
                 target=auto_probe_worker_loop,
@@ -8793,7 +9002,16 @@ def main() -> int:
                 daemon=True,
             )
             worker_thread.start()
+        else:
+            update_worker_status("auto_probe", enabled=False)
         if not args.no_provider_refresh_worker:
+            update_worker_status(
+                "provider_refresh",
+                enabled=True,
+                interval_seconds=max(60, args.provider_refresh_interval),
+                provider=args.provider_refresh_provider,
+                last_error=None,
+            )
             provider_thread = threading.Thread(
                 target=provider_refresh_worker_loop,
                 kwargs={
@@ -8809,6 +9027,8 @@ def main() -> int:
                 daemon=True,
             )
             provider_thread.start()
+        else:
+            update_worker_status("provider_refresh", enabled=False)
         print(f"Serving on http://{args.host}:{args.port}")
         try:
             server.serve_forever()

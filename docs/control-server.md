@@ -196,10 +196,31 @@ Detailed status is also available to admins through:
 GET /api/status
 ```
 
+The same payload is produced by `system-status --json`. It includes:
+
+- agent online/stale state;
+- probe job counts and latest probe timestamps;
+- provider transport freshness by provider;
+- in-process worker heartbeat for Auto probe and provider refresh workers;
+- advertised primary/fallback control endpoints;
+- Cudy fallback-state reachability;
+- local backup archive and local fallback-sync log freshness when those files
+  exist on the host running the command.
+
 By default `/api/status` reports Cudy fallback-state reachability but does not
 mark the production service unhealthy when `192.168.8.1` is unreachable from a
 remote VPS. Set `CUDY_FALLBACK_STATUS_WARN=1` only on hosts that should be able
 to read `http://192.168.8.1/cudy-control/state.json` directly.
+
+Local backup and fallback-sync checks are informational by default because, in
+the current deployment, the scheduled pull-backup and Cudy sync tasks normally
+run on the operator Windows machine, not on uswest. To make them affect
+`ok=false`, set:
+
+```powershell
+$env:CONTROL_BACKUP_STATUS_WARN = "1"
+$env:LOCAL_FALLBACK_SYNC_STATUS_WARN = "1"
+```
 
 After a clone to a different IP:
 
