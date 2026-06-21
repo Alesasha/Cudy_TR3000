@@ -7914,6 +7914,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     system_status_parser = sub.add_parser("system-status", help="Print production health/status summary.")
     system_status_parser.add_argument("--json", action="store_true", help="Print JSON.")
+    status_parser = sub.add_parser("status", help="Alias for system-status.")
+    status_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
     create_user_parser = sub.add_parser("create-user", help="Create or update a login user.")
     create_user_parser.add_argument("user_id")
@@ -8252,7 +8254,7 @@ def main() -> int:
             for endpoint in manifest["endpoints"]:
                 print(f"{endpoint['role']:8} priority={endpoint['priority']:3} url={endpoint['url']}")
         return 0
-    if args.command == "system-status":
+    if args.command in {"system-status", "status"}:
         status = build_system_status(args.db, args.inventory)
         if args.json:
             print(json.dumps(status, ensure_ascii=False, indent=2))

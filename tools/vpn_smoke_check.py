@@ -31,6 +31,7 @@ CHECKS = [
     Check("user-visible inventory lists", ["tools/vpn_inventory.py", "list"]),
     Check("admin inventory lists", ["tools/vpn_inventory.py", "admin-list", "--include-disabled"]),
     Check("database summary loads", ["tools/vpn_control_app.py", "summary"]),
+    Check("system status alias loads", ["tools/vpn_control_app.py", "status"]),
     Check("effective route plan builds", ["tools/vpn_control_app.py", "route-plan"]),
     Check("Auto priority policy regression", ["tools/test_auto_policy_priority.py"]),
     Check("auto cache lists", ["tools/vpn_control_app.py", "auto-cache-list"]),
