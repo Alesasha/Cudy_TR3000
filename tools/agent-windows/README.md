@@ -247,6 +247,13 @@ Check the installed task and recent agent log:
 .\Get-ManagedAgentStatus.ps1
 ```
 
+When diagnosing "VPN is connected, but traffic is wrong", include network
+routes, DNS/connectivity, and adapter state in the same report:
+
+```powershell
+.\Get-ManagedAgentStatus.ps1 -Network
+```
+
 Run the production smoke test after install or after changing control-server
 rules. It verifies the scheduled task, SSH tunnel, control `transport_plan`,
 local TUN adapter, policy route, and pinned egress probe:

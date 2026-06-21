@@ -2,7 +2,9 @@ param(
     [string]$TaskName = "Cudy Managed Route Agent",
     [string]$LogPath = "$PSScriptRoot\managed-agent.log",
     [int]$LocalPort = 18765,
-    [int]$Tail = 60
+    [int]$Tail = 60,
+    [switch]$Network,
+    [string]$VpnInterfaceAlias = "AmneziaVPN"
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,4 +61,10 @@ if (Test-Path -LiteralPath $LogPath) {
     Get-Content -LiteralPath $LogPath -Tail $Tail
 } else {
     Write-Host "Log not found: $LogPath"
+}
+
+if ($Network) {
+    Write-Host ""
+    Write-Host "== network diagnostics =="
+    & "$PSScriptRoot\Check-Net.ps1" -VpnInterfaceAlias $VpnInterfaceAlias
 }
