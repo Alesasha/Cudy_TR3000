@@ -19,7 +19,8 @@ posts status/probe results back to the control server.
 - `install_systemd.sh`: installs a systemd service.
 - `one_click_install.sh`: restores direct baseline, runs a one-shot smoke, and
   installs the systemd service.
-- `status.sh`: prints service, control tunnel, route, transport, and log status.
+- `status.sh`: prints service, control tunnel, route, DNS/connectivity,
+  firewall/VPN conflict hints, transport, and log status.
 - `uninstall_systemd.sh`: disables the service, stops managed processes, and
   restores direct routing.
 - `test_prod_agent.sh`: smoke test.
@@ -52,6 +53,12 @@ Check status:
 ```bash
 ./status.sh
 ```
+
+When debugging a remote machine, ask the user to run only this command and send
+the full output. It is read-only and includes the checks that usually explain
+"VPN is connected, but internet is gone": broken DNS, dead public IP
+connectivity, UFW/nft/iptables drop or reject rules, Amnezia/WireGuard/sing-box
+interfaces, and recent relevant system log hints.
 
 ## Manual One-Shot Test
 
