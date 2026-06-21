@@ -85,7 +85,10 @@ http://127.0.0.1:8765/admin
 - User page:
   - choose default server;
   - add or delete `domain -> server` routes;
-  - `Auto` is available as a saved choice.
+  - `Auto` is available as a saved choice;
+  - when `Auto` is selected, save user-local comma-separated candidate priority
+    lists such as `proxyde, proxynl, all-rest` for default routing or a specific
+    domain.
 - Admin page:
   - inspect all servers;
   - edit server labels;
@@ -107,7 +110,7 @@ http://127.0.0.1:8765/admin
 - Auto candidate lists:
   - store ordered server candidates for Auto probing;
   - support global default, global per-domain, user default, and user per-domain scopes;
-  - resolve in this order: user+domain, global+domain, user default, global default.
+  - resolve in this order: user domain, user default, global domain, global default.
 - Auto selection:
   - probes candidate servers from Cudy with `curl --interface`;
   - chooses the fastest successful candidate for the requested domain;

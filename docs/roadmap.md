@@ -103,6 +103,8 @@ This is the current implementation order for the managed VPN control project.
 
 - Admin UI: users, devices, routes, provider servers, probe history, status.
 - User UI: server choice, Auto, domain-to-candidate-list overrides.
+- User UI can save local Auto priority lists for default routing and
+  per-domain overrides.
 - User auth can be skipped when the user arrives through VPN/agent identity.
 - Admin keeps login/password.
 - Show statuses: applied, waiting for probe, Auto winner, agent offline.

@@ -513,6 +513,7 @@ USER_HTML = r"""<!doctype html>
       <h2>Default Route</h2>
       <div class="row">
         <select id="defaultServer"></select>
+        <input id="defaultPriority" type="text" placeholder="Auto priority: proxyde, proxynl, all-rest" autocomplete="off">
         <button id="saveDefault">Save</button>
       </div>
       <p id="defaultStatus" class="status"></p>
@@ -523,11 +524,12 @@ USER_HTML = r"""<!doctype html>
       <form id="routeForm" class="row">
         <input id="domainInput" type="text" placeholder="example.com" autocomplete="off">
         <select id="routeServer"></select>
+        <input id="routePriority" type="text" placeholder="Auto priority: proxyde, proxynl, all-rest" autocomplete="off">
         <button type="submit">Add</button>
       </form>
       <p id="routeStatus" class="status"></p>
       <table>
-        <thead><tr><th>Domain</th><th>Server</th><th>Provider</th><th></th></tr></thead>
+        <thead><tr><th>Domain</th><th>Server</th><th>Provider</th><th>Priority</th><th></th></tr></thead>
         <tbody id="routesBody"></tbody>
       </table>
     </section>
@@ -562,6 +564,7 @@ USER_HTML = r"""<!doctype html>
     const state = { servers: [], routes: [], user: null, aliases: [] };
     const serverLabel = id => (id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
     const serverProvider = id => (state.servers.find(s => s.id === id) || { provider: "" }).provider || "";
+    const priorityText = policy => policy ? (policy.candidate_server_ids || []).join(", ") : "";
 
     async function api(path, options) {
       const response = await fetch(path, {
@@ -584,7 +587,7 @@ USER_HTML = r"""<!doctype html>
     function renderRoutes() {
       const body = document.getElementById("routesBody");
       if (!state.routes.length) {
-        body.innerHTML = '<tr><td data-label="Domain" colspan="4" class="muted">No domain routes yet.</td></tr>';
+        body.innerHTML = '<tr><td data-label="Domain" colspan="5" class="muted">No domain routes yet.</td></tr>';
         return;
       }
       body.innerHTML = state.routes.map(route => `
@@ -592,6 +595,7 @@ USER_HTML = r"""<!doctype html>
           <td data-label="Domain">${route.domain}</td>
           <td data-label="Server"><span class="pill">${serverLabel(route.server_id)}</span></td>
           <td data-label="Provider">${serverProvider(route.server_id)}</td>
+          <td data-label="Priority">${priorityText(route.auto_candidate_policy)}</td>
           <td><button class="danger" data-delete="${route.domain}">Delete</button></td>
         </tr>
       `).join("");
@@ -641,10 +645,18 @@ USER_HTML = r"""<!doctype html>
       state.routes = data.routes;
       state.user = data.user;
       state.aliases = data.aliases || [];
+      state.default_auto_candidate_policy = data.default_auto_candidate_policy || null;
       fillServerSelect(document.getElementById("defaultServer"), state.user.default_server_id);
       fillServerSelect(document.getElementById("routeServer"), "auto");
+      document.getElementById("defaultPriority").value = priorityText(state.default_auto_candidate_policy);
       renderRoutes();
       renderAliases();
+      togglePriorityFields();
+    }
+
+    function togglePriorityFields() {
+      document.getElementById("defaultPriority").hidden = document.getElementById("defaultServer").value !== "auto";
+      document.getElementById("routePriority").hidden = document.getElementById("routeServer").value !== "auto";
     }
 
     document.getElementById("logoutButton").addEventListener("click", async () => {
@@ -658,7 +670,10 @@ USER_HTML = r"""<!doctype html>
       try {
         await api("/api/user/default-server", {
           method: "POST",
-          body: JSON.stringify({ server_id: document.getElementById("defaultServer").value })
+          body: JSON.stringify({
+            server_id: document.getElementById("defaultServer").value,
+            auto_candidate_server_ids: document.getElementById("defaultPriority").value
+          })
         });
         status.textContent = "Saved.";
         status.className = "status ok";
@@ -678,10 +693,12 @@ USER_HTML = r"""<!doctype html>
           method: "POST",
           body: JSON.stringify({
             domain: document.getElementById("domainInput").value,
-            server_id: document.getElementById("routeServer").value
+            server_id: document.getElementById("routeServer").value,
+            auto_candidate_server_ids: document.getElementById("routePriority").value
           })
         });
         document.getElementById("domainInput").value = "";
+        document.getElementById("routePriority").value = "";
         status.textContent = "Saved.";
         status.className = "status ok";
         await load();
@@ -728,6 +745,9 @@ USER_HTML = r"""<!doctype html>
         status.className = "status error";
       }
     });
+
+    document.getElementById("defaultServer").addEventListener("change", togglePriorityFields);
+    document.getElementById("routeServer").addEventListener("change", togglePriorityFields);
 
     load().catch(error => {
       document.getElementById("routeStatus").textContent = error.message;
@@ -7377,7 +7397,20 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (user_id,),
             )
-            return {"user": user, "servers": user_servers(conn), "routes": routes, "aliases": service_alias_rows(conn)}
+            for route_item in routes:
+                route_item["auto_candidate_policy"] = resolve_auto_candidate_policy(
+                    conn,
+                    user_id=user_id,
+                    domain=route_item["domain"],
+                )
+            default_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain="")
+            return {
+                "user": user,
+                "servers": user_servers(conn),
+                "routes": routes,
+                "aliases": service_alias_rows(conn),
+                "default_auto_candidate_policy": default_policy,
+            }
 
     def api_admin(self) -> dict[str, Any]:
         with self.app.conn() as conn:
@@ -7470,6 +7503,7 @@ class Handler(BaseHTTPRequestHandler):
     def api_set_default_server(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = self.require_user()["id"]
         server_id = str(data.get("server_id") or "")
+        candidate_server_ids = data.get("auto_candidate_server_ids")
         timestamp = now()
         with self.app.conn() as conn:
             validate_server_id(conn, server_id, require_user_visible=True)
@@ -7479,7 +7513,15 @@ class Handler(BaseHTTPRequestHandler):
             )
             if cursor.rowcount != 1:
                 raise ValueError(f"Unknown user: {user_id}")
-        return {"ok": True}
+        auto_candidate_policy = sync_route_auto_candidate_policy(
+            self.app.db_path,
+            self.app.inventory_path,
+            user_id=user_id,
+            domain="",
+            server_id=server_id,
+            candidate_server_ids=candidate_server_ids,
+        )
+        return {"ok": True, "auto_candidate_policy": auto_candidate_policy}
 
     def api_admin_save_user(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = str(data.get("id") or "").strip()
@@ -7746,6 +7788,7 @@ class Handler(BaseHTTPRequestHandler):
         user_id = self.require_user()["id"]
         domain = normalize_domain(str(data.get("domain") or ""))
         server_id = str(data.get("server_id") or "")
+        candidate_server_ids = data.get("auto_candidate_server_ids")
         timestamp = now()
         with self.app.conn() as conn:
             validate_server_id(conn, server_id, require_user_visible=True)
@@ -7760,7 +7803,20 @@ class Handler(BaseHTTPRequestHandler):
                 """,
                 (user_id, domain, server_id, timestamp, timestamp),
             )
-        return {"ok": True, "domain": domain, "server_id": server_id}
+        auto_candidate_policy = sync_route_auto_candidate_policy(
+            self.app.db_path,
+            self.app.inventory_path,
+            user_id=user_id,
+            domain=domain,
+            server_id=server_id,
+            candidate_server_ids=candidate_server_ids,
+        )
+        return {
+            "ok": True,
+            "domain": domain,
+            "server_id": server_id,
+            "auto_candidate_policy": auto_candidate_policy,
+        }
 
     def api_update_server(self, data: dict[str, Any]) -> dict[str, Any]:
         server_id = str(data.get("id") or "")
