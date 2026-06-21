@@ -35,6 +35,7 @@ CHECKS = [
     Check("Auto priority policy regression", ["tools/test_auto_policy_priority.py"]),
     Check("auto cache lists", ["tools/vpn_control_app.py", "auto-cache-list"]),
     Check("Auto priority policies list", ["tools/vpn_control_app.py", "auto-candidates-list"]),
+    Check("Auto winners list", ["tools/vpn_control_app.py", "auto-winners", "ifconfig.me"]),
     Check("route lookup resolves service alias", ["tools/vpn_control_app.py", "route-lookup", "telegram", "--user-id", "isasha_X7Pro_Cudy"]),
     Check("route lookup reports direct", ["tools/vpn_control_app.py", "route-lookup", "216.239.36.21", "--user-id", "isasha_X7Pro_Cudy"]),
     Check("combined route deploy dry-run builds", ["tools/vpn_control_app.py", "deploy-routes"]),

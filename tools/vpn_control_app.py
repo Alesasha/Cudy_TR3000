@@ -8000,6 +8000,11 @@ def build_parser() -> argparse.ArgumentParser:
     route_lookup_parser.add_argument("--user-id", required=True)
     route_lookup_parser.add_argument("--json", action="store_true", help="Print full JSON lookup result.")
 
+    auto_winners_parser = sub.add_parser("auto-winners", help="Show recent Auto winners for all targets or one domain, URL, IP, CIDR, or service alias.")
+    auto_winners_parser.add_argument("target", nargs="?", default="", help="Optional target filter. Blank means all recent winners.")
+    auto_winners_parser.add_argument("--limit", type=int, default=10)
+    auto_winners_parser.add_argument("--json", action="store_true", help="Print full JSON winner history.")
+
     auto_cache_list_parser = sub.add_parser("auto-cache-list", help="List cached Auto domain choices.")
     auto_cache_list_parser.add_argument("--json", action="store_true", help="Print JSON cache entries.")
 
@@ -8498,6 +8503,31 @@ def main() -> int:
                 print(
                     f"{item['target']}\tstate={item['route_state']}\tserver={item['server_id']}"
                     f"\trule={rule_label}{auto_label}"
+                )
+        return 0
+    if args.command == "auto-winners":
+        result = recent_auto_winners(args.db, args.inventory, target=args.target, limit=args.limit)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            if result.get("target"):
+                keys = ",".join(result.get("cache_keys") or []) or "-"
+                print(f"Auto winners target={result['target']} cache_keys={keys}")
+            else:
+                print("Auto winners: recent global history")
+            winners = result.get("winners") or []
+            if not winners:
+                print("No Auto winners.")
+            for item in winners:
+                speed = item.get("speed_mbps")
+                latency = item.get("latency_ms")
+                print(
+                    f"{item['domain']}\tuser={item.get('user_id') or '-'}\t"
+                    f"winner={item.get('winner_server_id') or '-'}\t"
+                    f"latency={latency if latency is not None else '-'}ms\t"
+                    f"speed={speed if speed is not None else '-'}Mbps\t"
+                    f"agent={item.get('claimed_by_device_id') or '-'}\t"
+                    f"updated={item.get('finished_at') or item.get('updated_at') or '-'}"
                 )
         return 0
     if args.command == "auto-cache-list":

@@ -323,6 +323,14 @@ python tools\vpn_control_app.py auto-candidates-set "proxygb, proxyde" --domain 
 python tools\vpn_control_app.py auto-candidates-set "proxynl, proxyde" --user-id test-client-awg --domain example.com
 ```
 
+Recent Auto winners:
+
+```powershell
+python tools\vpn_control_app.py auto-winners
+python tools\vpn_control_app.py auto-winners telegram
+python tools\vpn_control_app.py auto-winners https://ifconfig.me/ip --limit 10
+```
+
 Probe candidates for a domain from Cudy and save the winner into Auto cache:
 
 ```powershell

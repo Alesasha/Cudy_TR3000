@@ -288,6 +288,7 @@ python tools\vpn_control_app.py auto-candidates-set "proxyde, proxyus, all-rest"
 python tools\vpn_control_app.py auto-candidates-set "proxygb, proxyde, all-rest" --domain example.com
 python tools\vpn_control_app.py auto-candidates-set "proxynl, proxyde, all-rest" --user-id test-client-awg --domain example.com
 python tools\vpn_control_app.py auto-candidates-delete --domain example.com
+python tools\vpn_control_app.py auto-winners telegram
 ```
 
 Blank `--user-id` means a global policy. Blank `--domain` means the default policy for all domains. Candidate policy resolution order is user+domain, user default, global+domain, global default. `all-rest` expands to every remaining enabled user-visible server after the explicitly listed priorities.
