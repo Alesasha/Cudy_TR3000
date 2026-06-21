@@ -244,6 +244,20 @@ Remove-Item Env:TARGET_SSH_PASSWORD
 
 This is the fallback path when the old control-server is unavailable.
 
+If direct root SSH to uswest is unstable at the banner/pre-auth stage, deploy
+through the restricted tunnel user instead. This uses the same key as the
+Windows agent control tunnel, uploads only non-secret code/config files, then
+promotes the archive with `su` on the server:
+
+```powershell
+$env:USWEST_ROOT_PASSWORD = "<root password>"
+python tools\deploy_control_server_via_tunnel_user.py
+Remove-Item Env:USWEST_ROOT_PASSWORD
+```
+
+This path intentionally does not upload the local SQLite database or local
+`secrets/` tree.
+
 ## Backups
 
 Create a local disaster-recovery archive from the live uswest control-server:
