@@ -805,6 +805,13 @@ ADMIN_HTML = r"""<!doctype html>
     button.secondary { background: #fff; color: var(--accent); border-color: var(--line); }
     button.danger { background: #fff; color: var(--danger); border-color: #efc0ba; }
     a.button { display: inline-flex; align-items: center; min-height: 34px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; color: var(--accent); text-decoration: none; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin: 10px 0 14px; }
+    .summary-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: #fbfcfe; }
+    .summary-label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .summary-value { font-size: 18px; font-weight: 650; }
+    .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
+    .badge.ok { color: var(--ok); border-color: #b9dfc8; background: #f0fbf4; }
+    .badge.error { color: var(--danger); border-color: #efc0ba; background: #fff6f4; }
   </style>
 </head>
 <body>
@@ -816,6 +823,18 @@ ADMIN_HTML = r"""<!doctype html>
     </div>
   </header>
   <main>
+    <section>
+      <div class="inline">
+        <h2>System Status</h2>
+        <button id="refreshSystemStatus" class="secondary" type="button">Refresh</button>
+      </div>
+      <p id="systemStatusText" class="status"></p>
+      <div id="systemStatusGrid" class="summary-grid"></div>
+      <table>
+        <thead><tr><th>Area</th><th>Status</th><th>Age</th><th>Details</th></tr></thead>
+        <tbody id="systemStatusBody"></tbody>
+      </table>
+    </section>
     <section>
       <h2>Servers</h2>
       <p id="serverStatus" class="status"></p>
@@ -1007,7 +1026,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [] };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [], systemStatus: null };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const serverLabel = id => (id === ALL_REST || id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
@@ -1037,6 +1056,73 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function autoCandidateUserOptions(value) {
       return `<option value="" ${!value ? "selected" : ""}>Global</option>` + userOptions(value);
+    }
+    function fmtAge(seconds) {
+      if (seconds === null || seconds === undefined) return "-";
+      if (seconds < 90) return `${seconds}s`;
+      const minutes = Math.round(seconds / 60);
+      if (minutes < 90) return `${minutes}m`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 72) return `${hours}h`;
+      return `${Math.round(hours / 24)}d`;
+    }
+    function badge(ok, text) {
+      const cls = ok === true ? "ok" : ok === false ? "error" : "";
+      return `<span class="badge ${cls}">${text}</span>`;
+    }
+    function renderSystemStatus() {
+      const status = state.systemStatus;
+      const text = document.getElementById("systemStatusText");
+      const grid = document.getElementById("systemStatusGrid");
+      const body = document.getElementById("systemStatusBody");
+      if (!status) {
+        text.textContent = "Status is not loaded.";
+        text.className = "status";
+        grid.innerHTML = "";
+        body.innerHTML = '<tr><td colspan="4" class="muted">No status.</td></tr>';
+        return;
+      }
+      const warnings = status.warnings || [];
+      text.textContent = status.ok ? "Control-server status is OK." : `Warnings: ${warnings.length}`;
+      text.className = status.ok ? "status ok" : "status error";
+      const autoWorker = (status.workers || {}).auto_probe || {};
+      const providerWorker = (status.workers || {}).provider_refresh || {};
+      const fallback = (status.control || {}).cudy_fallback_state || {};
+      const backup = ((status.operations || {}).local_backup || {}).latest_archive || {};
+      grid.innerHTML = [
+        ["Service", badge(status.ok, status.ok ? "OK" : "WARN"), `uptime ${fmtAge((status.service || {}).uptime_seconds)}`],
+        ["Agents", `${(status.agents || {}).online || 0}/${(status.agents || {}).enabled || 0}`, `recent ${(status.agents || {}).recent_seconds || "-"}s`],
+        ["Probe jobs", `${(status.probe_jobs || {}).pending || 0} pending`, `${(status.probe_jobs || {}).failed || 0} failed`],
+        ["Transports", `${(status.transports || {}).enabled || 0}/${(status.transports || {}).total || 0}`, `oldest ${fmtAge((status.transports || {}).oldest_age_seconds)}`],
+        ["Auto worker", badge(autoWorker.enabled, autoWorker.enabled ? "on" : "off"), `last ${fmtAge(autoWorker.last_finished_age_seconds)}`],
+        ["Provider worker", badge(providerWorker.enabled, providerWorker.enabled ? "on" : "off"), `last ${fmtAge(providerWorker.last_finished_age_seconds)}`],
+        ["Cudy fallback", badge(fallback.ok, fallback.ok ? "fresh" : "stale"), `age ${fmtAge(fallback.age_seconds)}`],
+        ["Local backup", backup.exists ? "present" : "none", `age ${fmtAge(backup.age_seconds)}`],
+      ].map(([label, value, detail]) => `
+        <div class="summary-item">
+          <div class="summary-label">${label}</div>
+          <div class="summary-value">${value}</div>
+          <div class="muted">${detail}</div>
+        </div>
+      `).join("");
+      const providerDetails = Object.entries((status.transports || {}).providers || {})
+        .map(([name, item]) => `${name}: ${item.enabled}/${item.total}, oldest ${fmtAge(item.oldest_age_seconds)}`)
+        .join("; ");
+      const rows = [
+        ["Workers", providerWorker.last_error || autoWorker.last_error ? "error" : "ok", `auto ${fmtAge(autoWorker.last_finished_age_seconds)} / provider ${fmtAge(providerWorker.last_finished_age_seconds)}`, `auto=${autoWorker.last_error || "-"}; provider=${providerWorker.last_error || "-"}`],
+        ["Fallback", fallback.ok ? "ok" : "warn", fmtAge(fallback.age_seconds), fallback.error || fallback.archive_name || ""],
+        ["Providers", "info", fmtAge((status.transports || {}).oldest_age_seconds), providerDetails || "-"],
+        ["Probe jobs", (status.probe_jobs || {}).failed ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
+        ["Operations", "info", `backup ${fmtAge(backup.age_seconds)}`, `backup=${backup.name || "-"}; fallback-log=${fmtAge((((status.operations || {}).local_cudy_fallback_sync || {}).task_log || {}).age_seconds)}`],
+      ].concat(warnings.map(item => ["Warning", "warn", "-", item]));
+      body.innerHTML = rows.map(([area, stateText, age, details]) => `
+        <tr>
+          <td>${area}</td>
+          <td>${stateText === "ok" ? badge(true, "ok") : stateText === "warn" || stateText === "error" ? badge(false, stateText) : stateText}</td>
+          <td>${age}</td>
+          <td>${details}</td>
+        </tr>
+      `).join("");
     }
     function autoPolicyFor(userId, domain) {
       const normalizedUser = userId || "";
@@ -1476,6 +1562,11 @@ ADMIN_HTML = r"""<!doctype html>
     }
     async function load() {
       const data = await api("/api/admin");
+      try {
+        state.systemStatus = await api("/api/status");
+      } catch (error) {
+        state.systemStatus = { ok: false, warnings: [error.message] };
+      }
       state.servers = data.servers;
       state.users = data.users;
       state.routes = data.routes;
@@ -1489,6 +1580,7 @@ ADMIN_HTML = r"""<!doctype html>
       renderServers();
       renderUsers();
       renderServiceAliases();
+      renderSystemStatus();
       renderGlobalRoutes();
       renderRoutes();
       renderAutoCache();
@@ -1548,6 +1640,17 @@ ADMIN_HTML = r"""<!doctype html>
         status.textContent = error.message;
         status.className = "status error";
       }
+    });
+    document.getElementById("refreshSystemStatus").addEventListener("click", async () => {
+      const text = document.getElementById("systemStatusText");
+      text.textContent = "Refreshing status...";
+      text.className = "status";
+      try {
+        state.systemStatus = await api("/api/status");
+      } catch (error) {
+        state.systemStatus = { ok: false, warnings: [error.message] };
+      }
+      renderSystemStatus();
     });
     document.getElementById("adminLookupForm").addEventListener("submit", async event => {
       event.preventDefault();
