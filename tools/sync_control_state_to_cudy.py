@@ -175,7 +175,7 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
     source_client: paramiko.SSHClient | None = None
     cudy_client: paramiko.SSHClient | None = None
     try:
-        source_client = connect(args.source_host, args.source_user, src_password, args.timeout)
+        source_client = connect(args.source_host, args.source_user, src_password, args.timeout, attempts=args.connect_attempts)
         download_source_archive(
             source_client,
             source_host=args.source_host,
@@ -184,7 +184,7 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             output_path=local_archive,
         )
-        cudy_client = connect(args.cudy_host, args.cudy_user, dst_password, args.timeout)
+        cudy_client = connect(args.cudy_host, args.cudy_user, dst_password, args.timeout, attempts=args.connect_attempts)
         status = publish_to_cudy(
             cudy_client,
             archive_path=local_archive,
@@ -215,6 +215,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-user", default=DEFAULT_SOURCE_USER)
     parser.add_argument("--source-password")
     parser.add_argument("--source-remote-dir", default=DEFAULT_SOURCE_REMOTE_DIR)
+    parser.add_argument("--connect-attempts", type=int, default=5)
     parser.add_argument("--cudy-host", default=DEFAULT_CUDY_HOST)
     parser.add_argument("--cudy-user", default=DEFAULT_CUDY_USER)
     parser.add_argument("--cudy-password")
