@@ -22,6 +22,8 @@ Verified on the physical test phone:
 - shows service, policy, probe, route, transport, engine, runtime, and last
   error status on the main screen.
 - shows `battery`, `vpn`, and MIUI `autostart` readiness on the main screen.
+- guides first-run setup through notification permission, Android VPN
+  permission, battery optimization exemption, and MIUI Autostart/app settings.
 
 Latest verified smoke status:
 
@@ -41,6 +43,9 @@ Latest Release APK smoke on the physical phone:
   `com.nashvpn.cudyagent.TEST_BOOT_START`.
 - the app now shows a first-run background permissions prompt and a
   `Setup permissions` button.
+- the setup flow requests standard Android permissions directly where Android
+  allows it, then opens vendor/app settings for the remaining MIUI-specific
+  switch.
 
 Real reboot check on the MIUI test phone:
 
@@ -150,12 +155,14 @@ real device reboot.
 The app shows a compact permissions line:
 
 ```text
-Permissions: battery=ok|needs setup; vpn=ok|needs allow; autostart=check MIUI|n/a
+Permissions: notifications=ok|needs allow; battery=ok|needs setup; vpn=ok|needs allow; autostart=check MIUI|n/a
+Setup: allow notifications -> allow VPN -> allow unrestricted battery -> enable MIUI Autostart
 ```
 
-It can request standard Android battery optimization exemption and can open the
-MIUI Autostart screen, but Android does not let a third-party app enable MIUI
-Autostart automatically. Use the in-app `Setup permissions` button first.
+It can request notification permission, Android VPN permission, standard Android
+battery optimization exemption, and can open the MIUI Autostart screen. Android
+does not let a third-party app enable MIUI Autostart automatically. Use the
+in-app `Setup permissions` button first.
 If vendor settings do not open automatically, use these paths:
 
 ```text
@@ -199,7 +206,6 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 ## Remaining Work
 
-- Add a friendlier first-run wizard for Android/MIUI permissions.
 - Add a simple uninstall/reset procedure for test devices.
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 

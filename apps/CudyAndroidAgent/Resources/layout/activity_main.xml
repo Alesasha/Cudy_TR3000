@@ -63,6 +63,13 @@
             android:paddingTop="10dp"
             android:text="Permissions: -"
             android:textSize="14sp" />
+        <TextView
+            android:id="@+id/permissionGuideText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="6dp"
+            android:text="Setup: -"
+            android:textSize="13sp" />
         <EditText
             android:id="@+id/controlUrlInput"
             android:layout_width="match_parent"

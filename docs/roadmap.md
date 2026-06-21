@@ -80,6 +80,8 @@ This is the current implementation order for the managed VPN control project.
 - Real reboot on the MIUI test phone was verified after enabling Autostart and
   unrestricted battery mode.
 - Battery/VPN/MIUI Autostart readiness is shown on the app main screen.
+- First-run setup now requests notification permission, Android VPN permission,
+  battery optimization exemption, and opens MIUI Autostart/app settings.
 - Battery restrictions and foreground service behavior are documented.
 - Production probe-job support is implemented through Android local mixed proxy
   probes.

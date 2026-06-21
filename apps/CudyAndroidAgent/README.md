@@ -34,11 +34,13 @@ Current MVP:
   `com.nashvpn.cudyagent.TEST_BOOT_START`.
 - shows a first-run background permissions prompt and a `Setup permissions`
   button for battery optimization and MIUI Autostart setup.
+- guides setup through notification permission, Android VPN permission,
+  unrestricted battery mode, and MIUI Autostart/app settings.
 
-Next implementation step:
+Next implementation steps:
 
-- add a friendlier first-run wizard for Android/MIUI background permissions;
 - verify behavior after a real phone reboot on each target Android/MIUI build.
+- add a simple uninstall/reset helper for test devices.
 
 Safety note:
 
@@ -68,7 +70,7 @@ Manual smoke test:
 1. Install the signed APK.
 2. Enter `Control URL`, `Device ID`, device token, SSH host, SSH user, and SSH private key.
 3. Tap `Save`, then `Setup permissions`.
-4. Allow Android battery unrestricted mode when prompted.
+4. Allow notification, VPN, and battery unrestricted mode when prompted.
 5. On MIUI/Xiaomi/POCO/Redmi, enable Autostart when the app opens the vendor
    settings screen. Android does not allow the app to grant this vendor
    permission by itself.

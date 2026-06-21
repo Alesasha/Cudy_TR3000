@@ -2,6 +2,7 @@ namespace CudyAndroidAgent;
 
 using Android.App;
 using Android.Content;
+using Android.Content.PM;
 using Android.Net;
 using Android.OS;
 using Android.Provider;
@@ -16,6 +17,8 @@ using System.Text;
 public class MainActivity : Activity
 {
     private const int VpnPrepareRequest = 1001;
+    private const int NotificationPermissionRequest = 1002;
+    private const string PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS";
     private EditText? controlUrlInput;
     private EditText? deviceIdInput;
     private EditText? tokenInput;
@@ -30,6 +33,7 @@ public class MainActivity : Activity
     private TextView? transportStatusText;
     private TextView? engineStatusText;
     private TextView? permissionStatusText;
+    private TextView? permissionGuideText;
     private TextView? outputText;
     private ISharedPreferences? preferences;
     private bool? pendingStartAfterPrepare;
@@ -58,12 +62,14 @@ public class MainActivity : Activity
         transportStatusText = FindViewById<TextView>(Resource.Id.transportStatusText);
         engineStatusText = FindViewById<TextView>(Resource.Id.engineStatusText);
         permissionStatusText = FindViewById<TextView>(Resource.Id.permissionStatusText);
+        permissionGuideText = FindViewById<TextView>(Resource.Id.permissionGuideText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshKeyInput is null
             || statusText is null || serviceStatusText is null || policyStatusText is null
             || probeStatusText is null || routeStatusText is null || transportStatusText is null
-            || engineStatusText is null || permissionStatusText is null || outputText is null)
+            || engineStatusText is null || permissionStatusText is null || permissionGuideText is null
+            || outputText is null)
         {
             throw new InvalidOperationException("Required layout controls are missing.");
         }
@@ -277,7 +283,7 @@ public class MainActivity : Activity
         preferences?.Edit()?.PutBoolean("background_permissions_prompt_shown", true)?.Apply();
         var dialog = new AlertDialog.Builder(this);
         dialog.SetTitle("Background permissions");
-        dialog.SetMessage("For automatic reconnect after phone reboot, allow battery unrestricted mode and enable Autostart for Cudy Agent.");
+        dialog.SetMessage("Cudy Agent needs VPN permission, notifications, unrestricted battery mode, and Autostart on MIUI for reliable reconnect after reboot.");
         dialog.SetPositiveButton("Setup", (_, _) => SetupBackgroundPermissions());
         dialog.SetNegativeButton("Later", (_, _) => { });
         dialog.Show();
@@ -290,14 +296,59 @@ public class MainActivity : Activity
             return;
         }
 
+        var notifications = HasNotificationPermission() ? "ok" : "needs allow";
         var battery = IsIgnoringBatteryOptimizations() ? "ok" : "needs setup";
         var vpn = Android.Net.VpnService.Prepare(this) is null ? "ok" : "needs allow";
         var autostart = IsMiuiDevice() ? "check MIUI" : "n/a";
-        permissionStatusText.Text = $"Permissions: battery={battery}; vpn={vpn}; autostart={autostart}";
+        permissionStatusText.Text = $"Permissions: notifications={notifications}; battery={battery}; vpn={vpn}; autostart={autostart}";
+
+        if (permissionGuideText is not null)
+        {
+            var steps = new List<string>();
+            if (!HasNotificationPermission())
+            {
+                steps.Add("allow notifications");
+            }
+            if (vpn != "ok")
+            {
+                steps.Add("allow VPN");
+            }
+            if (battery != "ok")
+            {
+                steps.Add("allow unrestricted battery");
+            }
+            if (IsMiuiDevice())
+            {
+                steps.Add("enable MIUI Autostart");
+            }
+            permissionGuideText.Text = steps.Count == 0
+                ? "Setup: standard Android permissions are ready"
+                : "Setup: " + string.Join(" -> ", steps);
+        }
     }
 
     private void SetupBackgroundPermissions()
     {
+        if (!HasNotificationPermission())
+        {
+            RequestNotificationPermission();
+            statusText!.Text = "Notification permission requested";
+            outputText!.Text = "Allow notifications so Android can keep the foreground VPN service visible.";
+            RenderPermissionStatus();
+            return;
+        }
+
+        var prepareIntent = Android.Net.VpnService.Prepare(this);
+        if (prepareIntent != null)
+        {
+            pendingStartAfterPrepare = null;
+            StartActivityForResult(prepareIntent, VpnPrepareRequest);
+            statusText!.Text = "VPN permission requested";
+            outputText!.Text = "Allow VPN permission, then tap Setup permissions again for battery and Autostart.";
+            RenderPermissionStatus();
+            return;
+        }
+
         if (!IsIgnoringBatteryOptimizations())
         {
             if (OpenBatteryOptimizationRequest())
@@ -321,6 +372,26 @@ public class MainActivity : Activity
         statusText!.Text = "Application settings opened";
         outputText!.Text = "Set Battery saver to No restrictions and enable Autostart if your Android build exposes it.";
         RenderPermissionStatus();
+    }
+
+    private bool HasNotificationPermission()
+    {
+        if ((int)Build.VERSION.SdkInt < 33)
+        {
+            return true;
+        }
+
+        return CheckSelfPermission(PostNotificationsPermission) == Permission.Granted;
+    }
+
+    private void RequestNotificationPermission()
+    {
+        if ((int)Build.VERSION.SdkInt < 33)
+        {
+            return;
+        }
+
+        RequestPermissions(new[] { PostNotificationsPermission }, NotificationPermissionRequest);
     }
 
     private static bool IsMiuiDevice()
@@ -484,6 +555,20 @@ public class MainActivity : Activity
 
             statusText!.Text = "VPN permission denied";
         }
+    }
+
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != NotificationPermissionRequest)
+        {
+            return;
+        }
+
+        statusText!.Text = grantResults.Length > 0 && grantResults[0] == Permission.Granted
+            ? "Notification permission granted"
+            : "Notification permission denied";
+        RenderPermissionStatus();
     }
 
     private void RenderStoredStatus()
