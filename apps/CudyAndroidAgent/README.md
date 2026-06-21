@@ -50,7 +50,7 @@ Safety note:
 Build:
 
 ```powershell
-dotnet build apps\CudyAndroidAgent\CudyAndroidAgent.csproj -c Release -p:RuntimeIdentifier=android-arm64
+powershell -ExecutionPolicy Bypass -File tools\Build-AndroidAgentRelease.ps1
 ```
 
 Rebuild `libbox.aar` and the arm64 APK:
@@ -63,6 +63,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.0-YYYYMMDD.apk
 ```
 
 Manual smoke test:

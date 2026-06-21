@@ -92,7 +92,7 @@ python tools\bootstrap_control_vps.py --host <new-vps-ip>
 Build the Android release APK:
 
 ```powershell
-dotnet build apps\CudyAndroidAgent\CudyAndroidAgent.csproj -c Release -p:RuntimeIdentifier=android-arm64
+powershell -ExecutionPolicy Bypass -File tools\Build-AndroidAgentRelease.ps1
 ```
 
 Run the Android smoke test with a connected device:

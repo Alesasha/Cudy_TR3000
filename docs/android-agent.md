@@ -76,13 +76,13 @@ Latest verified Android VPN routes included the Telegram CIDRs:
 
 ## Build
 
-The repo pins the .NET SDK through `global.json`. Build the release APK:
+The repo pins the .NET SDK through `global.json`. Build and copy the release APK:
 
 ```powershell
-dotnet build apps\CudyAndroidAgent\CudyAndroidAgent.csproj -c Release -p:RuntimeIdentifier=android-arm64
+powershell -ExecutionPolicy Bypass -File tools\Build-AndroidAgentRelease.ps1
 ```
 
-Release output:
+Raw build output:
 
 ```text
 apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudyagent-Signed.apk
