@@ -75,6 +75,24 @@ $transportPid = Read-PidFile $pidPath
 if ($transportPid) {
     $proc = Get-Process -Id $transportPid -ErrorAction SilentlyContinue
     if ($proc -and -not $Restart) {
+        $adapter = Get-NetAdapter -Name $Name -ErrorAction SilentlyContinue
+        if (-not $adapter) {
+            Write-Host "sing-box transport process is running but adapter is missing; restarting: $Name pid=$transportPid"
+            Stop-Process -Id $transportPid -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+            Remove-Item -LiteralPath $pidPath -Force -ErrorAction SilentlyContinue
+            $proc = $null
+        } elseif ([string]$adapter.InterfaceDescription -ne "sing-tun Tunnel" -and [string]$adapter.ComponentID -ne "Wintun") {
+            throw "Adapter '$Name' already exists and is not a sing-box adapter ($($adapter.InterfaceDescription))."
+        } else {
+            Write-Host "sing-box transport already running: $Name pid=$transportPid"
+            return
+        }
+    }
+    if ($proc -and -not (Get-Process -Id $transportPid -ErrorAction SilentlyContinue)) {
+        $proc = $null
+    }
+    if ($proc -and -not $Restart) {
         Write-Host "sing-box transport already running: $Name pid=$transportPid"
         return
     }
