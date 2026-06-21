@@ -29,6 +29,8 @@ Linux, and Cudy fallback routing.
   production control-server to a replacement VPS.
 - `tools/backup_control_server.py` - online SQLite/control-server backup tool
   for disaster recovery archives.
+- `tools/backup_control_server_via_tunnel_user.py` - backup fallback through
+  the restricted control-tunnel SSH user plus `su root`.
 - `tools/bootstrap_control_vps.py` - fresh Ubuntu/Debian VPS bootstrap for
   control-server restore and future Amnezia/Docker exit setup.
 - `tools/Run-ControlBackup.ps1` and `tools/Install-ControlBackupTask.ps1` -
@@ -71,6 +73,12 @@ Create a local disaster-recovery backup of the live control-server:
 
 ```powershell
 python tools\backup_control_server.py
+```
+
+If direct root SSH is unstable, try the tunnel-user backup path:
+
+```powershell
+python tools\backup_control_server_via_tunnel_user.py
 ```
 
 Prepare a fresh Ubuntu VPS after the provider has created it:

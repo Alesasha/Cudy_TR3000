@@ -268,6 +268,21 @@ python tools\backup_control_server.py --connect-attempts 5
 Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD
 ```
 
+If direct root SSH is unreliable at the SSH banner stage, use the tunnel-user
+backup path. It connects with the same restricted SSH key used by agents, then
+uses `su root` on the server to create the archive:
+
+```powershell
+$env:USWEST_ROOT_PASSWORD = "<root password>"
+python tools\backup_control_server_via_tunnel_user.py --connect-attempts 5
+Remove-Item Env:USWEST_ROOT_PASSWORD
+```
+
+This still requires the public `sshd` to accept a session. If port 22 itself is
+not returning a banner, both root and tunnel-user SSH backups will wait or fail;
+in that case rely on the latest Cudy fallback state and retry after sshd load or
+network filtering is fixed.
+
 The backup uses SQLite's online backup API, so `vpn-control` does not need to be
 stopped. The archive includes, by default:
 
@@ -297,6 +312,12 @@ arguments. `tools\Run-ControlBackup.ps1` reads it from
 The file is under ignored `secrets/` and must not be committed. The installer
 can run from a normal user PowerShell; when it is run elevated, the task uses
 the highest available run level.
+
+The wrapper can use the tunnel-user path as well:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Run-ControlBackup.ps1 -ViaTunnelUser
+```
 
 Current disaster-recovery layers:
 
