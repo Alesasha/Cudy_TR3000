@@ -280,7 +280,7 @@ python tools\vpn_control_app.py auto-cache-delete example.com
 
 When a global or per-user route points to `auto`, export/deploy resolves it through `domain_auto_cache`. If there is no cached selected server for that domain, the route is skipped and the deploy preview shows a warning.
 
-Manage ordered server candidate lists for future Auto benchmarks:
+Manage Auto priority policies for future Auto benchmarks:
 
 ```powershell
 python tools\vpn_control_app.py auto-candidates-list

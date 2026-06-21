@@ -107,8 +107,8 @@ http://127.0.0.1:8765/admin
   - stores `domain -> selected server` decisions in `domain_auto_cache`;
   - lets `Auto` routes resolve to a real interface during route plan/export;
   - can be edited from the admin UI or the `auto-cache-*` CLI commands.
-- Auto candidate lists:
-  - store ordered server candidates for Auto probing;
+- Auto priority policies:
+  - store ordered server candidates for Auto probing as part of default/domain route configuration;
   - support global default, global per-domain, user default, and user per-domain scopes;
   - resolve in this order: user domain, user default, global domain, global default.
 - Auto selection:

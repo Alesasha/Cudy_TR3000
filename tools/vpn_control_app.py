@@ -7873,7 +7873,7 @@ def print_db_summary(db_path: Path) -> None:
     print(f"IP/CIDR routes: {ip_route_count}")
     print(f"Global IP/CIDR routes: {global_ip_route_count}")
     print(f"Auto cache: {auto_cache_count}")
-    print(f"Auto candidate lists: {auto_candidate_count}")
+    print(f"Auto priority policies: {auto_candidate_count}")
     print(f"Agent devices: {agent_device_count}")
 
 
@@ -8012,16 +8012,16 @@ def build_parser() -> argparse.ArgumentParser:
     auto_cache_delete_parser = sub.add_parser("auto-cache-delete", help="Delete cached Auto choice for one domain.")
     auto_cache_delete_parser.add_argument("domain")
 
-    auto_candidates_list_parser = sub.add_parser("auto-candidates-list", help="List Auto candidate server policies.")
+    auto_candidates_list_parser = sub.add_parser("auto-candidates-list", help="List Auto priority policies.")
     auto_candidates_list_parser.add_argument("--json", action="store_true", help="Print JSON policies.")
 
-    auto_candidates_set_parser = sub.add_parser("auto-candidates-set", help="Set Auto candidate server list.")
+    auto_candidates_set_parser = sub.add_parser("auto-candidates-set", help="Set Auto priority policy.")
     auto_candidates_set_parser.add_argument("candidate_server_ids", help="Comma/space-separated server ids in priority order.")
     auto_candidates_set_parser.add_argument("--user-id", default="", help="Blank means global policy.")
     auto_candidates_set_parser.add_argument("--domain", default="", help="Blank means default policy for all domains.")
     auto_candidates_set_parser.add_argument("--disabled", action="store_true")
 
-    auto_candidates_delete_parser = sub.add_parser("auto-candidates-delete", help="Delete Auto candidate server list.")
+    auto_candidates_delete_parser = sub.add_parser("auto-candidates-delete", help="Delete Auto priority policy.")
     auto_candidates_delete_parser.add_argument("--user-id", default="", help="Blank means global policy.")
     auto_candidates_delete_parser.add_argument("--domain", default="", help="Blank means default policy for all domains.")
 
@@ -8549,7 +8549,7 @@ def main() -> int:
             print(json.dumps(entries, ensure_ascii=False, indent=2))
         else:
             if not entries:
-                print("Auto candidate policies are empty.")
+                print("Auto priority policies are empty.")
             for item in entries:
                 print(
                     f"{item['scope']}\tuser={item['user_id'] or '-'}\t"
@@ -8568,7 +8568,7 @@ def main() -> int:
             enabled=not args.disabled,
         )
         print(
-            f"Auto candidates saved: {item['scope']} user={item['user_id'] or '-'} "
+            f"Auto priority policy saved: {item['scope']} user={item['user_id'] or '-'} "
             f"domain={item['domain'] or '*'} servers={','.join(item['candidate_server_ids'])}"
         )
         return 0
@@ -8579,7 +8579,7 @@ def main() -> int:
             user_id=args.user_id,
             domain=args.domain,
         )
-        print(f"Auto candidates deleted: {item['scope']} user={item['user_id'] or '-'} domain={item['domain'] or '*'}")
+        print(f"Auto priority policy deleted: {item['scope']} user={item['user_id'] or '-'} domain={item['domain'] or '*'}")
         return 0
     if args.command == "auto-select":
         result = auto_select_domain(

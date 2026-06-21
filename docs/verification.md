@@ -32,7 +32,7 @@ The smoke check does not apply route changes and does not refresh providers with
 | Effective route plan | Implemented. User routes override global routes. | `python tools\vpn_control_app.py route-plan` | Add automated assertions for conflict cases. |
 | Global route deploy | Implemented through PBR override files. | `python tools\vpn_control_app.py deploy-routes` | Apply only after checking generated preview. |
 | Per-user route deploy | Implemented through `cudy_user_routes` nft table. | `python tools\vpn_control_app.py deploy-routes` and `python tools\vpn_control_app.py status-user-routes` | Re-apply after router reboot until the Cudy-side startup behavior is verified. |
-| Auto candidate lists | Implemented as ordered policies consumed by Auto selection. | `python tools\vpn_control_app.py auto-candidates-list` | Add more production policies. |
+| Auto priority policies | Implemented as ordered policies consumed by Auto selection. | `python tools\vpn_control_app.py auto-candidates-list` | Add more production policies. |
 | Auto selection | Implemented as Cudy-side `curl --interface` probes with fastest successful winner. | `python tools\vpn_control_app.py auto-select example.com --candidates "proxyde, proxyus, uswest"` | Add richer content checks for services like Gemini. |
 | Auto cache | Implemented as manually editable cache and Auto selection output. | `python tools\vpn_control_app.py auto-cache-list` | Add automatic refresh of leaders. |
 | Auto default for unknown domains | Not implemented. Unknown domains follow normal Cudy/PBR routing. | `python tools\vpn_control_app.py route-plan` | Add domain discovery and an explicit policy for creating Auto routes. |
@@ -93,5 +93,5 @@ The Go rewrite should start only when these are true:
 - smoke check passes locally and with `--online`;
 - at least one real per-user route is applied and confirmed by nft counters;
 - provider refresh preview works for LokVPN and VPNtype;
-- Auto candidate policies and Auto cache have a tested end-to-end example;
+- Auto priority policies and Auto cache have a tested end-to-end example;
 - the expected behavior for unknown domains is explicitly chosen.

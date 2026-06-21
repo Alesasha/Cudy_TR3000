@@ -1,6 +1,6 @@
 # vpn_control_app.py
 
-`vpn_control_app.py` is the local SQLite-backed control panel for users, domain routes, Auto cache, Auto candidate lists, and Cudy route deployment.
+`vpn_control_app.py` is the local SQLite-backed control panel for users, domain routes, Auto cache, Auto priority policies, and Cudy route deployment.
 
 It currently runs on the operator Windows machine, not on the Cudy router. Cudy
 has a DHCP static lease for this PC:
@@ -314,7 +314,7 @@ python tools\vpn_control_app.py auto-cache-set example.com proxyde --score-ms 12
 python tools\vpn_control_app.py auto-cache-delete example.com
 ```
 
-Ordered candidate lists:
+Auto priority policies:
 
 ```powershell
 python tools\vpn_control_app.py auto-candidates-list

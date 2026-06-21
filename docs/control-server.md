@@ -5,7 +5,7 @@ The first target host is `uswest` (`95.182.91.203`).
 
 Its job is control-plane only:
 
-- store users, devices, domain rules, Auto cache, and candidate policies;
+- store users, devices, domain rules, Auto cache, and priority policies;
 - expose the admin/user web UI;
 - expose agent APIs for Linux/Windows/Android clients;
 - later trigger Cudy and exit-server deployments.

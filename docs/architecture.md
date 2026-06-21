@@ -36,7 +36,7 @@ The public control server owns desired state:
 - users and devices;
 - global and per-user domain rules;
 - per-user IP/CIDR rules;
-- Auto cache and candidate policies;
+- Auto cache and priority policies;
 - last reported agent status.
 
 Client agents pull this state from `GET /api/agent/config` using a device token
@@ -114,11 +114,11 @@ Stage 4 starts by making `Auto` resolvable through `domain_auto_cache`: a route 
 
 `Auto` is not currently a wildcard for every domain with no rule. The deploy model only emits rules for known global or per-user domains. Unknown domains follow the normal Cudy/PBR routing path until they are added to a route, cache, or future domain-discovery flow.
 
-Auto candidate server policies define which servers a benchmark should try and in what priority order. Resolution order is:
+Auto priority policies define which servers a benchmark should try and in what priority order. Resolution order is:
 
 1. user + domain;
-2. global + domain;
-3. user default;
+2. user default;
+3. global + domain;
 4. global default.
 
 The remaining work is to benchmark exits per domain, keep roughly 300 active domains, refresh cached leaders in the background, and optionally discover new domains from DNS/PBR logs before creating `Auto` routes.
