@@ -1,6 +1,7 @@
 param(
     [string]$TaskName = "Cudy Fallback Control Sync",
     [int]$EveryMinutes = 30,
+    [int]$RepetitionDays = 3650,
     [switch]$RunNow
 )
 
@@ -26,6 +27,12 @@ $runner = Join-Path $PSScriptRoot "Run-CudyFallbackSync.ps1"
 if (-not (Test-Path -LiteralPath $runner)) {
     throw "Runner not found: $runner"
 }
+if ($EveryMinutes -lt 5) {
+    throw "EveryMinutes must be at least 5."
+}
+if ($RepetitionDays -lt 1) {
+    throw "RepetitionDays must be at least 1."
+}
 
 $argsList = @(
     "-NoProfile",
@@ -36,9 +43,9 @@ $argsList = @(
 $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ($argsList -join " ")
 $trigger = New-ScheduledTaskTrigger `
     -Once `
-    -At ((Get-Date).Date.AddMinutes(5)) `
+    -At ((Get-Date).AddMinutes(5)) `
     -RepetitionInterval (New-TimeSpan -Minutes $EveryMinutes) `
-    -RepetitionDuration (New-TimeSpan -Days 1)
+    -RepetitionDuration (New-TimeSpan -Days $RepetitionDays)
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $principalArgs = @{
     UserId = $currentUser
@@ -66,6 +73,7 @@ Register-ScheduledTask `
 
 Write-Host "Installed scheduled task: $TaskName"
 Write-Host "Repeat every: $EveryMinutes minutes"
+Write-Host "Repeat duration: $RepetitionDays days"
 Write-Host "Action:"
 Write-Host "  powershell.exe $($argsList -join ' ')"
 if ($RunNow) {

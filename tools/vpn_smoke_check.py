@@ -42,6 +42,7 @@ CHECKS = [
     Check("combined route deploy dry-run builds", ["tools/vpn_control_app.py", "deploy-routes"]),
     Check("provider refresh dry-run builds", ["tools/vpn_inventory.py", "refresh-provider", "all"]),
     Check("route agent help loads", ["tools/route_agent.py", "--help"]),
+    Check("PowerShell scripts parse", ["tools/check_powershell_syntax.py"]),
     Check("control backup help loads", ["tools/backup_control_server.py", "--help"]),
     Check("control tunnel-user backup help loads", ["tools/backup_control_server_via_tunnel_user.py", "--help"]),
     Check("control clone help loads", ["tools/clone_control_server.py", "--help"]),

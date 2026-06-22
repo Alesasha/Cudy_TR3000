@@ -429,6 +429,20 @@ http://192.168.8.1/cudy-control/state.json
 http://10.77.0.1/cudy-control/state.json
 ```
 
+Install the local Windows task that refreshes this fallback state every 30
+minutes:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Install-CudyFallbackSyncTask.ps1 -RunNow
+```
+
+The task uses a long-lived repeating trigger, so `NextRunTime` should stay
+populated after the first day:
+
+```powershell
+Get-ScheduledTaskInfo -TaskName "Cudy Fallback Control Sync"
+```
+
 Install a repeated Windows sync task:
 
 ```powershell
