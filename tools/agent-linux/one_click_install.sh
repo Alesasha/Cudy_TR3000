@@ -15,21 +15,30 @@ fi
 mkdir -p run logs transports
 chmod +x ./*.sh
 
+echo "== restore direct baseline before install =="
+./restore_direct.sh || true
+
 missing=0
-for cmd in python3 curl ip ssh; do
+for cmd in python3 curl ip ssh tar; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "ERROR: required command is missing: $cmd" >&2
     missing=1
   fi
 done
 if ! command -v sing-box >/dev/null 2>&1 && [ ! -x ./runtime/sing-box ]; then
-  echo "ERROR: sing-box is missing. Put it into ./runtime/sing-box or install it in PATH." >&2
-  missing=1
+  if [ "${AUTO_INSTALL_SINGBOX:-1}" = "1" ] && [ -x ./install_singbox_runtime.sh ]; then
+    echo
+    echo "== install bundled sing-box runtime =="
+    if ! ./install_singbox_runtime.sh; then
+      echo "ERROR: automatic sing-box install failed." >&2
+      missing=1
+    fi
+  else
+    echo "ERROR: sing-box is missing. Put it into ./runtime/sing-box or install it in PATH." >&2
+    missing=1
+  fi
 fi
 [ "$missing" = "0" ] || exit 1
-
-echo "== restore direct baseline before install =="
-./restore_direct.sh || true
 
 if [ "$run_smoke" = "1" ]; then
   echo

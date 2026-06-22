@@ -13,6 +13,8 @@ posts status/probe results back to the control server.
 - `start_tunnel.sh`: pins the control-server route and opens SSH forwarding.
 - `start_singbox_transport.sh`: starts one `sing-box` TUN by config.
 - `stop_singbox_transport.sh`: stops one managed `sing-box` TUN by name.
+- `install_singbox_runtime.sh`: downloads the current Linux `sing-box`
+  runtime into `./runtime/sing-box` when it is not already bundled.
 - `restore_direct.sh`: restores direct half-default routes and stops managed
   provider TUN exits.
 - `write_transport_plan.py`: converts control-server `transport_plan` into local `sing-box` configs.
@@ -31,7 +33,9 @@ posts status/probe results back to the control server.
 - `curl`
 - `iproute2`
 - `ssh`
-- `sing-box` in `PATH` or `./runtime/sing-box`
+- `sing-box` in `PATH` or `./runtime/sing-box`; `one_click_install.sh`
+  can download it automatically when `curl`, `tar`, and internet access are
+  available.
 
 The agent should run as root, or it will use `sudo` for route and TUN changes.
 
@@ -41,6 +45,9 @@ The agent should run as root, or it will use `sudo` for route and TUN changes.
 chmod +x *.sh
 ./one_click_install.sh
 ```
+
+Set `AUTO_INSTALL_SINGBOX=0` if the machine must not download binaries and the
+runtime is already provided by another channel.
 
 If the one-shot smoke was already done and you only want to install the service:
 
