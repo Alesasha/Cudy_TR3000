@@ -80,6 +80,27 @@ def main() -> int:
                 raise AssertionError("endpoint manifest is empty")
             if endpoints[0].get("role") != "primary":
                 raise AssertionError(f"first endpoint is not primary: {endpoints[0]!r}")
+            status_raw = subprocess.check_output(
+                [
+                    sys.executable,
+                    str(ROOT / "tools" / "vpn_control_app.py"),
+                    "--db",
+                    str(db_path),
+                    "--inventory",
+                    str(INVENTORY),
+                    "system-status",
+                    "--json",
+                ],
+                cwd=ROOT,
+                text=True,
+            )
+            status = json.loads(status_raw)
+            workers = status.get("workers") or {}
+            for name in ("auto_probe", "provider_refresh"):
+                if name not in workers:
+                    raise AssertionError(f"{name} worker status was not persisted")
+                if workers[name].get("enabled") is not False:
+                    raise AssertionError(f"{name} worker status should be disabled: {workers[name]!r}")
         finally:
             proc.terminate()
             try:

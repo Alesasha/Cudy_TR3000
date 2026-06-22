@@ -290,6 +290,12 @@ CREATE TABLE IF NOT EXISTS agent_probe_jobs (
   FOREIGN KEY(winner_server_id) REFERENCES servers(id) ON DELETE SET NULL
 );
 
+CREATE TABLE IF NOT EXISTS worker_status (
+  name TEXT PRIMARY KEY,
+  status_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS service_aliases (
   alias TEXT PRIMARY KEY,
   label TEXT NOT NULL,
@@ -2124,7 +2130,21 @@ def latest_file_status(directory: Path, pattern: str, *, reference: datetime | N
     return status
 
 
-def update_worker_status(name: str, **fields: Any) -> None:
+def persist_worker_status(db_path: Path, name: str, status: dict[str, Any]) -> None:
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO worker_status (name, status_json, updated_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(name) DO UPDATE SET
+              status_json = excluded.status_json,
+              updated_at = excluded.updated_at
+            """,
+            (name, json.dumps(status, ensure_ascii=False, sort_keys=True), now()),
+        )
+
+
+def update_worker_status(name: str, db_path: Path | None = None, **fields: Any) -> None:
     timestamp = now()
     with WORKER_STATUS_LOCK:
         current = WORKER_STATUS.setdefault(name, {})
@@ -2135,15 +2155,36 @@ def update_worker_status(name: str, **fields: Any) -> None:
             current["last_finished_at"] = timestamp
         current.pop("started", None)
         current.pop("finished", None)
+        snapshot = json.loads(json.dumps(current))
+    if db_path is not None:
+        try:
+            persist_worker_status(db_path, name, snapshot)
+        except Exception as exc:
+            print(f"worker status persist failed for {name}: {exc}", file=sys.stderr)
 
 
-def worker_status_snapshot(*, reference: datetime | None = None) -> dict[str, dict[str, Any]]:
+def worker_status_snapshot(db_path: Path | None = None, *, reference: datetime | None = None) -> dict[str, dict[str, Any]]:
     reference = reference or datetime.now(timezone.utc)
-    with WORKER_STATUS_LOCK:
-        snapshot = json.loads(json.dumps(WORKER_STATUS))
+    snapshot: dict[str, dict[str, Any]] = {}
+    if db_path is not None:
+        try:
+            with connect(db_path) as conn:
+                for item in rows(conn, "SELECT name, status_json, updated_at FROM worker_status ORDER BY name"):
+                    try:
+                        status = json.loads(item["status_json"] or "{}")
+                    except json.JSONDecodeError:
+                        status = {}
+                    status.setdefault("updated_at", item["updated_at"])
+                    snapshot[item["name"]] = status
+        except sqlite3.Error:
+            snapshot = {}
+    if not snapshot:
+        with WORKER_STATUS_LOCK:
+            snapshot = json.loads(json.dumps(WORKER_STATUS))
     for item in snapshot.values():
         item["last_started_age_seconds"] = timestamp_age_seconds(item.get("last_started_at"), reference=reference)
         item["last_finished_age_seconds"] = timestamp_age_seconds(item.get("last_finished_at"), reference=reference)
+        item["updated_age_seconds"] = timestamp_age_seconds(item.get("updated_at"), reference=reference)
     return snapshot
 
 
@@ -4499,13 +4540,14 @@ def auto_probe_worker_loop(
 ) -> None:
     update_worker_status(
         "auto_probe",
+        db_path=db_path,
         enabled=True,
         interval_seconds=interval_seconds,
         last_error=None,
         last_result=None,
     )
     while not stop_event.wait(interval_seconds):
-        update_worker_status("auto_probe", started=True)
+        update_worker_status("auto_probe", db_path=db_path, started=True)
         try:
             result = create_auto_probe_jobs_once(
                 db_path,
@@ -4521,6 +4563,7 @@ def auto_probe_worker_loop(
             created_count = len(result.get("created") or [])
             update_worker_status(
                 "auto_probe",
+                db_path=db_path,
                 finished=True,
                 last_error=None,
                 last_result={
@@ -4532,7 +4575,7 @@ def auto_probe_worker_loop(
             if created_count:
                 print(f"auto-probe worker: created {created_count} job(s)", file=sys.stderr)
         except Exception as exc:
-            update_worker_status("auto_probe", finished=True, last_error=str(exc))
+            update_worker_status("auto_probe", db_path=db_path, finished=True, last_error=str(exc))
             print(f"auto-probe worker failed: {exc}", file=sys.stderr)
 
 
@@ -4549,14 +4592,15 @@ def provider_refresh_worker_loop(
 ) -> None:
     update_worker_status(
         "provider_refresh",
+        db_path=db_path,
         enabled=True,
         interval_seconds=interval_seconds,
         provider=provider,
         last_error=None,
         last_result=None,
     )
-    while not stop_event.wait(interval_seconds):
-        update_worker_status("provider_refresh", started=True)
+    while not stop_event.is_set():
+        update_worker_status("provider_refresh", db_path=db_path, started=True)
         try:
             result = refresh_provider_transports(
                 db_path,
@@ -4577,6 +4621,7 @@ def provider_refresh_worker_loop(
                 failed = len(result.get("failed") or [])
             update_worker_status(
                 "provider_refresh",
+                db_path=db_path,
                 finished=True,
                 last_error=None,
                 last_result={
@@ -4588,8 +4633,10 @@ def provider_refresh_worker_loop(
             if refreshed or failed:
                 print(f"provider-refresh worker: refreshed={refreshed} failed={failed}", file=sys.stderr)
         except Exception as exc:
-            update_worker_status("provider_refresh", finished=True, last_error=str(exc))
+            update_worker_status("provider_refresh", db_path=db_path, finished=True, last_error=str(exc))
             print(f"provider-refresh worker failed: {exc}", file=sys.stderr)
+        if stop_event.wait(interval_seconds):
+            break
 
 
 def server_metadata(server: dict[str, Any]) -> dict[str, Any]:
@@ -5311,7 +5358,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "newest_age_seconds": newest_transport_age,
                 "oldest_age_seconds": oldest_transport_age,
             },
-            "workers": worker_status_snapshot(reference=reference),
+            "workers": worker_status_snapshot(db_path, reference=reference),
             "operations": {
                 "local_backup": {
                     "max_age_seconds": CONTROL_BACKUP_MAX_AGE_SECONDS,
@@ -9237,12 +9284,13 @@ def main() -> int:
         if not args.no_auto_worker:
             update_worker_status(
                 "auto_probe",
+                db_path=args.db,
                 enabled=True,
                 interval_seconds=max(30, args.auto_worker_interval),
                 last_error=None,
             )
             try:
-                update_worker_status("auto_probe", started=True)
+                update_worker_status("auto_probe", db_path=args.db, started=True)
                 initial = create_auto_probe_jobs_once(
                     args.db,
                     args.inventory,
@@ -9256,6 +9304,7 @@ def main() -> int:
                 )
                 update_worker_status(
                     "auto_probe",
+                    db_path=args.db,
                     finished=True,
                     last_error=None,
                     last_result={
@@ -9268,7 +9317,7 @@ def main() -> int:
                 if initial.get("created"):
                     print(f"auto-probe worker: created {len(initial['created'])} initial job(s)", file=sys.stderr)
             except Exception as exc:
-                update_worker_status("auto_probe", finished=True, last_error=str(exc))
+                update_worker_status("auto_probe", db_path=args.db, finished=True, last_error=str(exc))
                 print(f"auto-probe worker initial run failed: {exc}", file=sys.stderr)
             worker_thread = threading.Thread(
                 target=auto_probe_worker_loop,
@@ -9289,10 +9338,11 @@ def main() -> int:
             )
             worker_thread.start()
         else:
-            update_worker_status("auto_probe", enabled=False)
+            update_worker_status("auto_probe", db_path=args.db, enabled=False)
         if not args.no_provider_refresh_worker:
             update_worker_status(
                 "provider_refresh",
+                db_path=args.db,
                 enabled=True,
                 interval_seconds=max(60, args.provider_refresh_interval),
                 provider=args.provider_refresh_provider,
@@ -9314,7 +9364,7 @@ def main() -> int:
             )
             provider_thread.start()
         else:
-            update_worker_status("provider_refresh", enabled=False)
+            update_worker_status("provider_refresh", db_path=args.db, enabled=False)
         print(f"Serving on http://{args.host}:{args.port}")
         try:
             server.serve_forever()

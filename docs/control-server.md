@@ -177,9 +177,13 @@ the production SQLite database:
 
 ```powershell
 $env:USWEST_SSH_PASSWORD = "<root password>"
-python tools\deploy_control_server.py --no-upload-db --skip-package-install --connect-attempts 5
+python tools\deploy_control_server.py --skip-package-install --connect-attempts 5
 Remove-Item Env:USWEST_SSH_PASSWORD
 ```
+
+`deploy_control_server.py` does not upload the local SQLite database by
+default. Use `--upload-db` only for an intentional restore or clone operation,
+after verifying that the local database archive is consistent.
 
 Check production status:
 
@@ -196,19 +200,16 @@ Detailed status is also available to admins through:
 GET /api/status
 ```
 
-The same payload format is produced by `system-status --json`. Prefer the
-HTTP endpoint for live production checks because it is served by the already
-running `vpn-control.service` process and includes that process' in-memory
-worker heartbeat. A separate CLI invocation is still useful for database and
-filesystem checks, but it starts a short-lived process and cannot prove that the
-systemd service's worker threads are alive.
+The same payload format is produced by `system-status --json`. Worker heartbeat
+is stored in SQLite, so both the HTTP endpoint and a separate CLI invocation can
+show whether the Auto probe and provider refresh workers have recently run.
 
 It includes:
 
 - agent online/stale state;
 - probe job counts and latest probe timestamps;
 - provider transport freshness by provider;
-- in-process worker heartbeat for Auto probe and provider refresh workers;
+- worker heartbeat for Auto probe and provider refresh workers;
 - advertised primary/fallback control endpoints;
 - Cudy fallback-state reachability;
 - local backup archive and local fallback-sync log freshness when those files

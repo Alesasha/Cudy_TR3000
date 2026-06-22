@@ -309,8 +309,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "vpn_control.db")
     parser.add_argument("--skip-package-install", action="store_true", help="Skip apt/package checks on an already prepared VPS.")
     parser.add_argument("--no-archive-upload", dest="archive_upload", action="store_false", help="Upload files one-by-one instead of a single tar archive.")
-    parser.add_argument("--no-upload-db", dest="upload_db", action="store_false")
-    parser.set_defaults(upload_db=True, archive_upload=True)
+    parser.add_argument("--upload-db", dest="upload_db", action="store_true", help="Explicitly upload the local SQLite DB to the server. Dangerous for production deploys.")
+    parser.add_argument("--no-upload-db", dest="upload_db", action="store_false", help="Do not upload the local SQLite DB. This is the default.")
+    parser.set_defaults(upload_db=False, archive_upload=True)
     return parser
 
 
