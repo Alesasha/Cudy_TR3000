@@ -3,7 +3,9 @@ param(
     [string]$SourcePasswordFile = "$PSScriptRoot\..\secrets\control_backup_ssh_password.txt",
     [string]$CudyPasswordFile = "$PSScriptRoot\..\secrets\cudy_ssh_password.txt",
     [string]$LogPath = "$PSScriptRoot\..\backups\control-server\cudy-fallback-sync.log",
-    [int]$KeepRemote = 3
+    [int]$KeepRemote = 3,
+    [int]$ConnectAttempts = 12,
+    [int]$Timeout = 90
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,7 +38,11 @@ if (-not $env:CUDY_SSH_PASSWORD -and (Test-Path -LiteralPath $CudyPasswordFile))
 try {
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -LiteralPath $logPathResolved -Encoding UTF8 -Value "[$stamp] starting Cudy fallback sync"
-    $syncOutput = & $Python $script --keep-remote $KeepRemote --json 2>&1
+    $syncOutput = & $Python $script `
+        --keep-remote $KeepRemote `
+        --connect-attempts $ConnectAttempts `
+        --timeout $Timeout `
+        --json 2>&1
     $syncOutput | ForEach-Object {
         $line = [string]$_
         Write-Host $line
