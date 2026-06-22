@@ -196,7 +196,14 @@ Detailed status is also available to admins through:
 GET /api/status
 ```
 
-The same payload is produced by `system-status --json`. It includes:
+The same payload format is produced by `system-status --json`. Prefer the
+HTTP endpoint for live production checks because it is served by the already
+running `vpn-control.service` process and includes that process' in-memory
+worker heartbeat. A separate CLI invocation is still useful for database and
+filesystem checks, but it starts a short-lived process and cannot prove that the
+systemd service's worker threads are alive.
+
+It includes:
 
 - agent online/stale state;
 - probe job counts and latest probe timestamps;

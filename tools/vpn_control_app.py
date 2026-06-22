@@ -6846,7 +6846,24 @@ def recent_auto_winners(db_path: Path, inventory_path: Path, *, target: str = ""
             """,
             (*params, limit),
         )
+        cache_params: list[Any] = []
+        cache_where = "selected_server_id IS NOT NULL"
+        if keys:
+            cache_where += " AND domain IN (%s)" % ",".join("?" for _ in keys)
+            cache_params.extend(keys)
+        cache_entries = rows(
+            conn,
+            f"""
+            SELECT domain, selected_server_id, score_ms, status, checked_at, metadata_json
+            FROM domain_auto_cache
+            WHERE {cache_where}
+            ORDER BY checked_at DESC
+            LIMIT ?
+            """,
+            (*cache_params, limit),
+        )
     result: list[dict[str, Any]] = []
+    seen_cache_keys: set[tuple[str, str]] = set()
     for item in entries:
         try:
             payload = json.loads(item.pop("result_json") or "{}")
@@ -6869,6 +6886,46 @@ def recent_auto_winners(db_path: Path, inventory_path: Path, *, target: str = ""
                 "remote_ip": winner.get("remote_ip") or "",
                 "ok_candidates": len(ok_checks),
                 "checks": checks,
+            }
+        )
+        if item.get("domain") and item.get("winner_server_id"):
+            seen_cache_keys.add((str(item["domain"]), str(item["winner_server_id"])))
+    for item in cache_entries:
+        if len(result) >= limit:
+            break
+        cache_key = (str(item.get("domain") or ""), str(item.get("selected_server_id") or ""))
+        if cache_key in seen_cache_keys:
+            continue
+        try:
+            metadata = json.loads(item.get("metadata_json") or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        candidates = metadata.get("candidate_server_ids") or metadata.get("candidate_server_ids_expanded") or []
+        if not isinstance(candidates, list):
+            candidates = []
+        result.append(
+            {
+                "id": None,
+                "domain": item.get("domain") or "",
+                "user_id": metadata.get("user_id") or "",
+                "candidate_server_ids": candidates,
+                "claimed_by_device_id": metadata.get("device_id") or "",
+                "winner_server_id": item.get("selected_server_id") or "",
+                "score_ms": item.get("score_ms"),
+                "updated_at": item.get("checked_at"),
+                "finished_at": item.get("checked_at"),
+                "winner": {
+                    "server_id": item.get("selected_server_id") or "",
+                    "time_total_ms": item.get("score_ms"),
+                    "source": "auto_cache",
+                },
+                "latency_ms": item.get("score_ms"),
+                "speed_mbps": None,
+                "remote_ip": metadata.get("remote_ip") or "",
+                "ok_candidates": metadata.get("checked_candidates") or 0,
+                "checks": [],
+                "source": "auto_cache",
+                "status": item.get("status") or "",
             }
         )
     return {"ok": True, "target": target, "cache_keys": keys, "winners": result}

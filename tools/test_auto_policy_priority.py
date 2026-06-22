@@ -111,12 +111,31 @@ def run_all_rest_check(db_path: Path) -> None:
     assert_equal(len(expanded), len(set(expanded)), "all-rest expansion should not duplicate servers")
 
 
+def run_auto_winners_cache_fallback_check(db_path: Path) -> None:
+    app.save_auto_cache_entry(
+        db_path,
+        INVENTORY,
+        domain="winner-cache.example",
+        selected_server_id="proxyde",
+        score_ms=123,
+        status="auto",
+        metadata={"user_id": TEST_USER_ID, "checked_candidates": 2},
+    )
+    result = app.recent_auto_winners(db_path, INVENTORY, target="winner-cache.example", limit=10)
+    winners = result["winners"]
+    assert_equal(len(winners), 1, "auto winners should fall back to cache entry")
+    assert_equal(winners[0]["winner_server_id"], "proxyde", "cache fallback winner server")
+    assert_equal(winners[0]["latency_ms"], 123, "cache fallback latency")
+    assert_equal(winners[0]["source"], "auto_cache", "cache fallback source")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-") as tmp:
         db_path = Path(tmp) / "vpn_control.db"
         app.init_db(db_path, INVENTORY)
         run_priority_resolution_check(db_path)
         run_all_rest_check(db_path)
+        run_auto_winners_cache_fallback_check(db_path)
         gc.collect()
 
     print("Auto priority policy regression passed.")
