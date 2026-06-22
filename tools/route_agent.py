@@ -755,7 +755,7 @@ def route_command_for_ip(
             interface_map=interface_map,
             default_route=default_route,
         )
-    if server_id == "direct":
+    if server_id in {"", "auto", "direct"}:
         dev = default_route.get("dev")
         via = default_route.get("via")
         if dev and via:
@@ -825,7 +825,7 @@ def windows_route_command_for_ip(
     interface_map: dict[str, str],
     default_route: dict[str, str | None],
 ) -> tuple[str, str]:
-    if server_id == "direct":
+    if server_id in {"", "auto", "direct"}:
         interface = str(default_route.get("interface_index") or default_route.get("dev") or "")
         if not interface:
             return "direct", "# cannot build direct route: default route not detected"
