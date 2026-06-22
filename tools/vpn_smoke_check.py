@@ -35,6 +35,7 @@ CHECKS = [
     Check("control server HTTP smoke", ["tools/test_control_server_http.py"]),
     Check("effective route plan builds", ["tools/vpn_control_app.py", "route-plan"]),
     Check("Auto priority policy regression", ["tools/test_auto_policy_priority.py"]),
+    Check("provider parsing regression", ["tools/test_provider_parsing.py"]),
     Check("auto cache lists", ["tools/vpn_control_app.py", "auto-cache-list"]),
     Check("Auto priority policies list", ["tools/vpn_control_app.py", "auto-candidates-list"]),
     Check("Auto winners list", ["tools/vpn_control_app.py", "auto-winners", "ifconfig.me"]),

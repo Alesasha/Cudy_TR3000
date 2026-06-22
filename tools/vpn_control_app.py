@@ -2977,19 +2977,19 @@ VPNTYPE_PROVIDER_META: dict[str, dict[str, Any]] = {
     "proxyde": {"country": "DE", "candidates": [159, 55]},
 }
 
-LOKVPN_PROFILE_MAP: dict[str, tuple[int, int]] = {
-    "smart1": (0, 1),
-    "de1": (1, 0),
-    "ru1": (2, 0),
-    "nl1": (3, 0),
-    "fr1": (4, 0),
-    "se1": (5, 0),
-    "smart2": (6, 1),
-    "de2": (7, 0),
-    "ru2": (8, 0),
-    "nl2": (9, 0),
-    "fr2": (10, 0),
-    "se2": (11, 0),
+LOKVPN_PROFILE_TAGS: dict[str, list[str]] = {
+    "smart1": ["DE", "RU"],
+    "de1": ["DE"],
+    "ru1": ["RU"],
+    "nl1": ["NL"],
+    "fr1": ["FR"],
+    "se1": ["SE"],
+    "smart2": ["RU", "DE"],
+    "de2": ["DE"],
+    "ru2": ["RU"],
+    "nl2": ["NL"],
+    "fr2": ["FR"],
+    "se2": ["SE"],
 }
 
 
@@ -3361,9 +3361,64 @@ def fetch_lokvpn_subscription(sub_url: str) -> Any:
 
 def lokvpn_profile_from_server_id(server_id: str) -> str:
     profile = server_id.removeprefix("lokvpn-")
-    if profile not in LOKVPN_PROFILE_MAP:
+    if profile not in LOKVPN_PROFILE_TAGS:
         raise ValueError(f"Unknown LokVPN profile server_id: {server_id}")
     return profile
+
+
+def iter_lokvpn_outbounds(subscription: Any) -> Iterable[dict[str, Any]]:
+    configs = subscription if isinstance(subscription, list) else [subscription]
+    for config in configs:
+        if not isinstance(config, dict):
+            continue
+        outbounds = config.get("outbounds")
+        if not isinstance(outbounds, list):
+            continue
+        for outbound in outbounds:
+            if isinstance(outbound, dict):
+                yield outbound
+
+
+def lokvpn_outbound_tag(outbound: dict[str, Any]) -> str:
+    return re.sub(r"\s+", "", str(outbound.get("tag") or "")).upper()
+
+
+def find_lokvpn_outbound(subscription: Any, profile: str) -> dict[str, Any]:
+    wanted = [item.upper() for item in LOKVPN_PROFILE_TAGS[profile]]
+    vless_outbounds = [
+        outbound
+        for outbound in iter_lokvpn_outbounds(subscription)
+        if str(outbound.get("protocol") or "").lower() == "vless"
+    ]
+    by_tag = {lokvpn_outbound_tag(outbound): outbound for outbound in vless_outbounds}
+    for tag in wanted:
+        if tag in by_tag:
+            return by_tag[tag]
+    available = ", ".join(sorted(tag for tag in by_tag if tag)) or "none"
+    raise ValueError(f"LokVPN profile {profile} is not present in subscription; available tags: {available}")
+
+
+def parse_lokvpn_outbound(profile: str, outbound: dict[str, Any]) -> dict[str, Any]:
+    try:
+        vnext = outbound["settings"]["vnext"][0]
+        user = vnext["users"][0]
+        reality = outbound["streamSettings"]["realitySettings"]
+        parsed = {
+            "server": vnext["address"],
+            "server_port": int(vnext["port"]),
+            "uuid": user["id"],
+            "flow": user["flow"],
+            "sni": reality["serverName"],
+            "public_key": reality["publicKey"],
+            "short_id": reality["shortId"],
+        }
+    except (KeyError, IndexError, TypeError, ValueError) as exc:
+        raise ValueError(f"Could not parse LokVPN profile {profile}") from exc
+    if isinstance(parsed["short_id"], list):
+        parsed["short_id"] = parsed["short_id"][0] if parsed["short_id"] else ""
+    if any(not parsed[key] for key in ("server", "server_port", "uuid", "flow", "sni", "public_key", "short_id")):
+        raise ValueError(f"Could not parse LokVPN profile {profile}")
+    return parsed
 
 
 def refresh_lokvpn_transport(
@@ -3381,25 +3436,8 @@ def refresh_lokvpn_transport(
         if not sub_url:
             raise ValueError("LokVPN subscription URL is not configured. Set LOKVPN_SUB_URL/SUB_URL or secrets/lokvpn_sub_url.txt.")
         subscription = fetch_lokvpn_subscription(sub_url)
-    idx, outbound_idx = LOKVPN_PROFILE_MAP[profile]
-    try:
-        outbound = subscription[idx]["outbounds"][outbound_idx]
-        vnext = outbound["settings"]["vnext"][0]
-        user = vnext["users"][0]
-        reality = outbound["streamSettings"]["realitySettings"]
-        parsed = {
-            "server": vnext["address"],
-            "server_port": int(vnext["port"]),
-            "uuid": user["id"],
-            "flow": user["flow"],
-            "sni": reality["serverName"],
-            "public_key": reality["publicKey"],
-            "short_id": reality["shortId"],
-        }
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise ValueError(f"Could not parse LokVPN profile {profile}") from exc
-    if any(not parsed[key] for key in ("server", "server_port", "uuid", "flow", "sni", "public_key", "short_id")):
-        raise ValueError(f"Could not parse LokVPN profile {profile}")
+    outbound = find_lokvpn_outbound(subscription, profile)
+    parsed = parse_lokvpn_outbound(profile, outbound)
     config = {
         "server": str(parsed["server"]),
         "server_port": int(parsed["server_port"]),
