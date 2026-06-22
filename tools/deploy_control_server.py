@@ -37,6 +37,14 @@ EXCLUDE_NAMES = {
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".log", ".tmp", ".bak"}
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def ssh_password(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -228,7 +236,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             "curl -fsS http://127.0.0.1:8765/healthz >/tmp/vpn-control-health.json 2>/tmp/vpn-control-health.err && break; "
             "sleep 1; "
             "done\n"
-            f"systemctl --no-pager --full status {shlex.quote(args.service_name)} | head -40\n"
+            f"systemctl show {shlex.quote(args.service_name)} --property=ActiveState,SubState,MainPID,ExecMainStatus,ExecMainStartTimestamp --no-pager\n"
             "cat /tmp/vpn-control-health.json\n",
             args.timeout * 3,
         )
@@ -256,6 +264,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    configure_stdio()
     args = build_parser().parse_args()
     try:
         result = deploy(args)
