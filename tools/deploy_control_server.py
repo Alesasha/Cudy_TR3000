@@ -14,8 +14,11 @@ import posixpath
 import shlex
 import stat
 import sys
+import tarfile
+import tempfile
 import time
 from pathlib import Path
+from typing import Iterable
 
 import paramiko
 
@@ -150,6 +153,37 @@ def upload_tree(sftp: paramiko.SFTPClient, local_dir: Path, remote_dir: str) -> 
     return count
 
 
+def archive_paths() -> Iterable[Path]:
+    for dirname in UPLOAD_DIRS:
+        path = ROOT / dirname
+        if path.exists():
+            yield path
+    for filename in UPLOAD_FILES:
+        path = ROOT / filename
+        if path.exists():
+            yield path
+
+
+def build_archive(output: Path) -> int:
+    count = 0
+    with tarfile.open(output, "w") as tar:
+        for base in archive_paths():
+            if base.is_file():
+                tar.add(base, arcname=base.relative_to(ROOT).as_posix())
+                count += 1
+                continue
+            for path in base.rglob("*"):
+                rel = path.relative_to(ROOT)
+                if any(should_skip(parent) for parent in rel.parents if str(parent) != "."):
+                    continue
+                if should_skip(path):
+                    continue
+                tar.add(path, arcname=rel.as_posix())
+                if path.is_file():
+                    count += 1
+    return count
+
+
 def remote_file_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
     try:
         mode = sftp.stat(path).st_mode
@@ -189,17 +223,33 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
         sftp = client.open_sftp()
         sftp.get_channel().settimeout(args.timeout)
         try:
-            for dirname in UPLOAD_DIRS:
-                local_dir = ROOT / dirname
-                if local_dir.exists():
-                    print(f"Uploading {dirname}/...", flush=True)
-                    uploaded += upload_tree(sftp, local_dir, posixpath.join(args.remote_dir, dirname))
-            for filename in UPLOAD_FILES:
-                local_file = ROOT / filename
-                if local_file.exists():
-                    print(f"Uploading {filename}...", flush=True)
-                    upload_file(sftp, local_file, posixpath.join(args.remote_dir, filename))
-                    uploaded += 1
+            if args.archive_upload:
+                with tempfile.TemporaryDirectory(prefix="cudy-control-deploy-") as temp_dir:
+                    archive = Path(temp_dir) / "cudy-control-deploy.tar"
+                    uploaded = build_archive(archive)
+                    remote_archive = f"/tmp/cudy-control-deploy-{int(time.time())}.tar"
+                    print(f"Uploading archive ({archive.stat().st_size} bytes, {uploaded} files)...", flush=True)
+                    sftp.put(str(archive), remote_archive)
+                    ssh_exec(
+                        client,
+                        "set -eu\n"
+                        f"mkdir -p {shlex.quote(args.remote_dir)}\n"
+                        f"tar -xf {shlex.quote(remote_archive)} -C {shlex.quote(args.remote_dir)}\n"
+                        f"rm -f {shlex.quote(remote_archive)}\n",
+                        args.timeout * 2,
+                    )
+            else:
+                for dirname in UPLOAD_DIRS:
+                    local_dir = ROOT / dirname
+                    if local_dir.exists():
+                        print(f"Uploading {dirname}/...", flush=True)
+                        uploaded += upload_tree(sftp, local_dir, posixpath.join(args.remote_dir, dirname))
+                for filename in UPLOAD_FILES:
+                    local_file = ROOT / filename
+                    if local_file.exists():
+                        print(f"Uploading {filename}...", flush=True)
+                        upload_file(sftp, local_file, posixpath.join(args.remote_dir, filename))
+                        uploaded += 1
             local_db = args.db
             remote_db = posixpath.join(args.remote_dir, "data", "vpn_control.db")
             if args.upload_db and local_db.exists():
@@ -258,8 +308,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--service-user", default="cudy-control")
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "vpn_control.db")
     parser.add_argument("--skip-package-install", action="store_true", help="Skip apt/package checks on an already prepared VPS.")
+    parser.add_argument("--no-archive-upload", dest="archive_upload", action="store_false", help="Upload files one-by-one instead of a single tar archive.")
     parser.add_argument("--no-upload-db", dest="upload_db", action="store_false")
-    parser.set_defaults(upload_db=True)
+    parser.set_defaults(upload_db=True, archive_upload=True)
     return parser
 
 
