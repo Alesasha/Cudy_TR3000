@@ -651,7 +651,6 @@ do {
             foreach ($spec in $singBoxSpecs) {
                 $desiredControlTransports.Add($spec.InterfaceName) | Out-Null
             }
-            Stop-UnusedSingBoxTransports -DesiredNames $desiredControlTransports.ToArray()
             foreach ($transport in @($agentConfig.transport_plan)) {
                 Ensure-ControlTransport -Transport $transport
                 $cycleInterfaceMaps.Add("$($transport.server_id)=$($transport.interface_name)") | Out-Null
@@ -677,6 +676,9 @@ do {
         $probeResult = Run-ProbeJobs -InterfaceMaps $cycleInterfaceMaps.ToArray()
         if ($probeResult.Jobs -gt 0) {
             Write-AgentLine "probe jobs processed: jobs=$($probeResult.Jobs) completed=$($probeResult.Completed) failed=$($probeResult.Failed)"
+        }
+        if (-not $NoControlTransportPlan) {
+            Stop-UnusedSingBoxTransports -DesiredNames $desiredControlTransports.ToArray()
         }
     } catch {
         Write-AgentLine "agent cycle failed: $($_.Exception.Message)" -Level WARN

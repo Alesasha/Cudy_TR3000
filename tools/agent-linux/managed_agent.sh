@@ -99,7 +99,6 @@ for row in json.load(open(sys.argv[1], encoding="utf-8")):
     if name:
         print(name)
 PY
-      stop_unused_transports run/desired-transports.txt
       args=()
       while IFS= read -r map; do
         [ -n "$map" ] && args+=(--interface-map "$map")
@@ -113,6 +112,7 @@ PY
           python3 ./route_agent.py apply "${baseline_args[@]}" "${args[@]}" --yes --post-status
       fi
       python3 ./route_agent.py probe-jobs "${args[@]}" --limit 2 || true
+      stop_unused_transports run/desired-transports.txt
       log "cycle applied: maps=$(tr '\n' ',' < "$map_file" | sed 's/,$//')"
       cycle_ok=1
     else
