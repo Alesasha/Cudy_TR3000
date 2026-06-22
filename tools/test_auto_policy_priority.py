@@ -129,6 +129,29 @@ def run_auto_winners_cache_fallback_check(db_path: Path) -> None:
     assert_equal(winners[0]["source"], "auto_cache", "cache fallback source")
 
 
+def run_unresolved_auto_domain_falls_back_to_direct_check(db_path: Path) -> None:
+    save_policy(db_path, user_id=TEST_USER_ID, domain="uncached.example", servers=["proxyde"])
+    timestamp = app.now()
+    with closing(app.connect(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, ?, 'auto', 1, ?, ?)
+            """,
+            (TEST_USER_ID, "uncached.example", timestamp, timestamp),
+        )
+        config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={"id": "test-device", "display_name": "Test Device", "platform": "windows"},
+        )
+    routes = [route for route in config["domain_routes"] if route["domain"] == "uncached.example"]
+    assert_equal(len(routes), 1, "uncached auto domain route should be present")
+    assert_equal(routes[0]["requested_server_id"], "auto", "uncached auto requested server")
+    assert_equal(routes[0]["server_id"], "direct", "uncached auto domain should fall back to direct")
+    assert_true(config["warnings"], "uncached auto domain should emit warning")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-") as tmp:
         db_path = Path(tmp) / "vpn_control.db"
@@ -136,6 +159,7 @@ def main() -> int:
         run_priority_resolution_check(db_path)
         run_all_rest_check(db_path)
         run_auto_winners_cache_fallback_check(db_path)
+        run_unresolved_auto_domain_falls_back_to_direct_check(db_path)
         gc.collect()
 
     print("Auto priority policy regression passed.")

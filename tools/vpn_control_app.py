@@ -5391,7 +5391,7 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
             warnings=route_warnings,
         )
         warnings.extend(route_warnings)
-        server_id = resolved_server_id or requested_server_id
+        server_id = resolved_server_id or ("direct" if requested_server_id == "auto" else requested_server_id)
         referenced_server_ids.add(server_id)
         domain_routes.append(
             {
