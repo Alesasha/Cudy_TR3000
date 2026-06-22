@@ -406,9 +406,9 @@ function Ensure-ControlTransport {
     $newConfig = Get-Content -Raw -LiteralPath $configPath
     $restart = ($oldConfig -ne "" -and $oldConfig -ne $newConfig)
     if ($restart) {
-        Write-AgentLine "Transport config changed for $iface; keeping existing running transport until explicit restart."
+        Write-AgentLine "Transport config changed for $iface; restarting managed transport."
     }
-    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $iface -ConfigPath $configPath
+    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $iface -ConfigPath $configPath -Restart:$restart
 }
 
 function Ensure-AwgTransport {
