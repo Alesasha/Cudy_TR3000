@@ -209,6 +209,8 @@ It includes:
 - agent online/stale state;
 - probe job counts and latest probe timestamps;
 - provider transport freshness by provider;
+- stale enabled transport configs, for example provider profiles that remain in
+  SQLite after a provider subscription stops returning that location;
 - worker heartbeat for Auto probe and provider refresh workers;
 - advertised primary/fallback control endpoints;
 - Cudy fallback-state reachability;

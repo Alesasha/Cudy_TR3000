@@ -73,6 +73,7 @@ CONTROL_BACKUP_DIR = ROOT / "backups" / "control-server"
 CONTROL_BACKUP_MAX_AGE_SECONDS = int(os.environ.get("CONTROL_BACKUP_MAX_AGE_SECONDS", str(36 * 60 * 60)))
 CONTROL_BACKUP_STATUS_WARN = os.environ.get("CONTROL_BACKUP_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
+TRANSPORT_STALE_WARN_SECONDS = int(os.environ.get("TRANSPORT_STALE_WARN_SECONDS", str(24 * 60 * 60)))
 WORKER_STATUS_LOCK = threading.Lock()
 WORKER_STATUS: dict[str, dict[str, Any]] = {
     "auto_probe": {"enabled": False, "last_started_at": None, "last_finished_at": None, "last_error": None},
@@ -5282,6 +5283,23 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "newest_updated_at": item.get("newest_updated_at"),
                 "newest_age_seconds": timestamp_age_seconds(item.get("newest_updated_at"), reference=reference),
             }
+        stale_transports: list[dict[str, Any]] = []
+        stale_by_provider: dict[str, int] = {}
+        for item in transports:
+            age = timestamp_age_seconds(item.get("updated_at"), reference=reference)
+            if not item.get("enabled") or age is None or age <= TRANSPORT_STALE_WARN_SECONDS:
+                continue
+            provider = item.get("provider") or "unknown"
+            stale_by_provider[provider] = stale_by_provider.get(provider, 0) + 1
+            stale_transports.append(
+                {
+                    "server_id": item.get("server_id"),
+                    "label": item.get("label"),
+                    "provider": provider,
+                    "updated_at": item.get("updated_at"),
+                    "age_seconds": age,
+                }
+            )
         fallback = cudy_fallback_state_status()
         warnings: list[str] = []
         if CUDY_FALLBACK_STATUS_WARN and not fallback.get("ok"):
@@ -5295,6 +5313,9 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
         if offline_enabled_agents:
             warnings.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
+        if stale_transports:
+            details = ", ".join(f"{key}={value}" for key, value in sorted(stale_by_provider.items()))
+            warnings.append(f"{len(stale_transports)} enabled transport config(s) are stale over {TRANSPORT_STALE_WARN_SECONDS}s ({details})")
         local_backup = latest_file_status(CONTROL_BACKUP_DIR, "cudy-control-*.tgz", reference=reference)
         backup_task_log = file_status(CONTROL_BACKUP_DIR / "backup-task.log", reference=reference)
         fallback_sync_log = file_status(CONTROL_BACKUP_DIR / "cudy-fallback-sync.log", reference=reference)
@@ -5357,6 +5378,10 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "providers": providers,
                 "newest_age_seconds": newest_transport_age,
                 "oldest_age_seconds": oldest_transport_age,
+                "stale_warn_seconds": TRANSPORT_STALE_WARN_SECONDS,
+                "stale_enabled": stale_transports[:50],
+                "stale_enabled_count": len(stale_transports),
+                "stale_by_provider": stale_by_provider,
             },
             "workers": worker_status_snapshot(db_path, reference=reference),
             "operations": {
