@@ -9,7 +9,13 @@ using Android.Util;
     Name = "com.nashvpn.cudyagent.BootReceiver",
     Enabled = true,
     Exported = true)]
-[IntentFilter(new[] { Intent.ActionBootCompleted, Intent.ActionMyPackageReplaced, BootReceiver.ActionTestStart })]
+[IntentFilter(new[]
+{
+    Intent.ActionBootCompleted,
+    Intent.ActionUserUnlocked,
+    Intent.ActionMyPackageReplaced,
+    BootReceiver.ActionTestStart
+})]
 public sealed class BootReceiver : BroadcastReceiver
 {
     private const string LogTag = "CudyAgent";
@@ -24,6 +30,7 @@ public sealed class BootReceiver : BroadcastReceiver
 
         var action = intent?.Action ?? "";
         if (action != Intent.ActionBootCompleted
+            && action != Intent.ActionUserUnlocked
             && action != Intent.ActionMyPackageReplaced
             && action != ActionTestStart)
         {
