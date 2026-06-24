@@ -111,6 +111,40 @@ def run_all_rest_check(db_path: Path) -> None:
     assert_equal(len(expanded), len(set(expanded)), "all-rest expansion should not duplicate servers")
 
 
+def run_stale_provider_transports_are_not_default_candidates_check(db_path: Path) -> None:
+    app.save_transport_config(
+        db_path,
+        INVENTORY,
+        server_id="proxyde",
+        transport_type="http-proxy-tun",
+        interface_name="proxyde",
+        config={"server": "127.0.0.1", "server_port": 8080},
+        enabled=True,
+        source="test",
+    )
+    app.save_transport_config(
+        db_path,
+        INVENTORY,
+        server_id="proxynl",
+        transport_type="http-proxy-tun",
+        interface_name="proxynl",
+        config={"server": "127.0.0.1", "server_port": 8081},
+        enabled=True,
+        source="test",
+    )
+    with closing(app.connect(db_path)) as conn:
+        conn.execute("UPDATE transport_configs SET updated_at = '2000-01-01T00:00:00+00:00' WHERE server_id = 'proxynl'")
+        servers = app.server_map(conn)
+        defaults = app.default_auto_candidate_ids(servers)
+        user_visible = {item["id"]: item for item in app.user_servers(conn)}
+
+    assert_true("proxyde" in defaults, "fresh provider transport should remain an Auto candidate")
+    assert_true("proxynl" not in defaults, "stale provider transport should not be an Auto candidate")
+    assert_true(user_visible["proxyde"]["candidate_available"], "fresh provider transport should be candidate-available")
+    assert_true(not user_visible["proxynl"]["candidate_available"], "stale provider transport should be candidate-unavailable")
+    assert_true(user_visible["proxynl"]["transport_stale"], "stale provider transport should be marked stale")
+
+
 def run_auto_winners_cache_fallback_check(db_path: Path) -> None:
     app.save_auto_cache_entry(
         db_path,
@@ -158,6 +192,7 @@ def main() -> int:
         app.init_db(db_path, INVENTORY)
         run_priority_resolution_check(db_path)
         run_all_rest_check(db_path)
+        run_stale_provider_transports_are_not_default_candidates_check(db_path)
         run_auto_winners_cache_fallback_check(db_path)
         run_unresolved_auto_domain_falls_back_to_direct_check(db_path)
         gc.collect()

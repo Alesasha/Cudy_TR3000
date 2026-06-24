@@ -572,6 +572,7 @@ USER_HTML = r"""<!doctype html>
     const serverLabel = id => (id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
     const serverProvider = id => (state.servers.find(s => s.id === id) || { provider: "" }).provider || "";
     const priorityText = policy => policy ? (policy.candidate_server_ids || []).join(", ") : "";
+    const optionLabel = s => `${s.label}${s.candidate_available === false ? " (stale)" : ""}`;
 
     async function api(path, options) {
       const response = await fetch(path, {
@@ -586,7 +587,7 @@ USER_HTML = r"""<!doctype html>
     function fillServerSelect(select, value) {
       select.innerHTML = state.servers.map(s => {
         const geo = s.geo_region ? `${s.geo_country}-${s.geo_region}` : s.geo_country;
-        return `<option value="${s.id}">${s.label} ${geo ? "(" + geo + ")" : ""}</option>`;
+        return `<option value="${s.id}" ${s.candidate_available === false ? "disabled" : ""}>${optionLabel(s)} ${geo ? "(" + geo + ")" : ""}</option>`;
       }).join("");
       select.value = value || "auto";
     }
@@ -867,7 +868,7 @@ ADMIN_HTML = r"""<!doctype html>
       <p id="serverStatus" class="status"></p>
       <table>
         <thead>
-          <tr><th>ID</th><th>Label</th><th>Provider</th><th>Interface</th><th>Geo</th><th>Enabled</th><th>User</th><th></th></tr>
+          <tr><th>ID</th><th>Label</th><th>Provider</th><th>Interface</th><th>Geo</th><th>Status</th><th>Enabled</th><th>User</th><th></th></tr>
         </thead>
         <tbody id="serversBody"></tbody>
       </table>
@@ -1057,6 +1058,7 @@ ADMIN_HTML = r"""<!doctype html>
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const serverLabel = id => (id === ALL_REST || id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
+    const serverOptionLabel = s => `${s.label}${s.candidate_available === false ? " (stale)" : ""}`;
     async function api(path, options) {
       const response = await fetch(path, {
         headers: { "content-type": "application/json" },
@@ -1067,16 +1069,16 @@ ADMIN_HTML = r"""<!doctype html>
       return data;
     }
     function serverOptions(value) {
-      return state.servers.map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${s.label}</option>`).join("");
+      return state.servers.map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""} ${s.candidate_available === false ? "disabled" : ""}>${serverOptionLabel(s)}</option>`).join("");
     }
     function physicalServerOptions(value) {
       return state.servers
-        .filter(s => s.id !== "auto" && s.enabled && s.user_visible)
-        .map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${s.label}</option>`)
+        .filter(s => s.id !== "auto" && s.enabled && s.user_visible && s.candidate_available !== false)
+        .map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${serverOptionLabel(s)}</option>`)
         .join("");
     }
     function physicalServers() {
-      return state.servers.filter(s => s.id !== "auto" && s.enabled && s.user_visible);
+      return state.servers.filter(s => s.id !== "auto" && s.enabled && s.user_visible && s.candidate_available !== false);
     }
     function userOptions(value) {
       return state.users.map(u => `<option value="${u.id}" ${u.id === value ? "selected" : ""}>${u.id}</option>`).join("");
@@ -1322,6 +1324,7 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${s.provider}</td>
           <td>${s.interface || ""}</td>
           <td>${s.geo_region ? `${s.geo_country}-${s.geo_region}` : s.geo_country || ""}</td>
+          <td>${s.transport_required ? (s.candidate_available ? "transport ok" : (s.transport_config_present ? `stale ${fmtAge(s.transport_age_seconds)}` : "missing transport")) : "ok"}</td>
           <td><input type="checkbox" data-field="enabled" ${s.enabled ? "checked" : ""}></td>
           <td><input type="checkbox" data-field="user_visible" ${s.user_visible ? "checked" : ""}></td>
           <td><button data-save="${s.id}">Save</button></td>
@@ -2784,8 +2787,57 @@ def row(conn: sqlite3.Connection, sql: str, params: tuple[Any, ...] = ()) -> dic
     return dict(value) if value is not None else None
 
 
+PROVIDER_TRANSPORT_PROVIDERS = {"vpntype", "lokvpn"}
+
+
+def provider_transport_required(server: dict[str, Any]) -> bool:
+    return (server.get("provider") or "") in PROVIDER_TRANSPORT_PROVIDERS and (server.get("kind") or "") in {
+        "http-proxy-tun",
+        "sing-box-profile",
+    }
+
+
+def transport_status_by_server(conn: sqlite3.Connection, *, reference: datetime | None = None) -> dict[str, dict[str, Any]]:
+    reference = reference or datetime.now(timezone.utc)
+    result: dict[str, dict[str, Any]] = {}
+    for item in rows(conn, "SELECT server_id, enabled, updated_at FROM transport_configs"):
+        age = timestamp_age_seconds(item.get("updated_at"), reference=reference)
+        stale = age is not None and age > TRANSPORT_STALE_WARN_SECONDS
+        result[item["server_id"]] = {
+            "transport_config_present": True,
+            "transport_config_enabled": bool(item.get("enabled")),
+            "transport_updated_at": item.get("updated_at"),
+            "transport_age_seconds": age,
+            "transport_stale": stale,
+        }
+    return result
+
+
+def annotate_server_transport_status(conn: sqlite3.Connection, servers: list[dict[str, Any]] | dict[str, dict[str, Any]]) -> list[dict[str, Any]] | dict[str, dict[str, Any]]:
+    statuses = transport_status_by_server(conn)
+    items = servers.values() if isinstance(servers, dict) else servers
+    for server in items:
+        status = statuses.get(server.get("id"), {})
+        requires_transport = provider_transport_required(server)
+        server["transport_required"] = requires_transport
+        server["transport_config_present"] = bool(status.get("transport_config_present"))
+        server["transport_config_enabled"] = bool(status.get("transport_config_enabled"))
+        server["transport_updated_at"] = status.get("transport_updated_at")
+        server["transport_age_seconds"] = status.get("transport_age_seconds")
+        server["transport_stale"] = bool(status.get("transport_stale"))
+        server["candidate_available"] = (
+            not requires_transport
+            or (
+                bool(status.get("transport_config_present"))
+                and bool(status.get("transport_config_enabled"))
+                and not bool(status.get("transport_stale"))
+            )
+        )
+    return servers
+
+
 def user_servers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return rows(
+    servers = rows(
         conn,
         """
         SELECT id, label, provider, kind, interface, geo_country, geo_region, enabled, user_visible
@@ -2794,10 +2846,11 @@ def user_servers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         ORDER BY sort_order, label
         """,
     )
+    return annotate_server_transport_status(conn, servers)
 
 
 def admin_servers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
-    return rows(
+    servers = rows(
         conn,
         """
         SELECT id, label, provider, kind, interface, geo_country, geo_region, endpoint,
@@ -2807,10 +2860,11 @@ def admin_servers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         ORDER BY sort_order, label
         """,
     )
+    return annotate_server_transport_status(conn, servers)
 
 
 def server_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
-    return {
+    servers = {
         item["id"]: item
         for item in rows(
             conn,
@@ -2822,6 +2876,7 @@ def server_map(conn: sqlite3.Connection) -> dict[str, dict[str, Any]]:
             """,
         )
     }
+    return annotate_server_transport_status(conn, servers)
 
 
 def compact_server(server: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -2844,6 +2899,10 @@ def compact_server(server: dict[str, Any] | None) -> dict[str, Any] | None:
         "geo_country": server.get("geo_country"),
         "geo_region": server.get("geo_region"),
         "enabled": bool(server.get("enabled")),
+        "candidate_available": bool(server.get("candidate_available", True)),
+        "transport_required": bool(server.get("transport_required")),
+        "transport_stale": bool(server.get("transport_stale")),
+        "transport_age_seconds": server.get("transport_age_seconds"),
     }
 
 
@@ -4473,7 +4532,14 @@ def create_auto_probe_jobs_once(
                 or default_candidates
             )
             candidates = expand_auto_candidate_ids(servers, candidates)
-            candidates = [server_id for server_id in candidates if server_id in servers and servers[server_id].get("enabled") and servers[server_id].get("user_visible")]
+            candidates = [
+                server_id
+                for server_id in candidates
+                if server_id in servers
+                and servers[server_id].get("enabled")
+                and servers[server_id].get("user_visible")
+                and servers[server_id].get("candidate_available", True)
+            ]
             if not candidates:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "no_candidates"})
                 continue
@@ -4651,7 +4717,7 @@ def default_auto_candidate_ids(servers: dict[str, dict[str, Any]]) -> list[str]:
     return [
         server_id
         for server_id, server in sorted(servers.items(), key=lambda item: (item[1].get("sort_order") or 0, item[0]))
-        if server_id != "auto" and server.get("enabled") and server.get("user_visible")
+        if server_id != "auto" and server.get("enabled") and server.get("user_visible") and server.get("candidate_available", True)
     ]
 
 
