@@ -9,6 +9,7 @@ import os
 import shlex
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import paramiko
@@ -28,20 +29,30 @@ def ssh_password(explicit: str | None) -> str:
     return getpass.getpass("SSH password for control VPS: ")
 
 
-def connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        host,
-        username=user,
-        password=password,
-        timeout=timeout,
-        banner_timeout=timeout,
-        auth_timeout=timeout,
-        look_for_keys=False,
-        allow_agent=False,
-    )
-    return client
+def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                host,
+                username=user,
+                password=password,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+            if attempt < attempts:
+                print(f"SSH connect attempt {attempt}/{attempts} failed: {exc}", file=sys.stderr)
+                time.sleep(min(15, 2 * attempt))
+    raise RuntimeError(f"SSH connect failed after {attempts} attempt(s): {last_error}")
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
@@ -120,6 +131,7 @@ def main() -> int:
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--ssh-password", default="")
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--connect-attempts", type=int, default=12)
     parser.add_argument("--login-grace-time", type=int, default=15)
     parser.add_argument("--per-source-max-startups", type=int, default=20)
     parser.add_argument("--max-startups", default="100:30:300")
@@ -131,7 +143,7 @@ def main() -> int:
     args = parser.parse_args()
 
     password = ssh_password(args.ssh_password)
-    client = connect(args.host, args.user, password, args.timeout)
+    client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
     try:
         sftp = client.open_sftp()
         remote = "/root/cudy-harden-control-ssh.sh"
