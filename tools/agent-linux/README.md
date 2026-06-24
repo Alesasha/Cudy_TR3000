@@ -41,6 +41,16 @@ The agent should run as root, or it will use `sudo` for route and TUN changes.
 
 ## One-Click Install
 
+Build or refresh a per-device prod zip from the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-LinuxAgentPackage.ps1 -AgentId DC_via_Cudy-linux
+```
+
+The generated archive is written to `secrets/agents/DC_via_Cudy-linux-prod.zip`.
+It includes current Linux scripts, shared `route_agent.py`, `agent.env`, and the
+control-tunnel SSH key from the ignored per-device secrets directory.
+
 ```bash
 chmod +x *.sh
 ./one_click_install.sh

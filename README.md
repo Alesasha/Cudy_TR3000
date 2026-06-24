@@ -23,6 +23,8 @@ Linux, and Cudy fallback routing.
   cache, probe jobs, provider refresh workers.
 - `tools/agent-windows/` - Windows managed route agent scripts and diagnostics.
 - `tools/agent-linux/` - Linux managed agent prototype and install helpers.
+- `tools/Build-LinuxAgentPackage.ps1` - reproducible Linux agent prod zip
+  builder from current scripts plus ignored per-device secrets.
 - `tools/android-agent-smoke.ps1` and `tools/android-agent-reset.ps1` - Android
   install/smoke/status/reset helpers for physical devices and emulators.
 - `tools/route_agent.py` - shared managed route agent engine used by desktop
