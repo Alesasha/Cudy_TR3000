@@ -1,5 +1,8 @@
 param(
     [string]$SdkRoot = "$env:LOCALAPPDATA\Android\Sdk",
+    [string]$ProjectPath = "$PSScriptRoot\..\apps\CudyAndroidAgent\CudyAndroidAgent.csproj",
+    [string]$Configuration = "Debug",
+    [switch]$Build,
     [string]$AgentSecretDir = "C:\Users\Alexander\Cudy_TR3000\secrets\agents\isasha_X7Pro_Cudy-android",
     [string]$ApkPath = "C:\Users\Alexander\Cudy_TR3000\apps\CudyAndroidAgent\bin\Debug\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk",
     [string]$ControlUrl = "http://127.0.0.1:18765",
@@ -63,6 +66,14 @@ if ($Serial) {
     Write-Host "Using device: $Serial"
 }
 
+if ($Build) {
+    Write-Host "Building Android agent: $ProjectPath ($Configuration android-arm64)"
+    dotnet build $ProjectPath -c $Configuration -v:minimal -p:UseSharedCompilation=false -p:BuildInParallel=false -p:RuntimeIdentifier=android-arm64
+    if ($LASTEXITCODE -ne 0) {
+        throw "Android agent build failed."
+    }
+}
+
 function Invoke-Adb {
     param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Args)
     if ($Serial) {
@@ -81,14 +92,34 @@ if (-not $NoInstall) {
     if (-not (Test-Path $ApkPath)) {
         throw "APK not found: $ApkPath"
     }
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     $installOutput = Invoke-Adb install --no-incremental -r -d $ApkPath 2>&1
+    $installExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousErrorActionPreference
     $installOutput
-    if ($LASTEXITCODE -ne 0 -and ($installOutput -join "`n") -match "Unknown option|unknown option|Invalid option") {
+    if ($installExitCode -ne 0 -and ($installOutput -join "`n") -match "Unknown option|unknown option|Invalid option") {
         Write-Host "Retrying install without --no-incremental for older adb..."
-        Invoke-Adb install -r -d $ApkPath
+        $ErrorActionPreference = "Continue"
+        $installOutput = Invoke-Adb install -r -d $ApkPath 2>&1
+        $installExitCode = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorActionPreference
+        $installOutput
     }
-    elseif ($LASTEXITCODE -ne 0) {
+    if ($installExitCode -ne 0 -and ($installOutput -join "`n") -match "INSTALL_FAILED_USER_RESTRICTED") {
+        throw "APK install was blocked by Android/MIUI. Unlock the phone and allow USB installs, then rerun this script."
+    }
+    elseif ($installExitCode -ne 0) {
         throw "APK install failed."
+    }
+
+    if ($Serial) {
+        $packageDump = Invoke-Adb shell dumpsys package com.nashvpn.cudyagent
+        $hasBootReceiver = ($packageDump | Select-String -Pattern "BootReceiver|BOOT_COMPLETED" -Quiet)
+        if (-not $hasBootReceiver) {
+            throw "Installed APK does not expose BootReceiver/BOOT_COMPLETED. Rebuild the APK and rerun smoke."
+        }
+        Write-Host "Installed APK exposes BootReceiver."
     }
 }
 
@@ -139,6 +170,12 @@ if ($onlineDevices.Count -gt 0 -and -not $NoStart) {
     Write-Host "Service:"
     Invoke-Adb shell dumpsys activity services com.nashvpn.cudyagent |
         Select-String -Pattern "CudyVpnService|isForeground|startRequested" |
+        Select-Object -First 20
+
+    Write-Host ""
+    Write-Host "Boot receiver:"
+    Invoke-Adb shell dumpsys package com.nashvpn.cudyagent |
+        Select-String -Pattern "Receiver Resolver Table|BootReceiver|BOOT_COMPLETED|MY_PACKAGE_REPLACED|TEST_BOOT_START" |
         Select-Object -First 20
 
     Write-Host ""
