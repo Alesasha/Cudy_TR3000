@@ -113,6 +113,10 @@ This is the current implementation order for the managed VPN control project.
 ## 8. Linux Agent
 
 - The Dima scenario has a one-click wrapper: `./one_click_install.sh`.
+- The prod package can carry `runtime/sing-box`; use the `-IncludeRuntime`
+  package build when DNS/GitHub reachability on the target machine is uncertain.
+- DNS restore is covered by a regression test because `resolvectl dns` must
+  receive separate server arguments, not one space-separated string.
 - The prod bundle contains `QUICKSTART-RU.md` and `status.sh`; failed installs
   automatically print a diagnostic snapshot.
 - Status and rollback helpers exist: `./status.sh`, `sudo ./uninstall_systemd.sh`,

@@ -295,6 +295,22 @@ Blank `--user-id` means a global policy. Blank `--domain` means the default poli
 
 `Auto` is not currently applied to every unknown domain automatically. The current deploy model only emits rules for domains present in global or per-user route tables; unknown domains keep following normal Cudy/PBR routing until a discovery or benchmark flow adds them.
 
+## Linux Agent Package
+
+Rebuild the Linux prod package with the bundled `sing-box` runtime when the
+target machine may have broken DNS or slow GitHub access:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-LinuxAgentPackage.ps1 -AgentId DC_via_Cudy-linux -IncludeRuntime
+```
+
+The resulting archive is written under `secrets\agents\*-linux-prod.zip`.
+The regression check for this path is:
+
+```powershell
+python tools\test_linux_agent_packaging.py
+```
+
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.
