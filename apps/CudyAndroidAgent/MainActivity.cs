@@ -596,6 +596,10 @@ public class MainActivity : Activity
         var probeSummary = preferences.GetString("last_probe_summary", "");
         var controlTunnel = preferences.GetBoolean("last_control_tunnel_established", false);
         var lastError = preferences.GetString("last_control_error", "");
+        var bootReceiverAction = preferences.GetString("boot_receiver_action", "");
+        var bootReceiverAt = preferences.GetString("boot_receiver_at", "");
+        var bootReceiverResult = preferences.GetString("boot_receiver_result", "");
+        var bootReceiverError = preferences.GetString("boot_receiver_error", "");
         serviceStatusText.Text = string.IsNullOrWhiteSpace(serviceStatus)
             ? "Service: -"
             : $"Service: {serviceStatus}";
@@ -657,6 +661,30 @@ public class MainActivity : Activity
             }
             lines.Add("runtime:");
             lines.Add(runtimeSummary);
+        }
+        if (!string.IsNullOrWhiteSpace(bootReceiverAction) || !string.IsNullOrWhiteSpace(bootReceiverResult))
+        {
+            if (lines.Count > 0)
+            {
+                lines.Add("");
+            }
+            lines.Add("boot_receiver:");
+            if (!string.IsNullOrWhiteSpace(bootReceiverAt))
+            {
+                lines.Add($"at: {bootReceiverAt}");
+            }
+            if (!string.IsNullOrWhiteSpace(bootReceiverAction))
+            {
+                lines.Add($"action: {bootReceiverAction}");
+            }
+            if (!string.IsNullOrWhiteSpace(bootReceiverResult))
+            {
+                lines.Add($"result: {bootReceiverResult}");
+            }
+            if (!string.IsNullOrWhiteSpace(bootReceiverError))
+            {
+                lines.Add($"error: {bootReceiverError}");
+            }
         }
         if (!string.IsNullOrWhiteSpace(lastError))
         {

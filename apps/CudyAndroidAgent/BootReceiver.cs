@@ -8,9 +8,11 @@ using Android.Util;
 [BroadcastReceiver(
     Name = "com.nashvpn.cudyagent.BootReceiver",
     Enabled = true,
-    Exported = true)]
+    Exported = true,
+    DirectBootAware = true)]
 [IntentFilter(new[]
 {
+    Intent.ActionLockedBootCompleted,
     Intent.ActionBootCompleted,
     Intent.ActionUserUnlocked,
     Intent.ActionMyPackageReplaced,
@@ -29,11 +31,21 @@ public sealed class BootReceiver : BroadcastReceiver
         }
 
         var action = intent?.Action ?? "";
-        if (action != Intent.ActionBootCompleted
+        if (action != Intent.ActionLockedBootCompleted
+            && action != Intent.ActionBootCompleted
             && action != Intent.ActionUserUnlocked
             && action != Intent.ActionMyPackageReplaced
             && action != ActionTestStart)
         {
+            return;
+        }
+
+        var now = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz");
+        var isLockedBoot = action == Intent.ActionLockedBootCompleted;
+        StoreBootMarker(context, action, now, isLockedBoot ? "locked-boot-received" : "received", "");
+        if (isLockedBoot)
+        {
+            Log.Info(LogTag, "Boot receiver saw LOCKED_BOOT_COMPLETED; waiting for user unlock before starting agent.");
             return;
         }
 
@@ -53,9 +65,10 @@ public sealed class BootReceiver : BroadcastReceiver
             || string.IsNullOrWhiteSpace(sshKey))
         {
             Log.Info(LogTag, $"Boot receiver skipped start for {action}: settings are incomplete.");
+            StoreBootMarker(context, action, now, "skipped-settings-incomplete", "");
             preferences?.Edit()
                 ?.PutString("service_status", "boot skipped: settings incomplete")
-                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.PutString("service_status_at", now)
                 ?.Apply();
             return;
         }
@@ -84,17 +97,54 @@ public sealed class BootReceiver : BroadcastReceiver
             }
             preferences?.Edit()
                 ?.PutString("service_status", $"boot start requested: {action}")
-                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.PutString("service_status_at", now)
                 ?.Apply();
+            StoreBootMarker(context, action, now, "start-requested", "");
             Log.Info(LogTag, $"Boot receiver requested agent start for {action}.");
         }
         catch (Exception ex)
         {
             preferences?.Edit()
                 ?.PutString("service_status", $"boot start failed: {ex.Message}")
-                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.PutString("service_status_at", now)
                 ?.Apply();
+            StoreBootMarker(context, action, now, "start-failed", ex.Message);
             Log.Warn(LogTag, $"Boot receiver failed to start agent for {action}: {ex.Message}");
         }
+    }
+
+    private static void StoreBootMarker(Context context, string action, string at, string result, string error)
+    {
+        StoreBootMarker(context.GetSharedPreferences("cudy-agent", FileCreationMode.Private), action, at, result, error);
+
+        if ((int)Build.VERSION.SdkInt < 24)
+        {
+            return;
+        }
+
+        try
+        {
+#pragma warning disable CA1416
+            var deviceContext = context.CreateDeviceProtectedStorageContext();
+#pragma warning restore CA1416
+            if (deviceContext is not null)
+            {
+                StoreBootMarker(deviceContext.GetSharedPreferences("cudy-agent-boot", FileCreationMode.Private), action, at, result, error);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(LogTag, $"Failed to store direct-boot marker for {action}: {ex.Message}");
+        }
+    }
+
+    private static void StoreBootMarker(ISharedPreferences? preferences, string action, string at, string result, string error)
+    {
+        preferences?.Edit()
+            ?.PutString("boot_receiver_action", action)
+            ?.PutString("boot_receiver_at", at)
+            ?.PutString("boot_receiver_result", result)
+            ?.PutString("boot_receiver_error", error)
+            ?.Apply();
     }
 }

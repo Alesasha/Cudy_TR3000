@@ -29,9 +29,12 @@ Current MVP:
   system routing sends those CIDRs into the app TUN.
 - claims and completes control-server probe jobs through local mixed proxy
   inbounds;
-- registers a boot/reconnect receiver for `BOOT_COMPLETED`,
-  `MY_PACKAGE_REPLACED`, and the smoke-test action
+- registers a boot/reconnect receiver for `LOCKED_BOOT_COMPLETED`,
+  `BOOT_COMPLETED`, `USER_UNLOCKED`, `MY_PACKAGE_REPLACED`, and the smoke-test action
   `com.nashvpn.cudyagent.TEST_BOOT_START`.
+- records `boot_receiver_*` markers in app-private status so reboot/autostart
+  diagnostics can distinguish a missing vendor boot broadcast from a service
+  start failure.
 - shows a first-run background permissions prompt and a `Setup permissions`
   button for battery optimization and MIUI Autostart setup.
 - guides setup through notification permission, Android VPN permission,
@@ -93,6 +96,33 @@ powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -StartEng
 ```
 
 If the phone shows the Android VPN permission dialog, unlock it and confirm.
+
+Reboot/autostart verification:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -Build -WaitSeconds 25
+adb reboot
+# wait until the phone has booted, then unlock the screen once
+powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -NoInstall -NoStart
+```
+
+After a successful real reboot, the `-NoStart` check should show:
+
+```text
+State: RUNNING_UNLOCKED
+Process: <pid>
+Service: CudyVpnService ... isForeground=true
+boot_receiver_action: android.intent.action.USER_UNLOCKED
+boot_receiver_result: start-requested
+service_status: ok ...
+```
+
+If the APK exposes the receiver but no `boot_receiver_*` markers appear after
+unlock, the Android vendor firmware most likely blocked the boot/unlock
+broadcast. On MIUI/Xiaomi/POCO/Redmi, open `Setup permissions`, enable
+Autostart for Cudy Agent, set Battery saver to No restrictions, and repeat the
+reboot test. Android does not provide a standard API that lets the app grant
+the MIUI Autostart permission by itself.
 
 Status/reset helper for test devices:
 

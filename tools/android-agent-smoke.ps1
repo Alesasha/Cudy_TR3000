@@ -116,12 +116,13 @@ if (-not $NoInstall) {
     if ($Serial) {
         $packageDump = Invoke-Adb shell dumpsys package com.nashvpn.cudyagent
         $hasBootReceiver = ($packageDump | Select-String -Pattern "BootReceiver" -Quiet) `
+            -and ($packageDump | Select-String -Pattern "LOCKED_BOOT_COMPLETED" -Quiet) `
             -and ($packageDump | Select-String -Pattern "BOOT_COMPLETED" -Quiet) `
             -and ($packageDump | Select-String -Pattern "USER_UNLOCKED" -Quiet)
         if (-not $hasBootReceiver) {
-            throw "Installed APK does not expose BootReceiver with BOOT_COMPLETED and USER_UNLOCKED. Rebuild the APK and rerun smoke."
+            throw "Installed APK does not expose BootReceiver with LOCKED_BOOT_COMPLETED, BOOT_COMPLETED, and USER_UNLOCKED. Rebuild the APK and rerun smoke."
         }
-        Write-Host "Installed APK exposes BootReceiver for BOOT_COMPLETED and USER_UNLOCKED."
+        Write-Host "Installed APK exposes BootReceiver for LOCKED_BOOT_COMPLETED, BOOT_COMPLETED, and USER_UNLOCKED."
     }
 }
 
@@ -154,8 +155,8 @@ if (-not $NoStart) {
 }
 
 Write-Host ""
-if ($onlineDevices.Count -gt 0 -and -not $NoStart) {
-    if ($WaitSeconds -gt 0) {
+if ($onlineDevices.Count -gt 0) {
+    if ($WaitSeconds -gt 0 -and -not $NoStart) {
         Write-Host "Waiting ${WaitSeconds}s for the first control loop..."
         Start-Sleep -Seconds $WaitSeconds
     }
@@ -177,17 +178,24 @@ if ($onlineDevices.Count -gt 0 -and -not $NoStart) {
     Write-Host ""
     Write-Host "Boot receiver:"
     Invoke-Adb shell dumpsys package com.nashvpn.cudyagent |
-        Select-String -Pattern "Receiver Resolver Table|BootReceiver|BOOT_COMPLETED|USER_UNLOCKED|MY_PACKAGE_REPLACED|TEST_BOOT_START" |
+        Select-String -Pattern "Receiver Resolver Table|BootReceiver|LOCKED_BOOT_COMPLETED|BOOT_COMPLETED|USER_UNLOCKED|MY_PACKAGE_REPLACED|TEST_BOOT_START|directBootAware" |
         Select-Object -First 20
 
     Write-Host ""
     Write-Host "Stored safe status:"
     try {
         Invoke-Adb shell run-as com.nashvpn.cudyagent cat /data/data/com.nashvpn.cudyagent/shared_prefs/cudy-agent.xml 2>$null |
-            Select-String -Pattern "service_status|service_status_at|last_policy_at|last_policy_summary|debug_probe_at|debug_probe_result"
+            Select-String -Pattern "service_status|service_status_at|last_policy_at|last_policy_summary|debug_probe_at|debug_probe_result|boot_receiver"
     }
     catch {
-        Write-Host "run-as is unavailable for this build; using logcat/dumpsys diagnostics instead."
+        Write-Host "run-as is unavailable for credential-protected status; using logcat/dumpsys diagnostics instead."
+    }
+    try {
+        Invoke-Adb shell run-as com.nashvpn.cudyagent cat /data/user_de/0/com.nashvpn.cudyagent/shared_prefs/cudy-agent-boot.xml 2>$null |
+            Select-String -Pattern "boot_receiver"
+    }
+    catch {
+        Write-Host "direct-boot status is not available yet."
     }
 
     Write-Host ""
