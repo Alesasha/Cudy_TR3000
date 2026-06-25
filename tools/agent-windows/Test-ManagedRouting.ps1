@@ -1,10 +1,11 @@
 param(
     [string]$VpnInterfaceAlias = "AmneziaVPN",
-    [string]$RoutedHost = "www.speedtest.net",
-    [string]$RoutedIp = "104.17.147.22",
+    [string]$RoutedHost = "ifconfig.me",
+    [string]$RoutedIp = "34.160.111.145",
     [string]$TelegramProbeIp = "149.154.160.1",
     [string]$DirectProbeIp = "1.1.1.1",
-    [int]$MinRoutedRxBytes = 10000
+    [string[]]$ManagedInterfaceAliases = @("AmneziaVPN", "proxyde", "proxyfr", "proxygb", "proxykz", "proxynl", "proxyru", "proxytr", "proxyus"),
+    [int]$MinRoutedRxBytes = 1000
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,14 +48,15 @@ function Find-BestIPv4Route {
 }
 
 function Get-VpnStats {
-    Get-NetAdapterStatistics -Name $VpnInterfaceAlias -ErrorAction Stop |
+    param([string]$InterfaceAlias = $VpnInterfaceAlias)
+    Get-NetAdapterStatistics -Name $InterfaceAlias -ErrorAction Stop |
         Select-Object Name, ReceivedBytes, SentBytes
 }
 
 $checks = @(
     [pscustomobject]@{ Target = $DirectProbeIp; Expected = "not:$VpnInterfaceAlias"; Route = Find-BestIPv4Route $DirectProbeIp },
-    [pscustomobject]@{ Target = $RoutedIp; Expected = $VpnInterfaceAlias; Route = Find-BestIPv4Route $RoutedIp },
-    [pscustomobject]@{ Target = $TelegramProbeIp; Expected = $VpnInterfaceAlias; Route = Find-BestIPv4Route $TelegramProbeIp }
+    [pscustomobject]@{ Target = $RoutedIp; Expected = "managed"; Route = Find-BestIPv4Route $RoutedIp },
+    [pscustomobject]@{ Target = $TelegramProbeIp; Expected = "managed"; Route = Find-BestIPv4Route $TelegramProbeIp }
 )
 
 Write-Host "== route expectations =="
@@ -63,6 +65,8 @@ $checks |
         $actual = if ($null -eq $_.Route) { "-" } else { $_.Route.InterfaceAlias }
         $ok = if ($_.Expected.StartsWith("not:")) {
             $actual -ne $_.Expected.Substring(4)
+        } elseif ($_.Expected -eq "managed") {
+            $ManagedInterfaceAliases -contains $actual
         } else {
             $actual -eq $_.Expected
         }
@@ -90,15 +94,20 @@ $afterDirect = Get-VpnStats
 Write-Host "vpn_delta_rx=$($afterDirect.ReceivedBytes - $beforeDirect.ReceivedBytes) vpn_delta_tx=$($afterDirect.SentBytes - $beforeDirect.SentBytes)"
 
 Write-Host "`n== routed probe =="
-$beforeRouted = Get-VpnStats
+$routedRoute = Find-BestIPv4Route $RoutedIp
+if ($null -eq $routedRoute -or -not ($ManagedInterfaceAliases -contains $routedRoute.InterfaceAlias)) {
+    throw "Routed probe target is not routed through a managed interface."
+}
+$routedInterface = $routedRoute.InterfaceAlias
+$beforeRouted = Get-VpnStats -InterfaceAlias $routedInterface
 curl.exe -4 --resolve "${RoutedHost}:443:${RoutedIp}" "https://${RoutedHost}/" -o NUL --connect-timeout 10 --max-time 30
-$afterRouted = Get-VpnStats
+$afterRouted = Get-VpnStats -InterfaceAlias $routedInterface
 $deltaRx = $afterRouted.ReceivedBytes - $beforeRouted.ReceivedBytes
 $deltaTx = $afterRouted.SentBytes - $beforeRouted.SentBytes
-Write-Host "vpn_delta_rx=$deltaRx vpn_delta_tx=$deltaTx"
+Write-Host "routed_interface=$routedInterface vpn_delta_rx=$deltaRx vpn_delta_tx=$deltaTx"
 
 if ($deltaRx -lt $MinRoutedRxBytes) {
-    throw "Routed probe did not move enough traffic through $VpnInterfaceAlias."
+    throw "Routed probe did not move enough traffic through $routedInterface."
 }
 
 Write-Host "`nPASS: managed routing is active."
