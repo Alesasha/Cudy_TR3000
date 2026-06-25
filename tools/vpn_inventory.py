@@ -91,6 +91,9 @@ fi
 section lokvpn_profile
 cat /etc/lokvpn-profile 2>/dev/null || true
 
+section crontab_root
+cat /etc/crontabs/root 2>/dev/null || true
+
 section proxy_refreshers
 for p in proxygb proxyca proxyfr proxyby proxyae proxyhk proxykz proxytr proxyil proxycz proxypl proxyfi proxynl proxyal proxyru proxyus proxyde; do
   if [ -x "/usr/bin/$p-refresh" ]; then
@@ -299,6 +302,34 @@ def parse_vpntype_tags(text: str) -> list[dict[str, str]]:
     return tags
 
 
+def active_cron_lines(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        lines.append(line)
+    return lines
+
+
+def provider_refresh_schedule_status(crontab_text: str) -> dict[str, Any]:
+    lines = active_cron_lines(crontab_text)
+    vpntype = [line for line in lines if "/usr/bin/vpntype-proxy-refresh-all" in line]
+    lokvpn = [line for line in lines if "/usr/bin/lokvpn-refresh-current" in line]
+    return {
+        "ok": bool(vpntype and lokvpn),
+        "vpntype": {
+            "present": bool(vpntype),
+            "entries": vpntype,
+        },
+        "lokvpn": {
+            "present": bool(lokvpn),
+            "entries": lokvpn,
+        },
+        "active_entries": lines,
+    }
+
+
 def build_provider_refresh_plan(
     inventory: dict[str, Any],
     *,
@@ -415,6 +446,7 @@ def build_runtime_snapshot(raw: str, *, host: str, user: str) -> dict[str, Any]:
     service_status = parse_service_status(sections.get("service_status", ""))
     proxy_refreshers = parse_tab_bool(sections.get("proxy_refreshers", ""))
     switchers = parse_tab_bool(sections.get("switchers", ""))
+    crontab_root = sections.get("crontab_root", "")
 
     return {
         "schema_version": 1,
@@ -437,6 +469,10 @@ def build_runtime_snapshot(raw: str, *, host: str, user: str) -> dict[str, Any]:
         },
         "proxy_refreshers": proxy_refreshers,
         "switchers": switchers,
+        "cron": {
+            "root_entries": active_cron_lines(crontab_root),
+            "provider_refresh": provider_refresh_schedule_status(crontab_root),
+        },
         "pbr_sets_raw": sections.get("pbr_sets", ""),
         "raw_sections": sections,
     }
@@ -587,6 +623,23 @@ def command_refresh_provider(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_check_provider_schedule(args: argparse.Namespace) -> int:
+    runtime = read_json(args.runtime)
+    schedule = ((runtime.get("cron") or {}).get("provider_refresh") or {})
+    ok = bool(schedule.get("ok"))
+    if args.json:
+        print(json.dumps(schedule, ensure_ascii=False, indent=2))
+    else:
+        print(f"Provider refresh schedule: {'OK' if ok else 'WARN'}")
+        for name in ("vpntype", "lokvpn"):
+            item = schedule.get(name) or {}
+            entries = item.get("entries") or []
+            print(f"{name}: {'present' if item.get('present') else 'missing'}")
+            for entry in entries:
+                print(f"  {entry}")
+    return 0 if ok else 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Manage the local VPN/server inventory.")
     parser.add_argument("--inventory", type=Path, default=DEFAULT_INVENTORY)
@@ -632,6 +685,14 @@ def build_parser() -> argparse.ArgumentParser:
     provider_refresh_parser.add_argument("--ssh-timeout", type=int, default=60)
     provider_refresh_parser.add_argument("--json", action="store_true")
     provider_refresh_parser.set_defaults(func=command_refresh_provider)
+
+    schedule_parser = sub.add_parser(
+        "check-provider-schedule",
+        help="Check the Cudy runtime snapshot for scheduled provider refresh cron jobs.",
+    )
+    schedule_parser.add_argument("--runtime", type=Path, default=DEFAULT_RUNTIME)
+    schedule_parser.add_argument("--json", action="store_true")
+    schedule_parser.set_defaults(func=command_check_provider_schedule)
 
     return parser
 

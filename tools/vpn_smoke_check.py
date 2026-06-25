@@ -36,6 +36,7 @@ CHECKS = [
     Check("effective route plan builds", ["tools/vpn_control_app.py", "route-plan"]),
     Check("Auto priority policy regression", ["tools/test_auto_policy_priority.py"]),
     Check("provider parsing regression", ["tools/test_provider_parsing.py"]),
+    Check("Cudy runtime parsing regression", ["tools/test_vpn_inventory_runtime.py"]),
     Check("auto cache lists", ["tools/vpn_control_app.py", "auto-cache-list"]),
     Check("Auto priority policies list", ["tools/vpn_control_app.py", "auto-candidates-list"]),
     Check("Auto winners list", ["tools/vpn_control_app.py", "auto-winners", "ifconfig.me"]),
@@ -53,6 +54,7 @@ CHECKS = [
     Check("control VPS bootstrap help loads", ["tools/bootstrap_control_vps.py", "--help"]),
     Check("Cudy fallback status checks", ["tools/check_cudy_fallback_status.py", "--strict"], timeout=30),
     Check("Cudy runtime snapshot refreshes", ["tools/vpn_inventory.py", "refresh-cudy"], online=True, timeout=120),
+    Check("Cudy provider refresh schedule checks", ["tools/vpn_inventory.py", "check-provider-schedule"], online=True),
     Check("Cudy user-route status reads", ["tools/vpn_control_app.py", "status-user-routes"], online=True, timeout=60),
     Check(
         "Auto selector probes candidates",

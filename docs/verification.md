@@ -25,7 +25,7 @@ The smoke check does not apply route changes and does not refresh providers with
 | Area | Current status | Verification command | Remaining work |
 | --- | --- | --- | --- |
 | Static server inventory | Implemented. Includes own exits, VPNtype, LokVPN profiles, and `Auto`. | `python tools\vpn_inventory.py validate` and `python tools\vpn_inventory.py list` | Keep inventory in sync with real provider scripts. |
-| Provider refresh | Existing Cudy-side scripts are preserved and can be triggered by CLI. | `python tools\vpn_inventory.py refresh-provider all` | Verify Cudy cron/service schedule and run an apply test when safe. |
+| Provider refresh | Existing Cudy-side scripts are preserved, can be triggered by CLI, and the Cudy cron schedule is machine-checked from the runtime snapshot. | `python tools\vpn_inventory.py refresh-provider all` and `python tools\vpn_inventory.py check-provider-schedule` | Run an apply test only when intentionally refreshing live provider endpoints. |
 | Runtime Cudy snapshot | Implemented as SSH inventory collection. | `python tools\vpn_inventory.py refresh-cudy` | Add this to the regular operational checklist or future service. |
 | User/admin web UI | Implemented locally in Python. | `python tools\vpn_control_app.py serve --host 127.0.0.1 --port 8765` | Move to Cudy after Go port or expose through a hardened local route. |
 | Cudy client lifecycle | Implemented for create/download/delete/sync through `friendctl`. | Admin UI and `python tools\vpn_control_app.py sync-cudy-clients` | Add regression tests around duplicate users and revoked peers. |

@@ -61,6 +61,7 @@ The snapshot records:
 - current VPNtype final tag;
 - current LokVPN profile;
 - presence of provider refreshers and switchers.
+- root cron entries for nightly provider refresh jobs.
 
 ## Provider Refresh
 
@@ -77,6 +78,13 @@ python tools\vpn_inventory.py refresh-provider
 python tools\vpn_inventory.py refresh-provider vpntype
 python tools\vpn_inventory.py refresh-provider lokvpn --profile fr2
 python tools\vpn_inventory.py refresh-provider proxyde
+```
+
+After refreshing the Cudy runtime snapshot, verify the scheduled nightly
+provider refresh jobs:
+
+```powershell
+python tools\vpn_inventory.py check-provider-schedule
 ```
 
 All of the commands above are dry-run previews. Add `--apply` only when the refresh should actually run on Cudy:
