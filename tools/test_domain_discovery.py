@@ -100,6 +100,8 @@ def run_promote_to_auto_route(db_path: Path) -> None:
         domain="unknown-review.example",
         candidate_server_ids="proxyde, all-rest",
         note="approved by regression",
+        probe_now=True,
+        max_probe_candidates=2,
     )
     assert_equal(result["ok"], True, "promote result")
     assert_equal(result["route_scope"], "global_domain", "promote route scope")
@@ -107,6 +109,10 @@ def run_promote_to_auto_route(db_path: Path) -> None:
     assert_equal(result["discovery"]["status"], "promoted", "promoted discovery status")
     assert_equal(result["discovery"]["note"], "approved by regression", "promoted discovery note")
     assert_equal(result["auto_candidate_policy"]["candidate_server_ids"], ["proxyde", "all-rest"], "promoted candidates")
+    assert_equal(result["probe_job"]["skipped"], None, "promoted probe should not be skipped")
+    assert_equal(result["probe_job"]["created"]["status"], "pending", "promoted probe job status")
+    assert_equal(result["probe_job"]["created"]["domain"], "unknown-review.example", "promoted probe job domain")
+    assert_equal(len(result["probe_job"]["created"]["candidate_server_ids"]), 2, "promoted probe candidate window")
 
     lookup = app.route_lookup(db_path, INVENTORY, user_id="discovery-user", target="unknown-review.example")
     item = lookup["results"][0]

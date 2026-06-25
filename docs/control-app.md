@@ -124,13 +124,14 @@ http://127.0.0.1:8765/admin
   - admin UI can review the queue and prefill a global route form with the
     discovered domain;
   - admin UI can also explicitly promote a discovered domain into a global
-    `domain -> auto` route, optionally with a comma-separated priority list;
+    `domain -> auto` route, optionally with a comma-separated priority list and
+    an immediate Auto probe job;
   - CLI commands:
 
 ```powershell
 python tools\vpn_control_app.py domain-discovery-list
 python tools\vpn_control_app.py domain-discovery-mark example.com reviewed
-python tools\vpn_control_app.py domain-discovery-promote example.com --candidates "proxyde, proxynl, all-rest"
+python tools\vpn_control_app.py domain-discovery-promote example.com --candidates "proxyde, proxynl, all-rest" --probe-now
 ```
 
 - Deploy preview:

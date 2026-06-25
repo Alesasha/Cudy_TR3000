@@ -1552,6 +1552,7 @@ ADMIN_HTML = r"""<!doctype html>
           const candidatesText = prompt("Candidate priority for Auto route. Leave blank to inherit default policy.", "");
           if (candidatesText === null) return;
           const note = prompt("Promotion note", "Promoted from discovery queue") || "";
+          const probeNow = confirm("Create an Auto probe job now?");
           const statusEl = document.getElementById("domainDiscoveryStatus");
           statusEl.className = "status";
           try {
@@ -1559,13 +1560,15 @@ ADMIN_HTML = r"""<!doctype html>
               domain,
               user_id: "",
               candidate_server_ids: candidatesText.trim() ? parsePriorityText(candidatesText) : null,
-              note
+              note,
+              probe_now: probeNow
             };
             const result = await api("/api/admin/domain-discovery/promote", {
               method: "POST",
               body: JSON.stringify(payload)
             });
-            statusEl.textContent = `${domain} promoted to ${result.route_scope} Auto route.`;
+            const probe = result.probe_job && result.probe_job.created ? ` Probe job: ${result.probe_job.created.id}.` : "";
+            statusEl.textContent = `${domain} promoted to ${result.route_scope} Auto route.${probe}`;
             statusEl.className = "status ok";
             await load();
           } catch (error) {
@@ -4780,6 +4783,92 @@ def create_auto_probe_jobs_once(
     }
 
 
+def enqueue_auto_probe_for_domain(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    user_id: str = "",
+    candidate_server_ids: Any = None,
+    max_candidates: int = 4,
+    connect_timeout: int = 5,
+    max_time: int = 12,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_domain = normalize_domain(domain)
+    normalized_user_id = (user_id or "").strip()
+    with connect(db_path) as conn:
+        existing_job = row(
+            conn,
+            """
+            SELECT id, status
+            FROM agent_probe_jobs
+            WHERE domain = ? AND status IN ('pending', 'running')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (normalized_domain,),
+        )
+        if existing_job:
+            return {
+                "ok": True,
+                "created": None,
+                "skipped": {
+                    "domain": normalized_domain,
+                    "user_id": normalized_user_id,
+                    "reason": f"job_{existing_job['status']}",
+                    "job_id": existing_job["id"],
+                },
+            }
+        servers = server_map(conn)
+        if candidate_server_ids not in (None, "", []):
+            candidates = parse_candidate_server_ids(candidate_server_ids)
+        else:
+            policy = resolve_auto_candidate_policy(conn, user_id=normalized_user_id, domain=normalized_domain)
+            candidates = list(
+                (policy or {}).get("expanded_candidate_server_ids")
+                or (policy or {}).get("candidate_server_ids")
+                or default_auto_candidate_ids(servers)
+            )
+        candidates = expand_auto_candidate_ids(servers, candidates)
+        candidates = [
+            server_id
+            for server_id in candidates
+            if server_id in servers
+            and servers[server_id].get("enabled")
+            and servers[server_id].get("user_visible")
+            and servers[server_id].get("candidate_available", True)
+        ]
+        if not candidates:
+            return {
+                "ok": True,
+                "created": None,
+                "skipped": {
+                    "domain": normalized_domain,
+                    "user_id": normalized_user_id,
+                    "reason": "no_candidates",
+                },
+            }
+        probe_candidates = select_auto_probe_candidates(
+            conn,
+            domain=normalized_domain,
+            candidates=candidates,
+            max_candidates=max(1, min(int(max_candidates), 50)),
+        )
+    created = create_probe_job(
+        db_path,
+        inventory_path,
+        domain=normalized_domain,
+        user_id=normalized_user_id,
+        candidate_server_ids=probe_candidates,
+        apply_cache=True,
+        connect_timeout=max(1, min(int(connect_timeout), 60)),
+        max_time=max(1, min(int(max_time), 120)),
+        priority=50,
+    )
+    return {"ok": True, "created": created, "skipped": None}
+
+
 def auto_probe_worker_loop(
     *,
     db_path: Path,
@@ -7207,6 +7296,8 @@ def promote_domain_discovery_to_auto_route(
     user_id: str = "",
     candidate_server_ids: Any = None,
     note: str = "",
+    probe_now: bool = False,
+    max_probe_candidates: int = 4,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     normalized_domain = normalize_domain(domain)
@@ -7286,6 +7377,16 @@ def promote_domain_discovery_to_auto_route(
                 "updated_at": timestamp,
             }
         promoted = domain_discovery_item(conn, normalized_domain)
+    probe_job = None
+    if probe_now:
+        probe_job = enqueue_auto_probe_for_domain(
+            db_path,
+            inventory_path,
+            domain=normalized_domain,
+            user_id=normalized_user_id,
+            candidate_server_ids=normalized_candidates,
+            max_candidates=max_probe_candidates,
+        )
     return {
         "ok": True,
         "domain": normalized_domain,
@@ -7295,6 +7396,7 @@ def promote_domain_discovery_to_auto_route(
         "discovery": promoted,
         "previous_discovery": discovery,
         "auto_candidate_policy": auto_candidate_policy,
+        "probe_job": probe_job,
     }
 
 
@@ -7999,6 +8101,8 @@ class Handler(BaseHTTPRequestHandler):
                         user_id=str(data.get("user_id") or ""),
                         candidate_server_ids=data.get("candidate_server_ids"),
                         note=str(data.get("note") or ""),
+                        probe_now=bool(data.get("probe_now")),
+                        max_probe_candidates=max(1, min(int(data.get("max_probe_candidates") or 4), 50)),
                     )
                 )
             elif parsed.path == "/api/admin/auto-select":
@@ -8825,6 +8929,8 @@ def build_parser() -> argparse.ArgumentParser:
     discovery_promote_parser.add_argument("--user-id", default="", help="Blank creates a global domain route.")
     discovery_promote_parser.add_argument("--candidates", default="", help="Optional ordered Auto candidates, e.g. proxyde,proxynl,all-rest.")
     discovery_promote_parser.add_argument("--note", default="")
+    discovery_promote_parser.add_argument("--probe-now", action="store_true", help="Create a pending Auto probe job immediately.")
+    discovery_promote_parser.add_argument("--max-probe-candidates", type=int, default=4)
     discovery_promote_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
     auto_winners_parser = sub.add_parser("auto-winners", help="Show recent Auto winners for all targets or one domain, URL, IP, CIDR, or service alias.")
@@ -9389,6 +9495,8 @@ def main() -> int:
             user_id=args.user_id,
             candidate_server_ids=args.candidates,
             note=args.note,
+            probe_now=args.probe_now,
+            max_probe_candidates=args.max_probe_candidates,
         )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -9400,6 +9508,12 @@ def main() -> int:
                 f"Discovered domain promoted: {result['domain']} "
                 f"scope={result['route_scope']} server=auto{suffix}"
             )
+            probe_job = result.get("probe_job") or {}
+            if probe_job.get("created"):
+                print(f"Probe job created: {probe_job['created']['id']}")
+            elif probe_job.get("skipped"):
+                skipped = probe_job["skipped"]
+                print(f"Probe job skipped: {skipped.get('reason')} {skipped.get('job_id') or ''}".rstrip())
         return 0
     if args.command == "auto-winners":
         result = recent_auto_winners(args.db, args.inventory, target=args.target, limit=args.limit)
