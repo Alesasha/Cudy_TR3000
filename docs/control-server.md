@@ -484,6 +484,16 @@ populated after the first day:
 Get-ScheduledTaskInfo -TaskName "Cudy Fallback Control Sync"
 ```
 
+Check the public Cudy fallback status without touching the secret archive:
+
+```powershell
+python tools\check_cudy_fallback_status.py --strict
+```
+
+The check validates that `/cudy-control/endpoints.json` is still within
+`valid_until`, and that `/cudy-control/state.json` points to a recent backup
+archive with size and SHA-256 metadata.
+
 Install a repeated Windows sync task:
 
 ```powershell
