@@ -42,6 +42,7 @@ CHECKS = [
     Check("Auto winners list", ["tools/vpn_control_app.py", "auto-winners", "ifconfig.me"]),
     Check("route lookup resolves service alias", ["tools/vpn_control_app.py", "route-lookup", "telegram", "--user-id", "isasha_X7Pro_Cudy"]),
     Check("route lookup reports direct", ["tools/vpn_control_app.py", "route-lookup", "216.239.36.21", "--user-id", "isasha_X7Pro_Cudy"]),
+    Check("Cudy client lifecycle regression", ["tools/test_cudy_client_lifecycle.py"]),
     Check("combined route deploy dry-run builds", ["tools/vpn_control_app.py", "deploy-routes"]),
     Check("provider refresh dry-run builds", ["tools/vpn_inventory.py", "refresh-provider", "all"]),
     Check("route agent help loads", ["tools/route_agent.py", "--help"]),
