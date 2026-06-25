@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import gc
@@ -251,6 +252,104 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
     )
 
 
+def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
+    for port, server_id in enumerate(["proxyde", "proxynl"], start=19080):
+        app.save_transport_config(
+            db_path,
+            INVENTORY,
+            server_id=server_id,
+            transport_type="http-proxy-tun",
+            interface_name=server_id,
+            config={"server": "127.0.0.1", "server_port": port},
+            enabled=True,
+            source="test",
+        )
+    app.save_auto_candidate_policy(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        domain="worker-agent.example",
+        candidate_server_ids=["proxyde", "proxynl"],
+        enabled=True,
+    )
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id="smoke-worker-generic-device",
+        display_name="Smoke Generic Device",
+        platform="windows",
+    )
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id="smoke-worker-domain-device",
+        display_name="Smoke Domain Device",
+        platform="linux",
+    )
+    timestamp = app.now()
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, 'worker-agent.example', 'auto', 1, ?, ?)
+            """,
+            (TEST_USER_ID, timestamp, timestamp),
+        )
+        conn.execute(
+            """
+            UPDATE agent_devices
+            SET last_seen_at = ?, updated_at = ?
+            WHERE id IN ('smoke-worker-generic-device', 'smoke-worker-domain-device')
+            """,
+            (timestamp, timestamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO agent_status (device_id, status_json, reported_at)
+            VALUES (?, ?, ?), (?, ?, ?)
+            """,
+            (
+                "smoke-worker-generic-device",
+                json.dumps(
+                    {
+                        "platform": "windows",
+                        "capabilities": {"can_probe": True},
+                        "domain_routes": [{"domain": "other.example"}],
+                    }
+                ),
+                timestamp,
+                "smoke-worker-domain-device",
+                json.dumps(
+                    {
+                        "platform": "linux",
+                        "capabilities": {"can_probe": True},
+                        "domain_routes": [{"domain": "worker-agent.example"}],
+                    }
+                ),
+                timestamp,
+            ),
+        )
+
+    result = app.create_auto_probe_jobs_once(
+        db_path,
+        INVENTORY,
+        cache_ttl_seconds=0,
+        agent_stale_seconds=600,
+        max_jobs=5,
+        max_candidates_per_job=2,
+    )
+    created = result["created"]
+    matching = [job for job in created if job["domain"] == "worker-agent.example"]
+    assert_equal(len(matching), 1, "auto worker should create one domain probe job")
+    assert_equal(
+        matching[0]["assigned_device_id"],
+        "smoke-worker-domain-device",
+        "auto worker should assign probe to the agent that reported the domain",
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-") as tmp:
         db_path = Path(tmp) / "vpn_control.db"
@@ -261,6 +360,7 @@ def main() -> int:
         run_auto_winners_cache_fallback_check(db_path)
         run_unresolved_auto_domain_falls_back_to_direct_check(db_path)
         run_agent_transport_plan_is_minimal_check(db_path)
+        run_auto_worker_prefers_domain_agent_check(db_path)
         gc.collect()
 
     print("Auto priority policy regression passed.")
