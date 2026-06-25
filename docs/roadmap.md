@@ -87,16 +87,21 @@ This is the current implementation order for the managed VPN control project.
   probes.
 - Boot/reconnect receiver is implemented and verified through both explicit
   test broadcast and a real reboot on the current test phone.
+- Real reboot smoke now verifies `BOOT_COMPLETED -> foreground service ->
+  policy fetch -> engine=running`; the boot path waits briefly for Android
+  networking before the first SSH control fetch.
 - Release APK build is available with a versioned local copy under
   `build/releases/`.
 
 ## 8. Linux Agent
 
 - The Dima scenario has a one-click wrapper: `./one_click_install.sh`.
+- The prod bundle contains `QUICKSTART-RU.md` and `status.sh`; failed installs
+  automatically print a diagnostic snapshot.
 - Status and rollback helpers exist: `./status.sh`, `sudo ./uninstall_systemd.sh`,
   and `sudo ./restore_direct.sh`.
 - Manual routes should not be required in the normal install path.
-- Check conflicts with Amnezia, Zapret, and UFW.
+- Check conflicts with Amnezia, Zapret, and UFW from real `./status.sh` output.
 - Move toward standalone agent behavior similar to Android/Windows.
 
 ## 9. UI

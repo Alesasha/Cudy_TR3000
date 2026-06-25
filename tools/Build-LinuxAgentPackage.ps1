@@ -42,6 +42,7 @@ if (Test-Path -LiteralPath $stageDir) {
 New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 
 $sourceFiles = @(
+    "QUICKSTART-RU.md",
     "README.md",
     "agent.env.example",
     "install_singbox_runtime.sh",

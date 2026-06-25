@@ -103,6 +103,16 @@ Run the Android smoke test with a connected device:
 powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -StartEngine -WaitSeconds 70 -ApkPath "C:\Users\Alexander\Cudy_TR3000\apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk"
 ```
 
+Build the Linux agent package for Dima:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-LinuxAgentPackage.ps1 -AgentId DC_via_Cudy-linux
+```
+
+The generated `secrets\agents\DC_via_Cudy-linux-prod.zip` includes
+`QUICKSTART-RU.md`, `status.sh`, rollback scripts, current `route_agent.py`, and
+the per-device control-tunnel key from ignored local secrets.
+
 ## Documentation
 
 Start here:
@@ -115,6 +125,7 @@ Start here:
 - [Verification](docs/verification.md)
 - [Android agent](docs/android-agent.md)
 - [Android libbox runtime](docs/android-libbox-runtime.md)
+- [Dima Linux agent quickstart](docs/dima-linux-agent-quickstart.md)
 - [Windows managed transport POC](docs/windows-managed-transport-poc.md)
 - [Security](docs/security.md)
 

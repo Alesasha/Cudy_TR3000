@@ -15,6 +15,20 @@ fi
 mkdir -p run logs transports
 chmod +x ./*.sh
 
+on_error() {
+  code=$?
+  echo
+  echo "ERROR: one-click install failed with exit code $code." >&2
+  echo "Diagnostic snapshot follows. Send this whole output for analysis." >&2
+  if [ -x ./status.sh ]; then
+    ./status.sh || true
+  fi
+  echo
+  echo "If internet is broken, run: sudo ./restore_direct.sh" >&2
+  exit "$code"
+}
+trap on_error ERR
+
 echo "== restore direct baseline before install =="
 ./restore_direct.sh || true
 
