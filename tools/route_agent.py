@@ -1213,6 +1213,7 @@ def apply_plan(plan: dict[str, Any], *, yes: bool, direct_baseline: bool) -> dic
         baseline_commands, baseline_blockers = direct_baseline_commands(plan)
         commands = [*baseline_commands, *commands]
         blockers = [*baseline_blockers, *blockers]
+    blockers = [blocker for blocker in blockers if str(blocker).strip()]
     if blockers:
         raise RuntimeError("cannot apply until all targets are mapped:\n" + "\n".join(blockers))
     applied: list[dict[str, Any]] = []
