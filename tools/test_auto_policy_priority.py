@@ -186,6 +186,71 @@ def run_unresolved_auto_domain_falls_back_to_direct_check(db_path: Path) -> None
     assert_true(config["warnings"], "uncached auto domain should emit warning")
 
 
+def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
+    for port, server_id in enumerate(["proxyde", "proxynl", "proxyus"], start=18080):
+        app.save_transport_config(
+            db_path,
+            INVENTORY,
+            server_id=server_id,
+            transport_type="http-proxy-tun",
+            interface_name=server_id,
+            config={"server": "127.0.0.1", "server_port": port},
+            enabled=True,
+            source="test",
+        )
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id="smoke-auto-priority-device",
+        display_name="Smoke Auto Priority Device",
+        platform="windows",
+    )
+    app.save_auto_cache_entry(
+        db_path,
+        INVENTORY,
+        domain="cached-route.example",
+        selected_server_id="proxyde",
+        score_ms=111,
+        status="auto",
+        metadata={"user_id": TEST_USER_ID},
+    )
+    timestamp = app.now()
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, 'cached-route.example', 'auto', 1, ?, ?)
+            """,
+            (TEST_USER_ID, timestamp, timestamp),
+        )
+    app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="probe-route.example",
+        candidate_server_ids=["proxynl", "proxyus"],
+        user_id=TEST_USER_ID,
+        assigned_device_id="smoke-auto-priority-device",
+    )
+
+    with closing(app.connect(db_path)) as conn:
+        config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={
+                "id": "smoke-auto-priority-device",
+                "display_name": "Smoke Auto Priority Device",
+                "platform": "windows",
+            },
+        )
+    transport_ids = sorted(item["server_id"] for item in config["transport_plan"])
+    assert_equal(
+        transport_ids,
+        ["proxyde", "proxynl", "proxyus"],
+        "agent transport_plan should include only applied route and pending probe transports",
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-") as tmp:
         db_path = Path(tmp) / "vpn_control.db"
@@ -195,6 +260,7 @@ def main() -> int:
         run_stale_provider_transports_are_not_default_candidates_check(db_path)
         run_auto_winners_cache_fallback_check(db_path)
         run_unresolved_auto_domain_falls_back_to_direct_check(db_path)
+        run_agent_transport_plan_is_minimal_check(db_path)
         gc.collect()
 
     print("Auto priority policy regression passed.")
