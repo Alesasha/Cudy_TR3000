@@ -247,6 +247,16 @@ mark the production service unhealthy when `192.168.8.1` is unreachable from a
 remote VPS. Set `CUDY_FALLBACK_STATUS_WARN=1` only on hosts that should be able
 to read `http://192.168.8.1/cudy-control/state.json` directly.
 
+Check the production `uswest` service over SSH without printing secrets:
+
+```powershell
+python tools\check_control_server_prod.py --strict
+```
+
+The check validates `vpn-control.service`, `/healthz`, `/readyz`, worker
+freshness, agent summary, and transport freshness. It requires the local ignored
+control-server SSH password file or `CONTROL_BACKUP_SSH_PASSWORD`.
+
 Local backup and fallback-sync checks are informational by default because, in
 the current deployment, the scheduled pull-backup and Cudy sync tasks normally
 run on the operator Windows machine, not on uswest. To make them affect

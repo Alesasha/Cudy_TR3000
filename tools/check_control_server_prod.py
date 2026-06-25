@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Check the production uswest control-server over SSH.
+
+The check prints only service and health summaries. It does not print provider
+secrets, agent tokens, or the remote database contents.
+"""
+
+from __future__ import annotations
+
+import argparse
+import getpass
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import paramiko
+
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_HOST = "95.182.91.203"
+DEFAULT_USER = "root"
+DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
+DEFAULT_REMOTE_DIR = "/opt/cudy-control"
+DEFAULT_SERVICE = "vpn-control.service"
+
+
+def load_password(explicit: str | None) -> str:
+    if explicit:
+        return explicit
+    for name in ("CONTROL_BACKUP_SSH_PASSWORD", "USWEST_SSH_PASSWORD", "AWG_SSH_PASSWORD_HOSTVDS_USWEST"):
+        value = os.environ.get(name)
+        if value:
+            return value
+    if DEFAULT_PASSWORD_FILE.exists():
+        value = DEFAULT_PASSWORD_FILE.read_text(encoding="utf-8-sig").strip()
+        if value:
+            return value
+    return getpass.getpass("SSH password for production control-server: ")
+
+
+def connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHClient:
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        host,
+        username=user,
+        password=password,
+        timeout=timeout,
+        banner_timeout=timeout,
+        auth_timeout=timeout,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    return client
+
+
+def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> tuple[int, str]:
+    _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
+    out = stdout.read().decode("utf-8", errors="replace")
+    err = stderr.read().decode("utf-8", errors="replace")
+    rc = stdout.channel.recv_exit_status()
+    return rc, (out + err).strip()
+
+
+def read_remote_json(client: paramiko.SSHClient, command: str, timeout: int) -> dict[str, Any]:
+    rc, output = ssh_exec(client, command, timeout)
+    if rc != 0:
+        raise RuntimeError(output)
+    payload = json.loads(output)
+    if not isinstance(payload, dict):
+        raise ValueError("remote command did not return a JSON object")
+    return payload
+
+
+def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
+    workers = status.get("workers") or {}
+    agents = status.get("agents") or {}
+    probe_jobs = status.get("probe_jobs") or {}
+    transports = status.get("transports") or {}
+    control = status.get("control") or {}
+    return {
+        "ok": bool(status.get("ok")),
+        "warnings": status.get("warnings") or [],
+        "advisories": status.get("advisories") or [],
+        "agents": {
+            "online": agents.get("online"),
+            "enabled": agents.get("enabled"),
+            "offline_enabled": agents.get("offline_enabled"),
+        },
+        "workers": {
+            name: {
+                "enabled": item.get("enabled"),
+                "last_error": item.get("last_error"),
+                "last_finished_age_seconds": item.get("last_finished_age_seconds"),
+            }
+            for name, item in workers.items()
+            if isinstance(item, dict)
+        },
+        "probe_jobs": {
+            "pending": probe_jobs.get("pending"),
+            "failed_recent": probe_jobs.get("failed_recent"),
+        },
+        "transports": {
+            "enabled": transports.get("enabled"),
+            "total": transports.get("total"),
+            "stale_enabled_count": transports.get("stale_enabled_count"),
+        },
+        "cudy_fallback_reachable_from_prod": bool((control.get("cudy_fallback_state") or {}).get("reachable")),
+    }
+
+
+def check(args: argparse.Namespace) -> dict[str, Any]:
+    password = load_password(args.ssh_password)
+    client = connect(args.host, args.user, password, args.timeout)
+    try:
+        service_rc, service_output = ssh_exec(
+            client,
+            (
+                f"systemctl is-enabled {args.service}; "
+                f"systemctl is-active {args.service}; "
+                f"systemctl show {args.service} -p NRestarts -p Restart -p RestartUSec --no-pager"
+            ),
+            args.timeout,
+        )
+        health = read_remote_json(client, "curl -fsS --max-time 5 http://127.0.0.1:8765/healthz", args.timeout)
+        ready = read_remote_json(client, "curl -fsS --max-time 5 http://127.0.0.1:8765/readyz", args.timeout)
+        status = read_remote_json(
+            client,
+            (
+                f"cd {args.remote_dir} && python3 tools/vpn_control_app.py "
+                f"--db {args.remote_dir}/data/vpn_control.db "
+                f"--inventory {args.remote_dir}/config/vpn_inventory.json "
+                "system-status --json --strict"
+            ),
+            args.timeout,
+        )
+    finally:
+        client.close()
+
+    service_lines = [line.strip() for line in service_output.splitlines() if line.strip()]
+    service_ok = service_rc == 0 and len(service_lines) >= 2 and service_lines[0] == "enabled" and service_lines[1] == "active"
+    status_summary = summarize_status(status)
+    ok = bool(service_ok and health.get("ok") is True and ready.get("ok") is True and status_summary.get("ok") is True)
+    return {
+        "ok": ok,
+        "host": args.host,
+        "service": {
+            "ok": service_ok,
+            "lines": service_lines,
+        },
+        "healthz": health,
+        "readyz": {
+            "ok": ready.get("ok"),
+            "warnings": ready.get("warnings") or [],
+            "advisories": ready.get("advisories") or [],
+            "checks": ready.get("checks") or [],
+        },
+        "status": status_summary,
+    }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--host", default=DEFAULT_HOST)
+    parser.add_argument("--user", default=DEFAULT_USER)
+    parser.add_argument("--ssh-password")
+    parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    parser.add_argument("--service", default=DEFAULT_SERVICE)
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument("--strict", action="store_true", help="Exit non-zero when the summary is not ok")
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
+    result = check(args)
+    if args.json:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        print(f"Production control-server: {'OK' if result['ok'] else 'WARN'} host={result['host']}")
+        print(f"service: {'OK' if result['service']['ok'] else 'WARN'} {'; '.join(result['service']['lines'])}")
+        print(f"healthz: {result['healthz'].get('ok')}")
+        print(f"readyz: {result['readyz'].get('ok')} checks={len(result['readyz'].get('checks') or [])}")
+        status = result["status"]
+        print(f"workers: {status.get('workers')}")
+        print(f"agents: {status.get('agents')}")
+        print(f"transports: {status.get('transports')}")
+        if status.get("warnings"):
+            print(f"warnings: {status['warnings']}")
+        if status.get("advisories"):
+            print(f"advisories: {status['advisories']}")
+    if args.strict and not result["ok"]:
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

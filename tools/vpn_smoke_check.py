@@ -53,6 +53,7 @@ CHECKS = [
     Check("control clone help loads", ["tools/clone_control_server.py", "--help"]),
     Check("control VPS bootstrap help loads", ["tools/bootstrap_control_vps.py", "--help"]),
     Check("Cudy fallback status checks", ["tools/check_cudy_fallback_status.py", "--strict"], timeout=30),
+    Check("Production control-server checks", ["tools/check_control_server_prod.py", "--strict"], online=True, timeout=90),
     Check("Cudy runtime snapshot refreshes", ["tools/vpn_inventory.py", "refresh-cudy"], online=True, timeout=120),
     Check("Cudy provider refresh schedule checks", ["tools/vpn_inventory.py", "check-provider-schedule"], online=True),
     Check("Cudy user-route status reads", ["tools/vpn_control_app.py", "status-user-routes"], online=True, timeout=60),
