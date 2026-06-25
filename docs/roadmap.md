@@ -28,6 +28,9 @@ This is the current implementation order for the managed VPN control project.
 - Sync a lightweight endpoint manifest from primary to Cudy.
 - Sync a secret full control-state archive from primary to Cudy under `/root`,
   with only a non-secret freshness status under `/www`.
+- Backup/fallback archive publishing has local regression coverage for pruning,
+  archive upload metadata, public `state.json`, public `endpoints.json`, and
+  current-state symlink behavior.
 - Agents should know a primary URL, optional direct fallback URLs, and static
   endpoint manifest URLs.
 - If `uswest` is rebuilt or moved, update the Cudy manifest first; agents can
@@ -54,6 +57,10 @@ This is the current implementation order for the managed VPN control project.
 - Current implementation expands `all-rest` on the control-server and sends
   bounded probe windows to agents (`8` candidates by default), so agents do not
   start every provider transport at once.
+- Regression coverage now verifies that agent `transport_plan` contains only
+  transports needed by applied routes and pending probe jobs.
+- Regression coverage now verifies that Auto probe jobs prefer an active agent
+  that already reported the target domain.
 
 ## 5. Provider Transports
 
@@ -123,6 +130,9 @@ This is the current implementation order for the managed VPN control project.
 - User auth can be skipped when the user arrives through VPN/agent identity.
 - Admin keeps login/password.
 - Show statuses: applied, waiting for probe, Auto winner, agent offline.
+- Route lookup aliases are editable from user/admin UI and can also be managed
+  through `service-alias-list`, `service-alias-set`, and
+  `service-alias-delete`.
 
 ## 10. Cudy
 
