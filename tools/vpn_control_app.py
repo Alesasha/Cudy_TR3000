@@ -1530,6 +1530,7 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${item.note || ""}</td>
           <td class="inline">
             <button class="secondary" data-promote-domain="${item.domain}">Use</button>
+            <button data-promote-auto-domain="${item.domain}">Promote Auto</button>
             <button class="secondary" data-discovery-status="${item.domain}|reviewed">Reviewed</button>
             <button class="secondary" data-discovery-status="${item.domain}|pending">Pending</button>
             <button class="danger" data-discovery-status="${item.domain}|ignored">Ignore</button>
@@ -1543,6 +1544,34 @@ ADMIN_HTML = r"""<!doctype html>
           document.getElementById("globalRouteServer").value = "auto";
           syncAutoEditorFromExisting("globalRoute");
           document.getElementById("globalRouteDomain").focus();
+        });
+      });
+      body.querySelectorAll("[data-promote-auto-domain]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const domain = button.dataset.promoteAutoDomain;
+          const candidatesText = prompt("Candidate priority for Auto route. Leave blank to inherit default policy.", "");
+          if (candidatesText === null) return;
+          const note = prompt("Promotion note", "Promoted from discovery queue") || "";
+          const statusEl = document.getElementById("domainDiscoveryStatus");
+          statusEl.className = "status";
+          try {
+            const payload = {
+              domain,
+              user_id: "",
+              candidate_server_ids: candidatesText.trim() ? parsePriorityText(candidatesText) : null,
+              note
+            };
+            const result = await api("/api/admin/domain-discovery/promote", {
+              method: "POST",
+              body: JSON.stringify(payload)
+            });
+            statusEl.textContent = `${domain} promoted to ${result.route_scope} Auto route.`;
+            statusEl.className = "status ok";
+            await load();
+          } catch (error) {
+            statusEl.textContent = error.message;
+            statusEl.className = "status error";
+          }
         });
       });
       body.querySelectorAll("[data-discovery-status]").forEach(button => {
@@ -7170,6 +7199,105 @@ def save_domain_discovery_status(
         return {"ok": True, "item": domain_discovery_item(conn, normalized_domain)}
 
 
+def promote_domain_discovery_to_auto_route(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    user_id: str = "",
+    candidate_server_ids: Any = None,
+    note: str = "",
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_domain = normalize_domain(domain)
+    normalized_user_id = (user_id or "").strip()
+    normalized_candidates: list[str] | None = None
+    if candidate_server_ids not in (None, "", []):
+        normalized_candidates = parse_candidate_server_ids(candidate_server_ids)
+    timestamp = now()
+    with connect(db_path) as conn:
+        discovery = domain_discovery_item(conn, normalized_domain)
+        validate_server_id(conn, "auto", require_user_visible=True)
+        if normalized_user_id:
+            if row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
+                raise ValueError(f"Unknown user: {normalized_user_id}")
+        if normalized_candidates is not None:
+            for server_id in normalized_candidates:
+                if server_id != AUTO_ALL_REST:
+                    validate_server_id(conn, server_id, require_user_visible=True)
+        if normalized_user_id:
+            conn.execute(
+                """
+                INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+                VALUES (?, ?, 'auto', 1, ?, ?)
+                ON CONFLICT(user_id, domain)
+                DO UPDATE SET server_id = 'auto', enabled = 1, updated_at = excluded.updated_at
+                """,
+                (normalized_user_id, normalized_domain, timestamp, timestamp),
+            )
+            route_scope = "user_domain"
+        else:
+            conn.execute(
+                """
+                INSERT INTO global_domain_routes (domain, server_id, enabled, created_at, updated_at)
+                VALUES (?, 'auto', 1, ?, ?)
+                ON CONFLICT(domain)
+                DO UPDATE SET server_id = 'auto', enabled = 1, updated_at = excluded.updated_at
+                """,
+                (normalized_domain, timestamp, timestamp),
+            )
+            route_scope = "global_domain"
+        mark_note = note.strip() or f"Promoted to {route_scope} Auto route"
+        conn.execute(
+            """
+            UPDATE domain_discovery_queue
+            SET status = 'promoted', note = ?, last_seen_at = ?
+            WHERE domain = ?
+            """,
+            (mark_note, timestamp, normalized_domain),
+        )
+        auto_candidate_policy = None
+        if normalized_candidates is not None:
+            conn.execute(
+                """
+                INSERT INTO auto_candidate_policies (
+                  user_id, domain, candidate_server_ids, enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, 1, ?, ?)
+                ON CONFLICT(user_id, domain)
+                DO UPDATE SET candidate_server_ids = excluded.candidate_server_ids,
+                              enabled = 1,
+                              updated_at = excluded.updated_at
+                """,
+                (
+                    normalized_user_id,
+                    normalized_domain,
+                    json.dumps(normalized_candidates, ensure_ascii=False),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            auto_candidate_policy = {
+                "ok": True,
+                "user_id": normalized_user_id,
+                "domain": normalized_domain,
+                "scope": auto_policy_scope(normalized_user_id, normalized_domain),
+                "candidate_server_ids": normalized_candidates,
+                "enabled": True,
+                "updated_at": timestamp,
+            }
+        promoted = domain_discovery_item(conn, normalized_domain)
+    return {
+        "ok": True,
+        "domain": normalized_domain,
+        "user_id": normalized_user_id,
+        "route_scope": route_scope,
+        "server_id": "auto",
+        "discovery": promoted,
+        "previous_discovery": discovery,
+        "auto_candidate_policy": auto_candidate_policy,
+    }
+
+
 def domain_rule_for_user(conn: sqlite3.Connection, *, user_id: str, domain: str) -> dict[str, Any] | None:
     user_route = row(
         conn,
@@ -7858,6 +7986,18 @@ class Handler(BaseHTTPRequestHandler):
                         self.app.inventory_path,
                         domain=str(data.get("domain") or ""),
                         status=str(data.get("status") or ""),
+                        note=str(data.get("note") or ""),
+                    )
+                )
+            elif parsed.path == "/api/admin/domain-discovery/promote":
+                self.require_admin()
+                self.send_json(
+                    promote_domain_discovery_to_auto_route(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        domain=str(data.get("domain") or ""),
+                        user_id=str(data.get("user_id") or ""),
+                        candidate_server_ids=data.get("candidate_server_ids"),
                         note=str(data.get("note") or ""),
                     )
                 )
@@ -8680,6 +8820,13 @@ def build_parser() -> argparse.ArgumentParser:
     discovery_mark_parser.add_argument("--note", default="")
     discovery_mark_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
+    discovery_promote_parser = sub.add_parser("domain-discovery-promote", help="Promote a discovered domain to an explicit Auto route.")
+    discovery_promote_parser.add_argument("domain")
+    discovery_promote_parser.add_argument("--user-id", default="", help="Blank creates a global domain route.")
+    discovery_promote_parser.add_argument("--candidates", default="", help="Optional ordered Auto candidates, e.g. proxyde,proxynl,all-rest.")
+    discovery_promote_parser.add_argument("--note", default="")
+    discovery_promote_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     auto_winners_parser = sub.add_parser("auto-winners", help="Show recent Auto winners for all targets or one domain, URL, IP, CIDR, or service alias.")
     auto_winners_parser.add_argument("target", nargs="?", default="", help="Optional target filter. Blank means all recent winners.")
     auto_winners_parser.add_argument("--limit", type=int, default=10)
@@ -9233,6 +9380,26 @@ def main() -> int:
         else:
             item = result["item"]
             print(f"Discovered domain marked: {item['domain']} status={item['status']}")
+        return 0
+    if args.command == "domain-discovery-promote":
+        result = promote_domain_discovery_to_auto_route(
+            args.db,
+            args.inventory,
+            domain=args.domain,
+            user_id=args.user_id,
+            candidate_server_ids=args.candidates,
+            note=args.note,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            policy = result.get("auto_candidate_policy") or {}
+            candidates = ",".join(policy.get("candidate_server_ids") or [])
+            suffix = f" candidates={candidates}" if candidates else " candidates=inherited"
+            print(
+                f"Discovered domain promoted: {result['domain']} "
+                f"scope={result['route_scope']} server=auto{suffix}"
+            )
         return 0
     if args.command == "auto-winners":
         result = recent_auto_winners(args.db, args.inventory, target=args.target, limit=args.limit)

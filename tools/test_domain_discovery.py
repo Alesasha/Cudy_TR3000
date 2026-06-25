@@ -93,11 +93,38 @@ def run_manual_record_and_mark(db_path: Path) -> None:
     assert_equal([item["domain"] for item in ignored], ["manual-review.example"], "ignored discovery filter")
 
 
+def run_promote_to_auto_route(db_path: Path) -> None:
+    result = app.promote_domain_discovery_to_auto_route(
+        db_path,
+        INVENTORY,
+        domain="unknown-review.example",
+        candidate_server_ids="proxyde, all-rest",
+        note="approved by regression",
+    )
+    assert_equal(result["ok"], True, "promote result")
+    assert_equal(result["route_scope"], "global_domain", "promote route scope")
+    assert_equal(result["server_id"], "auto", "promote server")
+    assert_equal(result["discovery"]["status"], "promoted", "promoted discovery status")
+    assert_equal(result["discovery"]["note"], "approved by regression", "promoted discovery note")
+    assert_equal(result["auto_candidate_policy"]["candidate_server_ids"], ["proxyde", "all-rest"], "promoted candidates")
+
+    lookup = app.route_lookup(db_path, INVENTORY, user_id="discovery-user", target="unknown-review.example")
+    item = lookup["results"][0]
+    assert_equal(item["route_state"], "managed", "promoted lookup route state")
+    assert_equal(item["requested_server_id"], "auto", "promoted lookup requested server")
+    assert_equal(item["matched_rule"]["source"], "global", "promoted lookup rule source")
+
+    with closing(app.connect(db_path)) as conn:
+        route = app.row(conn, "SELECT domain, server_id FROM global_domain_routes WHERE domain = ?", ("unknown-review.example",))
+    assert_equal(route["server_id"], "auto", "promoted global route")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="domain-discovery-", ignore_cleanup_errors=True) as tmp:
         db_path = Path(tmp) / "vpn_control.db"
         run_lookup_records_direct_domain(db_path)
         run_manual_record_and_mark(db_path)
+        run_promote_to_auto_route(db_path)
     print("Domain discovery regression passed.")
     return 0
 

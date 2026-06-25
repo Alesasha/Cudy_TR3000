@@ -35,7 +35,7 @@ The smoke check does not apply route changes and does not refresh providers with
 | Auto priority policies | Implemented as ordered policies consumed by Auto selection. | `python tools\vpn_control_app.py auto-candidates-list` | Add more production policies. |
 | Auto selection | Implemented as Cudy-side `curl --interface` probes with fastest successful winner. | `python tools\vpn_control_app.py auto-select example.com --candidates "proxyde, proxyus, uswest"` | Add richer content checks for services like Gemini. |
 | Auto cache | Implemented as manually editable cache and Auto selection output. | `python tools\vpn_control_app.py auto-cache-list` | Add automatic refresh of leaders. |
-| Auto default for unknown domains | Unknown domains still follow `Direct`, but `route-lookup` now records direct domain hits into a review queue. | `python tools\test_domain_discovery.py` and `python tools\vpn_control_app.py domain-discovery-list` | Add an explicit reviewed policy for creating Auto routes from the queue. |
+| Auto default for unknown domains | Unknown domains still follow `Direct`, but `route-lookup` records direct domain hits into a review queue. Admin can explicitly promote a reviewed domain into `domain -> auto`. | `python tools\test_domain_discovery.py`, `python tools\vpn_control_app.py domain-discovery-list`, and `python tools\vpn_control_app.py domain-discovery-promote example.com --candidates "proxyde, all-rest"` | Decide later whether any domains may be promoted automatically without admin review. |
 | Domain/IP lists needing tunnel | Static override files exist in `openwrt/pbr-overrides`. | Inspect `openwrt\pbr-overrides\*` and Cudy `/etc/pbr-overrides`. | Implement automatic discovery/update and a review workflow. |
 
 ## Auto Selection Target Behavior
@@ -87,7 +87,12 @@ Minimum useful fields:
 - review status: `pending`, `reviewed`, `ignored`, or `promoted`.
 
 This queue is deliberately non-invasive: discovered domains do not become live
-routes until an admin creates an explicit global or user domain route.
+routes until an admin creates an explicit global or user domain route. Promotion
+can be done from the admin UI or the CLI:
+
+```powershell
+python tools\vpn_control_app.py domain-discovery-promote example.com --candidates "proxyde, proxynl, all-rest"
+```
 
 ## Go Port Gate
 

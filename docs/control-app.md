@@ -123,11 +123,14 @@ http://127.0.0.1:8765/admin
   - discovery is advisory only and does not create a route or change live traffic;
   - admin UI can review the queue and prefill a global route form with the
     discovered domain;
+  - admin UI can also explicitly promote a discovered domain into a global
+    `domain -> auto` route, optionally with a comma-separated priority list;
   - CLI commands:
 
 ```powershell
 python tools\vpn_control_app.py domain-discovery-list
 python tools\vpn_control_app.py domain-discovery-mark example.com reviewed
+python tools\vpn_control_app.py domain-discovery-promote example.com --candidates "proxyde, proxynl, all-rest"
 ```
 
 - Deploy preview:
@@ -154,7 +157,7 @@ python tools\vpn_control_app.py domain-discovery-mark example.com reviewed
 ## Not Implemented Yet
 
 - background refresh of cached `Auto` choices;
-- automatic route creation from discovered domains;
+- fully automatic route creation from discovered domains without admin review;
 - multi-user invitation or remote sync.
 
 Those should be implemented after the local data model stabilizes.
