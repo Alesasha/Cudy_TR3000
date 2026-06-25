@@ -74,6 +74,11 @@ def main() -> int:
         )
         try:
             wait_for_healthz(base_url)
+            readiness = fetch_json(f"{base_url}/readyz")
+            if readiness.get("ok") is not True:
+                raise AssertionError(f"unexpected readiness payload: {readiness!r}")
+            if not readiness.get("checks"):
+                raise AssertionError(f"readiness checks are empty: {readiness!r}")
             manifest = fetch_json(f"{base_url}/api/control/endpoints")
             endpoints = manifest.get("endpoints") or []
             if not endpoints:
@@ -90,6 +95,7 @@ def main() -> int:
                     str(INVENTORY),
                     "system-status",
                     "--json",
+                    "--strict",
                 ],
                 cwd=ROOT,
                 text=True,

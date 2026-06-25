@@ -5379,6 +5379,8 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
         if offline_enabled_agents:
             warnings.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
+        if failed_probe_jobs:
+            warnings.append(f"{failed_probe_jobs} probe job(s) are failed")
         if stale_transports:
             details = ", ".join(f"{key}={value}" for key, value in sorted(stale_by_provider.items()))
             warnings.append(f"{len(stale_transports)} enabled transport config(s) are stale over {TRANSPORT_STALE_WARN_SECONDS}s ({details})")
@@ -5469,6 +5471,48 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             },
             "warnings": warnings,
         }
+
+
+def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
+    status = build_system_status(db_path, inventory_path)
+    checks = [
+        {
+            "name": "control_server",
+            "ok": bool(status.get("ok")),
+            "summary": "ready" if status.get("ok") else "degraded",
+        },
+        {
+            "name": "agents",
+            "ok": int((status.get("agents") or {}).get("offline_enabled") or 0) == 0,
+            "summary": (
+                f"{(status.get('agents') or {}).get('online') or 0}/"
+                f"{(status.get('agents') or {}).get('enabled') or 0} online"
+            ),
+        },
+        {
+            "name": "probe_jobs",
+            "ok": int((status.get("probe_jobs") or {}).get("failed") or 0) == 0,
+            "summary": (
+                f"{(status.get('probe_jobs') or {}).get('pending') or 0} pending, "
+                f"{(status.get('probe_jobs') or {}).get('failed') or 0} failed"
+            ),
+        },
+        {
+            "name": "transports",
+            "ok": int((status.get("transports") or {}).get("stale_enabled_count") or 0) == 0,
+            "summary": (
+                f"{(status.get('transports') or {}).get('enabled') or 0}/"
+                f"{(status.get('transports') or {}).get('total') or 0} enabled"
+            ),
+        },
+    ]
+    return {
+        "ok": bool(status.get("ok")),
+        "generated_at": status.get("generated_at"),
+        "service": status.get("service") or {},
+        "checks": checks,
+        "warnings": status.get("warnings") or [],
+    }
 
 
 def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[str, Any]) -> dict[str, Any]:
@@ -7382,6 +7426,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_file(config_path, download_name=config_path.name)
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
+            elif parsed.path == "/readyz":
+                readiness = build_readiness_status(self.app.db_path, self.app.inventory_path)
+                status = HTTPStatus.OK if readiness.get("ok") else HTTPStatus.SERVICE_UNAVAILABLE
+                self.send_json(readiness, status)
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -8147,8 +8195,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     system_status_parser = sub.add_parser("system-status", help="Print production health/status summary.")
     system_status_parser.add_argument("--json", action="store_true", help="Print JSON.")
+    system_status_parser.add_argument("--strict", action="store_true", help="Exit with a non-zero status when production status is degraded.")
     status_parser = sub.add_parser("status", help="Alias for system-status.")
     status_parser.add_argument("--json", action="store_true", help="Print JSON.")
+    status_parser.add_argument("--strict", action="store_true", help="Exit with a non-zero status when production status is degraded.")
 
     create_user_parser = sub.add_parser("create-user", help="Create or update a login user.")
     create_user_parser.add_argument("user_id")
@@ -8514,7 +8564,7 @@ def main() -> int:
             print(f"local_fallback_sync_log: exists={sync_log.get('exists')} age={sync_log.get('age_seconds')}")
             for warning in status["warnings"]:
                 print(f"warning: {warning}")
-        return 0
+        return 0 if status["ok"] or not args.strict else 2
     if args.command == "create-user":
         password = None if args.no_password_change else read_password_arg(args.password, confirm=args.password is None)
         create_or_update_user(

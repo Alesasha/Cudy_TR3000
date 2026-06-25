@@ -200,6 +200,29 @@ Detailed status is also available to admins through:
 GET /api/status
 ```
 
+Lightweight process health remains public and intentionally minimal:
+
+```text
+GET /healthz
+```
+
+Use readiness for production checks that should fail when the control-server is
+degraded:
+
+```text
+GET /readyz
+```
+
+`/readyz` returns a compact JSON payload with `checks` and uses HTTP `503` when
+the same status model reports `ok=false`. The CLI equivalent is:
+
+```bash
+python3 /opt/cudy-control/tools/vpn_control_app.py \
+  --db /opt/cudy-control/data/vpn_control.db \
+  --inventory /opt/cudy-control/config/vpn_inventory.json \
+  system-status --strict
+```
+
 The same payload format is produced by `system-status --json`. Worker heartbeat
 is stored in SQLite, so both the HTTP endpoint and a separate CLI invocation can
 show whether the Auto probe and provider refresh workers have recently run.
