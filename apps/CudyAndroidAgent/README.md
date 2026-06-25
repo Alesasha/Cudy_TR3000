@@ -114,8 +114,14 @@ Process: <pid>
 Service: CudyVpnService ... isForeground=true
 boot_receiver_action: android.intent.action.USER_UNLOCKED
 boot_receiver_result: start-requested
+service_status: waiting for network after boot (45s)
 service_status: ok ...
 ```
+
+The boot receiver intentionally delays the first control-server fetch by 45
+seconds after `BOOT_COMPLETED`/`USER_UNLOCKED`. On MIUI this avoids a noisy
+first SSH timeout while Wi-Fi/cellular networking is still settling after
+unlock.
 
 If the APK exposes the receiver but no `boot_receiver_*` markers appear after
 unlock, the Android vendor firmware most likely blocked the boot/unlock

@@ -69,6 +69,7 @@ public class CudyVpnService : VpnService
         var sshUser = (intent?.GetStringExtra("ssh_user") ?? "").Trim();
         var sshKey = intent?.GetStringExtra("ssh_key") ?? "";
         var controlOnly = intent?.GetBooleanExtra("control_only", false) ?? false;
+        var startupDelaySeconds = Math.Clamp(intent?.GetIntExtra("startup_delay_seconds", 0) ?? 0, 0, 300);
         debugProbeUrl = (intent?.GetStringExtra("debug_probe_url") ?? "").Trim();
         debugProbeCandidates = (intent?.GetStringExtra("debug_probe_candidates") ?? "").Trim();
         debugProbePending = !string.IsNullOrWhiteSpace(debugProbeUrl)
@@ -101,7 +102,7 @@ public class CudyVpnService : VpnService
         loopCts = new CancellationTokenSource();
         Log.Info(LogTag, "Starting control loop task");
         loopTask = Task.Run(
-            () => RunControlLoopAsync(controlUrl, deviceId, token, controlOnly, loopCts.Token),
+            () => RunControlLoopAsync(controlUrl, deviceId, token, controlOnly, startupDelaySeconds, loopCts.Token),
             loopCts.Token);
     }
 
@@ -215,9 +216,17 @@ public class CudyVpnService : VpnService
         string deviceId,
         string token,
         bool controlOnly,
+        int startupDelaySeconds,
         CancellationToken cancellationToken)
     {
         Log.Info(LogTag, "Control loop task started");
+        if (startupDelaySeconds > 0)
+        {
+            SaveServiceStatus($"waiting for network after boot ({startupDelaySeconds}s)");
+            Log.Info(LogTag, $"Control loop waiting {startupDelaySeconds}s before first policy fetch");
+            await Task.Delay(TimeSpan.FromSeconds(startupDelaySeconds), cancellationToken);
+        }
+
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(20) };
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         while (!cancellationToken.IsCancellationRequested)

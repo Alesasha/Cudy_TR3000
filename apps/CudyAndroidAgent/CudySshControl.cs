@@ -29,7 +29,7 @@ public static class CudySshControl
         var auth = new PrivateKeyAuthenticationMethod(user, keyFile);
         var connection = new ConnectionInfo(host, 22, user, auth)
         {
-            Timeout = TimeSpan.FromSeconds(20),
+            Timeout = TimeSpan.FromSeconds(60),
         };
         var client = new SshClient(connection);
         client.HostKeyReceived += (_, args) => args.CanTrust = true;
