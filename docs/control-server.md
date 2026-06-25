@@ -230,7 +230,8 @@ show whether the Auto probe and provider refresh workers have recently run.
 It includes:
 
 - agent online/stale state;
-- probe job counts and latest probe timestamps;
+- probe job counts, latest probe timestamps, and recent failed probe jobs
+  (`PROBE_FAILED_WARN_SECONDS`, default 1 hour);
 - provider transport freshness by provider;
 - stale enabled transport configs, for example provider profiles that remain in
   SQLite after a provider subscription stops returning that location;

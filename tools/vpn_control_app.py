@@ -74,6 +74,7 @@ CONTROL_BACKUP_MAX_AGE_SECONDS = int(os.environ.get("CONTROL_BACKUP_MAX_AGE_SECO
 CONTROL_BACKUP_STATUS_WARN = os.environ.get("CONTROL_BACKUP_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 TRANSPORT_STALE_WARN_SECONDS = int(os.environ.get("TRANSPORT_STALE_WARN_SECONDS", str(24 * 60 * 60)))
+PROBE_FAILED_WARN_SECONDS = int(os.environ.get("PROBE_FAILED_WARN_SECONDS", str(60 * 60)))
 WORKER_STATUS_LOCK = threading.Lock()
 WORKER_STATUS: dict[str, dict[str, Any]] = {
     "auto_probe": {"enabled": False, "last_started_at": None, "last_finished_at": None, "last_error": None},
@@ -1121,7 +1122,7 @@ ADMIN_HTML = r"""<!doctype html>
       grid.innerHTML = [
         ["Service", badge(status.ok, status.ok ? "OK" : "WARN"), `uptime ${fmtAge((status.service || {}).uptime_seconds)}`],
         ["Agents", `${(status.agents || {}).online || 0}/${(status.agents || {}).enabled || 0}`, `recent ${(status.agents || {}).recent_seconds || "-"}s`],
-        ["Probe jobs", `${(status.probe_jobs || {}).pending || 0} pending`, `${(status.probe_jobs || {}).failed || 0} failed`],
+        ["Probe jobs", `${(status.probe_jobs || {}).pending || 0} pending`, `${(status.probe_jobs || {}).failed_recent || 0}/${(status.probe_jobs || {}).failed || 0} recent failed`],
         ["Transports", `${(status.transports || {}).enabled || 0}/${(status.transports || {}).total || 0}`, `oldest ${fmtAge((status.transports || {}).oldest_age_seconds)}`],
         ["Auto worker", badge(autoWorker.enabled, autoWorker.enabled ? "on" : "off"), `last ${fmtAge(autoWorker.last_finished_age_seconds)}`],
         ["Provider worker", badge(providerWorker.enabled, providerWorker.enabled ? "on" : "off"), `last ${fmtAge(providerWorker.last_finished_age_seconds)}`],
@@ -1141,7 +1142,7 @@ ADMIN_HTML = r"""<!doctype html>
         ["Workers", providerWorker.last_error || autoWorker.last_error ? "error" : "ok", `auto ${fmtAge(autoWorker.last_finished_age_seconds)} / provider ${fmtAge(providerWorker.last_finished_age_seconds)}`, `auto=${autoWorker.last_error || "-"}; provider=${providerWorker.last_error || "-"}`],
         ["Fallback", fallback.ok ? "ok" : "warn", fmtAge(fallback.age_seconds), fallback.error || fallback.archive_name || ""],
         ["Providers", "info", fmtAge((status.transports || {}).oldest_age_seconds), providerDetails || "-"],
-        ["Probe jobs", (status.probe_jobs || {}).failed ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
+        ["Probe jobs", (status.probe_jobs || {}).failed_recent ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
         ["Operations", "info", `backup ${fmtAge(backup.age_seconds)}`, `backup=${backup.name || "-"}; fallback-log=${fmtAge((((status.operations || {}).local_cudy_fallback_sync || {}).task_log || {}).age_seconds)}`],
       ].concat(warnings.map(item => ["Warning", "warn", "-", item]));
       body.innerHTML = rows.map(([area, stateText, age, details]) => `
@@ -5414,6 +5415,18 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             warnings.append("Cudy fallback state is stale or unreachable from this process")
         pending_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'pending'")
         failed_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'failed'")
+        failed_probe_cutoff_epoch = reference.replace(microsecond=0).timestamp() - PROBE_FAILED_WARN_SECONDS
+        failed_probe_cutoff = datetime.fromtimestamp(failed_probe_cutoff_epoch, timezone.utc).replace(microsecond=0).isoformat()
+        failed_recent_probe_jobs = count_value(
+            conn,
+            """
+            SELECT COUNT(*) AS count
+            FROM agent_probe_jobs
+            WHERE status = 'failed'
+              AND COALESCE(finished_at, updated_at, created_at) >= ?
+            """,
+            (failed_probe_cutoff,),
+        )
         oldest_pending_probe = row(conn, "SELECT MIN(created_at) AS value FROM agent_probe_jobs WHERE status = 'pending'")
         latest_probe_created = row(conn, "SELECT MAX(created_at) AS value FROM agent_probe_jobs")
         latest_probe_updated = row(conn, "SELECT MAX(updated_at) AS value FROM agent_probe_jobs")
@@ -5421,8 +5434,8 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
         if offline_enabled_agents:
             warnings.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
-        if failed_probe_jobs:
-            warnings.append(f"{failed_probe_jobs} probe job(s) are failed")
+        if failed_recent_probe_jobs:
+            warnings.append(f"{failed_recent_probe_jobs} probe job(s) failed within {PROBE_FAILED_WARN_SECONDS}s")
         if stale_transports:
             details = ", ".join(f"{key}={value}" for key, value in sorted(stale_by_provider.items()))
             warnings.append(f"{len(stale_transports)} enabled transport config(s) are stale over {TRANSPORT_STALE_WARN_SECONDS}s ({details})")
@@ -5472,6 +5485,8 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "by_status": grouped_counts(conn, "SELECT status AS key, COUNT(*) AS count FROM agent_probe_jobs GROUP BY status"),
                 "pending": pending_probe_jobs,
                 "failed": failed_probe_jobs,
+                "failed_recent": failed_recent_probe_jobs,
+                "failed_warn_seconds": PROBE_FAILED_WARN_SECONDS,
                 "oldest_pending_created_at": (oldest_pending_probe or {}).get("value"),
                 "oldest_pending_age_seconds": timestamp_age_seconds((oldest_pending_probe or {}).get("value"), reference=reference),
                 "latest_created_at": (latest_probe_created or {}).get("value"),
@@ -5533,10 +5548,10 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
         },
         {
             "name": "probe_jobs",
-            "ok": int((status.get("probe_jobs") or {}).get("failed") or 0) == 0,
+            "ok": int((status.get("probe_jobs") or {}).get("failed_recent") or 0) == 0,
             "summary": (
                 f"{(status.get('probe_jobs') or {}).get('pending') or 0} pending, "
-                f"{(status.get('probe_jobs') or {}).get('failed') or 0} failed"
+                f"{(status.get('probe_jobs') or {}).get('failed_recent') or 0} recent failed"
             ),
         },
         {
