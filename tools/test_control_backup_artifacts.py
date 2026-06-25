@@ -20,11 +20,39 @@ import sync_control_state_to_cudy as sync_state  # noqa: E402
 
 
 class FakeChannel:
-    def __init__(self, rc: int = 0) -> None:
+    def __init__(self, rc: int = 0, *, out: bytes = b"", err: bytes = b"") -> None:
         self.rc = rc
+        self.out = out
+        self.err = err
+        self.closed = False
 
     def recv_exit_status(self) -> int:
         return self.rc
+
+    def settimeout(self, _value: float) -> None:
+        return None
+
+    def recv_ready(self) -> bool:
+        return bool(self.out)
+
+    def recv_stderr_ready(self) -> bool:
+        return bool(self.err)
+
+    def recv(self, _size: int) -> bytes:
+        out = self.out
+        self.out = b""
+        return out
+
+    def recv_stderr(self, _size: int) -> bytes:
+        err = self.err
+        self.err = b""
+        return err
+
+    def exit_status_ready(self) -> bool:
+        return not self.out and not self.err
+
+    def close(self) -> None:
+        self.closed = True
 
     def sendall(self, _content: bytes) -> None:
         return None
@@ -43,8 +71,8 @@ class FakeStdin:
 
 
 class FakeStdout:
-    def __init__(self, rc: int = 0) -> None:
-        self.channel = FakeChannel(rc)
+    def __init__(self, rc: int = 0, *, out: bytes = b"") -> None:
+        self.channel = FakeChannel(rc, out=out)
 
     def read(self) -> bytes:
         return b""
@@ -63,7 +91,7 @@ class FakeSshClient:
     def exec_command(self, command: str, timeout: int) -> tuple[FakeStdin, FakeStdout, FakeStderr]:
         self.commands.append(command)
         stdin = FakeStdin()
-        stdout = FakeStdout()
+        stdout = FakeStdout(out=b"ok\n")
         stderr = FakeStderr()
         if command.startswith("cat > "):
             raw_path = command.removeprefix("cat > ").strip()
@@ -110,6 +138,22 @@ def run_prune_backup_check() -> None:
         assert_equal(removed_names, [paths[0].name, paths[1].name], "oldest archives should be pruned")
 
 
+def run_backup_timeout_contract_check() -> None:
+    client = FakeSshClient()
+    output = backup.ssh_exec(client, "true", timeout=3)  # type: ignore[arg-type]
+    assert_equal(output, "ok\n", "bounded ssh_exec should collect stdout")
+
+    direct_source = (ROOT / "tools" / "backup_control_server.py").read_text(encoding="utf-8")
+    tunnel_source = (ROOT / "tools" / "backup_control_server_via_tunnel_user.py").read_text(encoding="utf-8")
+    assert_true("remote command timed out" in direct_source, "direct backup should fail remote commands on timeout")
+    assert_true("sftp.get_channel().settimeout(args.timeout)" in direct_source, "direct backup should bound SFTP operations")
+    assert_true("sftp.get_channel().settimeout(args.timeout)" in tunnel_source, "tunnel backup should bound SFTP operations")
+    assert_true("DEFAULT_PASSWORD_FILE" in direct_source, "direct backup should support unattended password file")
+    assert_true("sys.stdin.isatty()" in direct_source, "direct backup should not prompt in non-interactive runs")
+    assert_true("DEFAULT_PASSWORD_FILE" in tunnel_source, "tunnel backup should support unattended password file")
+    assert_true("sys.stdin.isatty()" in tunnel_source, "tunnel backup should not prompt in non-interactive runs")
+
+
 def run_cudy_publish_artifact_check() -> None:
     with tempfile.TemporaryDirectory(prefix="cudy-fallback-publish-") as tmp:
         archive_path = Path(tmp) / "cudy-control-95-182-91-203-20260625-000000.tgz"
@@ -148,6 +192,7 @@ def run_cudy_publish_artifact_check() -> None:
 
 def main() -> int:
     run_prune_backup_check()
+    run_backup_timeout_contract_check()
     run_cudy_publish_artifact_check()
     print("Control backup/fallback artifact regression passed.")
     return 0

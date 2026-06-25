@@ -15,6 +15,7 @@ import getpass
 import os
 import shlex
 import stat
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from typing import Any
 import paramiko
 
 from backup_control_server import (
+    DEFAULT_PASSWORD_FILE,
     DEFAULT_HOST,
     DEFAULT_OUTPUT_DIR,
     DEFAULT_REMOTE_DIR,
@@ -47,6 +49,15 @@ def root_password(explicit: str | None) -> str:
         value = os.environ.get(name)
         if value:
             return value
+    if DEFAULT_PASSWORD_FILE.exists():
+        value = DEFAULT_PASSWORD_FILE.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "Root password is required. Set CONTROL_BACKUP_ROOT_PASSWORD, "
+            f"write {DEFAULT_PASSWORD_FILE}, or pass --root-password."
+        )
     return getpass.getpass("Root password for uswest su: ")
 
 
@@ -171,6 +182,7 @@ def backup(args: argparse.Namespace) -> dict[str, Any]:
     try:
         sftp = client.open_sftp()
         try:
+            sftp.get_channel().settimeout(args.timeout)
             script = build_remote_script(args, remote_archive=remote_archive)
             mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IROTH
             with sftp.file(remote_script, "w") as remote_fh:

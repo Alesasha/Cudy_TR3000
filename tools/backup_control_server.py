@@ -13,6 +13,7 @@ import getpass
 import os
 import shlex
 import stat
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -24,6 +25,8 @@ DEFAULT_HOST = "95.182.91.203"
 DEFAULT_USER = "root"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_OUTPUT_DIR = Path("backups") / "control-server"
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
 
 
 def ssh_password(explicit: str | None, *, host: str) -> str:
@@ -33,6 +36,15 @@ def ssh_password(explicit: str | None, *, host: str) -> str:
         value = os.environ.get(name)
         if value:
             return value
+    if DEFAULT_PASSWORD_FILE.exists():
+        value = DEFAULT_PASSWORD_FILE.read_text(encoding="utf-8").strip()
+        if value:
+            return value
+    if not sys.stdin.isatty():
+        raise RuntimeError(
+            "SSH password is required. Set CONTROL_BACKUP_SSH_PASSWORD, "
+            f"write {DEFAULT_PASSWORD_FILE}, or pass --ssh-password."
+        )
     return getpass.getpass(f"SSH password for {host}: ")
 
 
@@ -64,9 +76,25 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
     _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-    out = stdout.read().decode("utf-8", errors="replace")
-    err = stderr.read().decode("utf-8", errors="replace")
-    rc = stdout.channel.recv_exit_status()
+    channel = stdout.channel
+    channel.settimeout(1.0)
+    deadline = time.monotonic() + max(1, timeout)
+    out_chunks: list[bytes] = []
+    err_chunks: list[bytes] = []
+    while True:
+        while channel.recv_ready():
+            out_chunks.append(channel.recv(65536))
+        while channel.recv_stderr_ready():
+            err_chunks.append(channel.recv_stderr(65536))
+        if channel.exit_status_ready():
+            break
+        if time.monotonic() >= deadline:
+            channel.close()
+            raise TimeoutError(f"remote command timed out after {timeout}s: {command}")
+        time.sleep(0.1)
+    out = b"".join(out_chunks).decode("utf-8", errors="replace")
+    err = b"".join(err_chunks).decode("utf-8", errors="replace")
+    rc = channel.recv_exit_status()
     if rc != 0:
         raise RuntimeError(f"remote command failed rc={rc}: {command}\nSTDOUT:\n{out}\nSTDERR:\n{err}")
     return out + err
@@ -167,6 +195,7 @@ def backup(args: argparse.Namespace) -> dict[str, Any]:
         local_archive = output_dir / Path(remote_archive).name
         sftp = client.open_sftp()
         try:
+            sftp.get_channel().settimeout(args.timeout)
             size = remote_file_size(sftp, remote_archive)
             sftp.get(remote_archive, str(local_archive))
         finally:
