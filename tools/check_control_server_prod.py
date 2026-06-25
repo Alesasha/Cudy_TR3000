@@ -10,9 +10,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import logging
 import os
+import time
 from pathlib import Path
 from typing import Any
+from urllib.error import URLError
+from urllib.request import urlopen
 
 import paramiko
 
@@ -23,6 +27,10 @@ DEFAULT_USER = "root"
 DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control.service"
+DEFAULT_HTTP_FALLBACK_URL = "http://127.0.0.1:18765"
+
+
+logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
 
 
 def load_password(explicit: str | None) -> str:
@@ -39,20 +47,29 @@ def load_password(explicit: str | None) -> str:
     return getpass.getpass("SSH password for production control-server: ")
 
 
-def connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHClient:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(
-        host,
-        username=user,
-        password=password,
-        timeout=timeout,
-        banner_timeout=timeout,
-        auth_timeout=timeout,
-        look_for_keys=False,
-        allow_agent=False,
-    )
-    return client
+def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                host,
+                username=user,
+                password=password,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+                look_for_keys=False,
+                allow_agent=False,
+            )
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+            if attempt < max(1, attempts):
+                time.sleep(min(2 * attempt, 5))
+    raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> tuple[int, str]:
@@ -70,6 +87,18 @@ def read_remote_json(client: paramiko.SSHClient, command: str, timeout: int) -> 
     payload = json.loads(output)
     if not isinstance(payload, dict):
         raise ValueError("remote command did not return a JSON object")
+    return payload
+
+
+def read_http_json(base_url: str, path: str, timeout: int) -> dict[str, Any]:
+    url = base_url.rstrip("/") + "/" + path.lstrip("/")
+    try:
+        with urlopen(url, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, URLError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"HTTP fallback failed for {url}: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"HTTP fallback did not return a JSON object: {url}")
     return payload
 
 
@@ -110,9 +139,59 @@ def summarize_status(status: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def summarize_readyz(ready: dict[str, Any]) -> dict[str, Any]:
+    checks = ready.get("checks") or []
+    by_name = {item.get("name"): item for item in checks if isinstance(item, dict)}
+    agents_summary = str((by_name.get("agents") or {}).get("summary") or "")
+    transports_summary = str((by_name.get("transports") or {}).get("summary") or "")
+    probe_summary = str((by_name.get("probe_jobs") or {}).get("summary") or "")
+    return {
+        "ok": bool(ready.get("ok")),
+        "warnings": ready.get("warnings") or [],
+        "advisories": ready.get("advisories") or [],
+        "agents": {"summary": agents_summary},
+        "workers": {},
+        "probe_jobs": {"summary": probe_summary},
+        "transports": {"summary": transports_summary},
+        "cudy_fallback_reachable_from_prod": None,
+    }
+
+
+def check_via_http_fallback(args: argparse.Namespace, ssh_error: Exception) -> dict[str, Any]:
+    health = read_http_json(args.http_fallback_url, "/healthz", args.timeout)
+    ready = read_http_json(args.http_fallback_url, "/readyz", args.timeout)
+    status_summary = summarize_readyz(ready)
+    ok = bool(health.get("ok") is True and ready.get("ok") is True)
+    if args.require_ssh:
+        ok = False
+    return {
+        "ok": ok,
+        "host": args.host,
+        "mode": "http_fallback",
+        "ssh_error": str(ssh_error),
+        "service": {
+            "ok": None,
+            "lines": [f"SSH audit unavailable: {ssh_error}"],
+        },
+        "healthz": health,
+        "readyz": {
+            "ok": ready.get("ok"),
+            "warnings": ready.get("warnings") or [],
+            "advisories": ready.get("advisories") or [],
+            "checks": ready.get("checks") or [],
+        },
+        "status": status_summary,
+    }
+
+
 def check(args: argparse.Namespace) -> dict[str, Any]:
     password = load_password(args.ssh_password)
-    client = connect(args.host, args.user, password, args.timeout)
+    try:
+        client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
+    except Exception as exc:
+        if args.http_fallback_url and not args.no_http_fallback:
+            return check_via_http_fallback(args, exc)
+        raise
     try:
         service_rc, service_output = ssh_exec(
             client,
@@ -145,6 +224,8 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "ok": ok,
         "host": args.host,
+        "mode": "ssh",
+        "ssh_error": "",
         "service": {
             "ok": service_ok,
             "lines": service_lines,
@@ -166,6 +247,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--ssh-password")
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--connect-attempts", type=int, default=3)
+    parser.add_argument("--http-fallback-url", default=os.environ.get("CONTROL_HTTP_FALLBACK_URL", DEFAULT_HTTP_FALLBACK_URL))
+    parser.add_argument("--no-http-fallback", action="store_true", help="Do not use local HTTP tunnel fallback when SSH audit is unavailable.")
+    parser.add_argument("--require-ssh", action="store_true", help="Fail strict mode if SSH audit is unavailable even when HTTP readiness is OK.")
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
     parser.add_argument("--service", default=DEFAULT_SERVICE)
     parser.add_argument("--json", action="store_true")
@@ -179,7 +264,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        print(f"Production control-server: {'OK' if result['ok'] else 'WARN'} host={result['host']}")
+        print(f"Production control-server: {'OK' if result['ok'] else 'WARN'} host={result['host']} mode={result.get('mode') or 'ssh'}")
+        if result.get("ssh_error"):
+            print(f"ssh: WARN {result['ssh_error']}")
         print(f"service: {'OK' if result['service']['ok'] else 'WARN'} {'; '.join(result['service']['lines'])}")
         print(f"healthz: {result['healthz'].get('ok')}")
         print(f"readyz: {result['readyz'].get('ok')} checks={len(result['readyz'].get('checks') or [])}")

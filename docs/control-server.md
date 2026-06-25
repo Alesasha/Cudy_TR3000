@@ -257,6 +257,11 @@ The check validates `vpn-control.service`, `/healthz`, `/readyz`, worker
 freshness, agent summary, and transport freshness. It requires the local ignored
 control-server SSH password file or `CONTROL_BACKUP_SSH_PASSWORD`.
 
+If new SSH sessions hang during the banner stage but the existing local control
+tunnel is alive, the checker falls back to `http://127.0.0.1:18765` and reports
+`mode=http_fallback`. That mode verifies `/healthz` and `/readyz` only; use
+`--require-ssh` when the SSH audit itself must be treated as mandatory.
+
 Local backup and fallback-sync checks are informational by default because, in
 the current deployment, the scheduled pull-backup and Cudy sync tasks normally
 run on the operator Windows machine, not on uswest. To make them affect
