@@ -43,7 +43,15 @@ if ! command -v sing-box >/dev/null 2>&1 && [ ! -x ./runtime/sing-box ]; then
   if [ "${AUTO_INSTALL_SINGBOX:-1}" = "1" ] && [ -x ./install_singbox_runtime.sh ]; then
     echo
     echo "== install bundled sing-box runtime =="
-    if ! ./install_singbox_runtime.sh; then
+    if ! python3 - <<'PY'
+import socket
+socket.getaddrinfo("api.github.com", 443)
+PY
+    then
+      echo "ERROR: DNS cannot resolve api.github.com after direct baseline restore." >&2
+      echo "Run './status.sh' and send the output, or place sing-box into ./runtime/sing-box and rerun." >&2
+      missing=1
+    elif ! ./install_singbox_runtime.sh; then
       echo "ERROR: automatic sing-box install failed." >&2
       missing=1
     fi

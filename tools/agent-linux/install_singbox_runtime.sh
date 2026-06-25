@@ -41,6 +41,7 @@ asset_url="$(
 import json
 import re
 import sys
+from urllib.error import URLError
 from urllib.request import Request, urlopen
 
 repo, version, arch = sys.argv[1:4]
@@ -48,8 +49,11 @@ api = f"https://api.github.com/repos/{repo}/releases/latest"
 if version != "latest":
     api = f"https://api.github.com/repos/{repo}/releases/tags/{version}"
 request = Request(api, headers={"User-Agent": "cudy-linux-agent-installer"})
-with urlopen(request, timeout=30) as response:
-    release = json.load(response)
+try:
+    with urlopen(request, timeout=30) as response:
+        release = json.load(response)
+except URLError as exc:
+    raise SystemExit(f"ERROR: cannot query GitHub release API ({api}): {exc}") from exc
 pattern = re.compile(rf"^sing-box-.*-linux-{re.escape(arch)}\.tar\.gz$")
 matches = [
     asset.get("browser_download_url")

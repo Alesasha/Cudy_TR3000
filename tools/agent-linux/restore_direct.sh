@@ -51,8 +51,13 @@ done
 shopt -u nullglob
 
 if command -v resolvectl >/dev/null 2>&1; then
-  resolvectl dns "$dev" "${RESTORE_DNS_SERVERS:-192.168.1.254 1.1.1.1}" || true
+  dns_value="${RESTORE_DNS_SERVERS:-${gw:-192.168.1.1} 1.1.1.1}"
+  read -r -a dns_servers <<< "$dns_value"
+  if [ "${#dns_servers[@]}" -gt 0 ]; then
+    resolvectl dns "$dev" "${dns_servers[@]}" || true
+  fi
   resolvectl domain "$dev" "${RESTORE_DNS_DOMAIN:-~.}" || true
+  resolvectl default-route "$dev" yes || true
 fi
 
 echo "Direct baseline restored via ${gw:-on-link} dev $dev"
