@@ -132,7 +132,7 @@ def main() -> int:
     parser.add_argument("--ssh-password", default="")
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--connect-attempts", type=int, default=12)
-    parser.add_argument("--login-grace-time", type=int, default=15)
+    parser.add_argument("--login-grace-time", type=int, default=60)
     parser.add_argument("--per-source-max-startups", type=int, default=20)
     parser.add_argument("--max-startups", default="100:30:300")
     parser.add_argument("--ignore-ip", action="append", default=["195.170.35.108"])

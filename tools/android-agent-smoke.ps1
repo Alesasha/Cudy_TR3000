@@ -115,11 +115,13 @@ if (-not $NoInstall) {
 
     if ($Serial) {
         $packageDump = Invoke-Adb shell dumpsys package com.nashvpn.cudyagent
-        $hasBootReceiver = ($packageDump | Select-String -Pattern "BootReceiver|BOOT_COMPLETED" -Quiet)
+        $hasBootReceiver = ($packageDump | Select-String -Pattern "BootReceiver" -Quiet) `
+            -and ($packageDump | Select-String -Pattern "BOOT_COMPLETED" -Quiet) `
+            -and ($packageDump | Select-String -Pattern "USER_UNLOCKED" -Quiet)
         if (-not $hasBootReceiver) {
-            throw "Installed APK does not expose BootReceiver/BOOT_COMPLETED. Rebuild the APK and rerun smoke."
+            throw "Installed APK does not expose BootReceiver with BOOT_COMPLETED and USER_UNLOCKED. Rebuild the APK and rerun smoke."
         }
-        Write-Host "Installed APK exposes BootReceiver."
+        Write-Host "Installed APK exposes BootReceiver for BOOT_COMPLETED and USER_UNLOCKED."
     }
 }
 
@@ -175,7 +177,7 @@ if ($onlineDevices.Count -gt 0 -and -not $NoStart) {
     Write-Host ""
     Write-Host "Boot receiver:"
     Invoke-Adb shell dumpsys package com.nashvpn.cudyagent |
-        Select-String -Pattern "Receiver Resolver Table|BootReceiver|BOOT_COMPLETED|MY_PACKAGE_REPLACED|TEST_BOOT_START" |
+        Select-String -Pattern "Receiver Resolver Table|BootReceiver|BOOT_COMPLETED|USER_UNLOCKED|MY_PACKAGE_REPLACED|TEST_BOOT_START" |
         Select-Object -First 20
 
     Write-Host ""

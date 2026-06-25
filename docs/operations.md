@@ -244,7 +244,7 @@ The tool writes `/etc/ssh/sshd_config.d/99-cudy-anti-bruteforce.conf`, reloads
 source IPs from the last six hours. Current defaults:
 
 ```text
-LoginGraceTime 15
+LoginGraceTime 60
 PerSourceMaxStartups 20
 MaxStartups 100:30:300
 UseDNS no
