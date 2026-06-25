@@ -229,7 +229,8 @@ show whether the Auto probe and provider refresh workers have recently run.
 
 It includes:
 
-- agent online/stale state;
+- agent online/stale state; offline client agents are reported as advisories,
+  not readiness failures;
 - probe job counts, latest probe timestamps, and recent failed probe jobs
   (`PROBE_FAILED_WARN_SECONDS`, default 1 hour);
 - provider transport freshness by provider;

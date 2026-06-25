@@ -1113,6 +1113,7 @@ ADMIN_HTML = r"""<!doctype html>
         return;
       }
       const warnings = status.warnings || [];
+      const advisories = status.advisories || [];
       text.textContent = status.ok ? "Control-server status is OK." : `Warnings: ${warnings.length}`;
       text.className = status.ok ? "status ok" : "status error";
       const autoWorker = (status.workers || {}).auto_probe || {};
@@ -1144,7 +1145,8 @@ ADMIN_HTML = r"""<!doctype html>
         ["Providers", "info", fmtAge((status.transports || {}).oldest_age_seconds), providerDetails || "-"],
         ["Probe jobs", (status.probe_jobs || {}).failed_recent ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
         ["Operations", "info", `backup ${fmtAge(backup.age_seconds)}`, `backup=${backup.name || "-"}; fallback-log=${fmtAge((((status.operations || {}).local_cudy_fallback_sync || {}).task_log || {}).age_seconds)}`],
-      ].concat(warnings.map(item => ["Warning", "warn", "-", item]));
+      ].concat(warnings.map(item => ["Warning", "warn", "-", item]))
+        .concat(advisories.map(item => ["Advisory", "info", "-", item]));
       body.innerHTML = rows.map(([area, stateText, age, details]) => `
         <tr>
           <td>${area}</td>
@@ -5411,6 +5413,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             )
         fallback = cudy_fallback_state_status()
         warnings: list[str] = []
+        advisories: list[str] = []
         if CUDY_FALLBACK_STATUS_WARN and not fallback.get("ok"):
             warnings.append("Cudy fallback state is stale or unreachable from this process")
         pending_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'pending'")
@@ -5433,7 +5436,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         latest_probe_finished = row(conn, "SELECT MAX(finished_at) AS value FROM agent_probe_jobs WHERE finished_at IS NOT NULL")
         offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
         if offline_enabled_agents:
-            warnings.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
+            advisories.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
         if failed_recent_probe_jobs:
             warnings.append(f"{failed_recent_probe_jobs} probe job(s) failed within {PROBE_FAILED_WARN_SECONDS}s")
         if stale_transports:
@@ -5527,6 +5530,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "cudy_fallback_state": fallback,
             },
             "warnings": warnings,
+            "advisories": advisories,
         }
 
 
@@ -5540,7 +5544,7 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
         },
         {
             "name": "agents",
-            "ok": int((status.get("agents") or {}).get("offline_enabled") or 0) == 0,
+            "ok": True,
             "summary": (
                 f"{(status.get('agents') or {}).get('online') or 0}/"
                 f"{(status.get('agents') or {}).get('enabled') or 0} online"
@@ -5569,6 +5573,7 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
         "service": status.get("service") or {},
         "checks": checks,
         "warnings": status.get("warnings") or [],
+        "advisories": status.get("advisories") or [],
     }
 
 
@@ -8621,6 +8626,8 @@ def main() -> int:
             print(f"local_fallback_sync_log: exists={sync_log.get('exists')} age={sync_log.get('age_seconds')}")
             for warning in status["warnings"]:
                 print(f"warning: {warning}")
+            for advisory in status.get("advisories") or []:
+                print(f"advisory: {advisory}")
         return 0 if status["ok"] or not args.strict else 2
     if args.command == "create-user":
         password = None if args.no_password_change else read_password_arg(args.password, confirm=args.password is None)
