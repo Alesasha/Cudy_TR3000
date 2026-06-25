@@ -35,7 +35,7 @@ The smoke check does not apply route changes and does not refresh providers with
 | Auto priority policies | Implemented as ordered policies consumed by Auto selection. | `python tools\vpn_control_app.py auto-candidates-list` | Add more production policies. |
 | Auto selection | Implemented as Cudy-side `curl --interface` probes with fastest successful winner. | `python tools\vpn_control_app.py auto-select example.com --candidates "proxyde, proxyus, uswest"` | Add richer content checks for services like Gemini. |
 | Auto cache | Implemented as manually editable cache and Auto selection output. | `python tools\vpn_control_app.py auto-cache-list` | Add automatic refresh of leaders. |
-| Auto default for unknown domains | Not implemented. Unknown domains follow normal Cudy/PBR routing. | `python tools\vpn_control_app.py route-plan` | Add domain discovery and an explicit policy for creating Auto routes. |
+| Auto default for unknown domains | Unknown domains still follow `Direct`, but `route-lookup` now records direct domain hits into a review queue. | `python tools\test_domain_discovery.py` and `python tools\vpn_control_app.py domain-discovery-list` | Add an explicit reviewed policy for creating Auto routes from the queue. |
 | Domain/IP lists needing tunnel | Static override files exist in `openwrt/pbr-overrides`. | Inspect `openwrt\pbr-overrides\*` and Cudy `/etc/pbr-overrides`. | Implement automatic discovery/update and a review workflow. |
 
 ## Auto Selection Target Behavior
@@ -70,11 +70,11 @@ Apply only when intentionally changing live provider endpoints:
 python tools\vpn_inventory.py refresh-provider all --apply
 ```
 
-## Domain Discovery Target Behavior
+## Domain Discovery Behavior
 
-The current system only deploys rules for known domains. The next stage should
-collect candidate domains from DNS or routing logs, normalize them, and place
-them into a reviewable queue before adding Auto routes.
+The current system only deploys rules for known domains. `route-lookup` now
+collects unknown domain targets that resolve to `Direct`, normalizes them, and
+places them into a reviewable queue before adding Auto routes.
 
 Minimum useful fields:
 
@@ -83,8 +83,11 @@ Minimum useful fields:
 - last seen time;
 - client IP or user ID;
 - hit count;
-- current chosen server;
-- decision source: global, user, Auto cache, or normal route.
+- source, currently `route_lookup` or `manual`;
+- review status: `pending`, `reviewed`, `ignored`, or `promoted`.
+
+This queue is deliberately non-invasive: discovered domains do not become live
+routes until an admin creates an explicit global or user domain route.
 
 ## Go Port Gate
 

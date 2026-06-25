@@ -102,6 +102,8 @@ http://127.0.0.1:8765/admin
   - show or hide newly entered password values before saving;
   - add global `domain -> server` routes;
   - add or delete `domain -> server` routes for any user;
+  - review unknown domains discovered by route lookup and mark them as
+    `pending`, `reviewed`, `ignored`, or `promoted`;
   - inspect and edit cached `Auto` choices.
 - Auto cache:
   - stores `domain -> selected server` decisions in `domain_auto_cache`;
@@ -116,6 +118,18 @@ http://127.0.0.1:8765/admin
   - chooses the fastest successful candidate for the requested domain;
   - can save the result into `domain_auto_cache` from CLI or the admin UI;
   - can optionally deploy routes after saving.
+- Domain discovery:
+  - `route-lookup` records unknown domain targets that resolve to `Direct`;
+  - discovery is advisory only and does not create a route or change live traffic;
+  - admin UI can review the queue and prefill a global route form with the
+    discovered domain;
+  - CLI commands:
+
+```powershell
+python tools\vpn_control_app.py domain-discovery-list
+python tools\vpn_control_app.py domain-discovery-mark example.com reviewed
+```
+
 - Deploy preview:
   - combines global admin routes and per-user routes;
   - per-user route wins when the same domain exists in both layers;
@@ -140,7 +154,7 @@ http://127.0.0.1:8765/admin
 ## Not Implemented Yet
 
 - background refresh of cached `Auto` choices;
-- domain discovery for applying `Auto` to domains that do not yet have explicit rules;
+- automatic route creation from discovered domains;
 - multi-user invitation or remote sync.
 
 Those should be implemented after the local data model stabilizes.

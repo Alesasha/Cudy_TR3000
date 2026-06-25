@@ -305,6 +305,18 @@ CREATE TABLE IF NOT EXISTS service_aliases (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS domain_discovery_queue (
+  domain TEXT PRIMARY KEY,
+  status TEXT NOT NULL DEFAULT 'pending',
+  source TEXT NOT NULL DEFAULT '',
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  hit_count INTEGER NOT NULL DEFAULT 1,
+  user_ids_json TEXT NOT NULL DEFAULT '[]',
+  client_ips_json TEXT NOT NULL DEFAULT '[]',
+  note TEXT NOT NULL DEFAULT ''
+);
 """
 
 
@@ -924,6 +936,18 @@ ADMIN_HTML = r"""<!doctype html>
       </table>
     </section>
     <section>
+      <h2>Domain Discovery</h2>
+      <div class="toolbar">
+        <button id="refreshDomainDiscovery" class="secondary" type="button">Refresh</button>
+        <div class="field"><label>Status</label><select id="domainDiscoveryStatusFilter"><option value="">All</option><option value="pending">pending</option><option value="reviewed">reviewed</option><option value="ignored">ignored</option><option value="promoted">promoted</option></select></div>
+      </div>
+      <p id="domainDiscoveryStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Domain</th><th>Status</th><th>Hits</th><th>Users</th><th>Client IPs</th><th>Last Seen</th><th>Note</th><th>Actions</th></tr></thead>
+        <tbody id="domainDiscoveryBody"></tbody>
+      </table>
+    </section>
+    <section>
       <h2>Global Domain Routes</h2>
       <form id="globalDefaultPriorityForm" class="toolbar">
         <div id="globalDefaultAutoField" class="field">
@@ -1055,7 +1079,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [], systemStatus: null };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [], domainDiscovery: [], systemStatus: null };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const serverLabel = id => (id === ALL_REST || id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
@@ -1485,6 +1509,61 @@ ADMIN_HTML = r"""<!doctype html>
         });
       });
     }
+    async function refreshDomainDiscovery(statusFilter) {
+      const suffix = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
+      const data = await api(`/api/admin/domain-discovery${suffix}`);
+      state.domainDiscovery = data.items || [];
+      renderDomainDiscovery();
+    }
+    function renderDomainDiscovery() {
+      const body = document.getElementById("domainDiscoveryBody");
+      body.innerHTML = state.domainDiscovery.length ? state.domainDiscovery.map(item => `
+        <tr>
+          <td>${item.domain}</td>
+          <td>${item.status}</td>
+          <td>${item.hit_count}</td>
+          <td>${(item.user_ids || []).join(", ")}</td>
+          <td>${(item.client_ips || []).join(", ")}</td>
+          <td>${item.last_seen_at || ""}</td>
+          <td>${item.note || ""}</td>
+          <td class="inline">
+            <button class="secondary" data-promote-domain="${item.domain}">Use</button>
+            <button class="secondary" data-discovery-status="${item.domain}|reviewed">Reviewed</button>
+            <button class="secondary" data-discovery-status="${item.domain}|pending">Pending</button>
+            <button class="danger" data-discovery-status="${item.domain}|ignored">Ignore</button>
+          </td>
+        </tr>
+      `).join("") : '<tr><td colspan="8" class="muted">No discovered domains.</td></tr>';
+      body.querySelectorAll("[data-promote-domain]").forEach(button => {
+        button.addEventListener("click", () => {
+          const domain = button.dataset.promoteDomain;
+          document.getElementById("globalRouteDomain").value = domain;
+          document.getElementById("globalRouteServer").value = "auto";
+          syncAutoEditorFromExisting("globalRoute");
+          document.getElementById("globalRouteDomain").focus();
+        });
+      });
+      body.querySelectorAll("[data-discovery-status]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const [domain, status] = button.dataset.discoveryStatus.split("|");
+          const note = status === "ignored" ? (prompt("Note for ignored domain", "") || "") : "";
+          const statusEl = document.getElementById("domainDiscoveryStatus");
+          statusEl.className = "status";
+          try {
+            await api("/api/admin/domain-discovery", {
+              method: "POST",
+              body: JSON.stringify({ domain, status, note })
+            });
+            statusEl.textContent = `${domain} marked ${status}.`;
+            statusEl.className = "status ok";
+            await refreshDomainDiscovery(document.getElementById("domainDiscoveryStatusFilter").value);
+          } catch (error) {
+            statusEl.textContent = error.message;
+            statusEl.className = "status error";
+          }
+        });
+      });
+    }
     function renderGlobalRoutes() {
       const body = document.getElementById("globalRoutesBody");
       body.innerHTML = state.globalRoutes.length ? state.globalRoutes.map(r => `
@@ -1610,9 +1689,11 @@ ADMIN_HTML = r"""<!doctype html>
       state.agentStatus = data.agent_status || [];
       state.transportConfigs = data.transport_configs || [];
       state.serviceAliases = data.service_aliases || [];
+      state.domainDiscovery = data.domain_discovery || [];
       renderServers();
       renderUsers();
       renderServiceAliases();
+      renderDomainDiscovery();
       renderSystemStatus();
       renderGlobalRoutes();
       renderRoutes();
@@ -1684,6 +1765,21 @@ ADMIN_HTML = r"""<!doctype html>
         state.systemStatus = { ok: false, warnings: [error.message] };
       }
       renderSystemStatus();
+    });
+    document.getElementById("refreshDomainDiscovery").addEventListener("click", async () => {
+      const statusEl = document.getElementById("domainDiscoveryStatus");
+      statusEl.className = "status";
+      try {
+        await refreshDomainDiscovery(document.getElementById("domainDiscoveryStatusFilter").value);
+        statusEl.textContent = "Refreshed.";
+        statusEl.className = "status ok";
+      } catch (error) {
+        statusEl.textContent = error.message;
+        statusEl.className = "status error";
+      }
+    });
+    document.getElementById("domainDiscoveryStatusFilter").addEventListener("change", async event => {
+      await refreshDomainDiscovery(event.target.value);
     });
     document.getElementById("adminLookupForm").addEventListener("submit", async event => {
       event.preventDefault();
@@ -2332,6 +2428,21 @@ def migrate_db(conn: sqlite3.Connection) -> None:
           status_json TEXT NOT NULL,
           reported_at TEXT NOT NULL,
           FOREIGN KEY(device_id) REFERENCES agent_devices(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS domain_discovery_queue (
+          domain TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'pending',
+          source TEXT NOT NULL DEFAULT '',
+          first_seen_at TEXT NOT NULL,
+          last_seen_at TEXT NOT NULL,
+          hit_count INTEGER NOT NULL DEFAULT 1,
+          user_ids_json TEXT NOT NULL DEFAULT '[]',
+          client_ips_json TEXT NOT NULL DEFAULT '[]',
+          note TEXT NOT NULL DEFAULT ''
         )
         """
     )
@@ -6893,6 +7004,149 @@ def delete_service_alias(db_path: Path, inventory_path: Path, *, alias: str) -> 
     return {"ok": True, "alias": normalized_alias}
 
 
+def json_list_append(raw: str, value: str) -> list[str]:
+    try:
+        items = [str(item) for item in json.loads(raw or "[]") if str(item)]
+    except json.JSONDecodeError:
+        items = []
+    if value and value not in items:
+        items.append(value)
+    return items
+
+
+def record_domain_discovery(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    user_id: str = "",
+    client_ip: str = "",
+    source: str = "route_lookup",
+    note: str = "",
+) -> dict[str, Any]:
+    normalized_domain = normalize_domain(domain)
+    timestamp = now()
+    existing = row(conn, "SELECT * FROM domain_discovery_queue WHERE domain = ?", (normalized_domain,))
+    if existing:
+        user_ids = json_list_append(existing.get("user_ids_json") or "[]", user_id.strip())
+        client_ips = json_list_append(existing.get("client_ips_json") or "[]", client_ip.strip())
+        conn.execute(
+            """
+            UPDATE domain_discovery_queue
+            SET last_seen_at = ?,
+                hit_count = hit_count + 1,
+                user_ids_json = ?,
+                client_ips_json = ?,
+                source = CASE WHEN source = '' THEN ? ELSE source END,
+                note = CASE WHEN ? != '' THEN ? ELSE note END
+            WHERE domain = ?
+            """,
+            (
+                timestamp,
+                json.dumps(user_ids, ensure_ascii=False),
+                json.dumps(client_ips, ensure_ascii=False),
+                source.strip(),
+                note.strip(),
+                note.strip(),
+                normalized_domain,
+            ),
+        )
+    else:
+        user_ids = [user_id.strip()] if user_id.strip() else []
+        client_ips = [client_ip.strip()] if client_ip.strip() else []
+        conn.execute(
+            """
+            INSERT INTO domain_discovery_queue (
+              domain, status, source, first_seen_at, last_seen_at, hit_count,
+              user_ids_json, client_ips_json, note
+            ) VALUES (?, 'pending', ?, ?, ?, 1, ?, ?, ?)
+            """,
+            (
+                normalized_domain,
+                source.strip(),
+                timestamp,
+                timestamp,
+                json.dumps(user_ids, ensure_ascii=False),
+                json.dumps(client_ips, ensure_ascii=False),
+                note.strip(),
+            ),
+        )
+    return domain_discovery_item(conn, normalized_domain)
+
+
+def domain_discovery_item(conn: sqlite3.Connection, domain: str) -> dict[str, Any]:
+    item = row(conn, "SELECT * FROM domain_discovery_queue WHERE domain = ?", (normalize_domain(domain),))
+    if not item:
+        raise ValueError(f"Unknown discovered domain: {domain}")
+    try:
+        item["user_ids"] = json.loads(item.pop("user_ids_json") or "[]")
+    except json.JSONDecodeError:
+        item["user_ids"] = []
+    try:
+        item["client_ips"] = json.loads(item.pop("client_ips_json") or "[]")
+    except json.JSONDecodeError:
+        item["client_ips"] = []
+    return item
+
+
+def domain_discovery_rows(conn: sqlite3.Connection, *, status: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    limit = max(1, min(int(limit), 500))
+    params: list[Any] = []
+    where = ""
+    if status:
+        where = "WHERE status = ?"
+        params.append(status)
+    entries = rows(
+        conn,
+        f"""
+        SELECT *
+        FROM domain_discovery_queue
+        {where}
+        ORDER BY last_seen_at DESC, hit_count DESC, domain
+        LIMIT ?
+        """,
+        (*params, limit),
+    )
+    result: list[dict[str, Any]] = []
+    for item in entries:
+        try:
+            item["user_ids"] = json.loads(item.pop("user_ids_json") or "[]")
+        except json.JSONDecodeError:
+            item["user_ids"] = []
+        try:
+            item["client_ips"] = json.loads(item.pop("client_ips_json") or "[]")
+        except json.JSONDecodeError:
+            item["client_ips"] = []
+        result.append(item)
+    return result
+
+
+def save_domain_discovery_status(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    status: str,
+    note: str = "",
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_status = status.strip().lower()
+    if normalized_status not in {"pending", "reviewed", "ignored", "promoted"}:
+        raise ValueError("status must be pending, reviewed, ignored, or promoted")
+    with connect(db_path) as conn:
+        normalized_domain = normalize_domain(domain)
+        cursor = conn.execute(
+            """
+            UPDATE domain_discovery_queue
+            SET status = ?, note = CASE WHEN ? != '' THEN ? ELSE note END
+            WHERE domain = ?
+            """,
+            (normalized_status, note.strip(), note.strip(), normalized_domain),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Unknown discovered domain: {normalized_domain}")
+        return {"ok": True, "item": domain_discovery_item(conn, normalized_domain)}
+
+
 def domain_rule_for_user(conn: sqlite3.Connection, *, user_id: str, domain: str) -> dict[str, Any] | None:
     user_route = row(
         conn,
@@ -7042,6 +7296,15 @@ def route_lookup(db_path: Path, inventory_path: Path, *, user_id: str, target: s
             )
             for item in expanded_targets
         ]
+        for item in results:
+            if item.get("kind") == "domain" and item.get("route_state") == "direct":
+                item["discovery"] = record_domain_discovery(
+                    conn,
+                    domain=str(item.get("target") or ""),
+                    user_id=user_id,
+                    client_ip=str(user.get("client_ip") or ""),
+                    source="route_lookup",
+                )
     return {
         "ok": True,
         "user": user,
@@ -7470,6 +7733,20 @@ class Handler(BaseHTTPRequestHandler):
                         limit=int(query.get("limit", ["10"])[0] or "10"),
                     )
                 )
+            elif parsed.path == "/api/admin/domain-discovery":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                with self.app.conn() as conn:
+                    self.send_json(
+                        {
+                            "ok": True,
+                            "items": domain_discovery_rows(
+                                conn,
+                                status=query.get("status", [""])[0],
+                                limit=int(query.get("limit", ["100"])[0] or "100"),
+                            ),
+                        }
+                    )
             elif parsed.path == "/api/agent/config":
                 device = self.require_agent()
                 with self.app.conn() as conn:
@@ -7550,6 +7827,17 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/auto-candidates":
                 self.require_admin()
                 self.send_json(self.api_admin_save_auto_candidates(data))
+            elif parsed.path == "/api/admin/domain-discovery":
+                self.require_admin()
+                self.send_json(
+                    save_domain_discovery_status(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        domain=str(data.get("domain") or ""),
+                        status=str(data.get("status") or ""),
+                        note=str(data.get("note") or ""),
+                    )
+                )
             elif parsed.path == "/api/admin/auto-select":
                 self.require_admin()
                 self.send_json(self.api_admin_auto_select(data))
@@ -7817,6 +8105,7 @@ class Handler(BaseHTTPRequestHandler):
                 "auto_candidates": auto_candidate_policy_rows(conn),
                 "transport_configs": transport_config_summaries(conn),
                 "service_aliases": service_alias_rows(conn),
+                "domain_discovery": domain_discovery_rows(conn, limit=100),
                 "probe_jobs": [
                     probe_job_row_to_dict(item)
                     for item in rows(
@@ -8349,6 +8638,25 @@ def build_parser() -> argparse.ArgumentParser:
     route_lookup_parser.add_argument("--user-id", required=True)
     route_lookup_parser.add_argument("--json", action="store_true", help="Print full JSON lookup result.")
 
+    discovery_list_parser = sub.add_parser("domain-discovery-list", help="List unknown domains discovered by route lookup.")
+    discovery_list_parser.add_argument("--status", default="", help="Filter by pending, reviewed, ignored, or promoted.")
+    discovery_list_parser.add_argument("--limit", type=int, default=100)
+    discovery_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    discovery_record_parser = sub.add_parser("domain-discovery-record", help="Record an unknown domain in the discovery queue.")
+    discovery_record_parser.add_argument("domain")
+    discovery_record_parser.add_argument("--user-id", default="")
+    discovery_record_parser.add_argument("--client-ip", default="")
+    discovery_record_parser.add_argument("--source", default="manual")
+    discovery_record_parser.add_argument("--note", default="")
+    discovery_record_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    discovery_mark_parser = sub.add_parser("domain-discovery-mark", help="Mark a discovered domain as pending, reviewed, ignored, or promoted.")
+    discovery_mark_parser.add_argument("domain")
+    discovery_mark_parser.add_argument("status", choices=["pending", "reviewed", "ignored", "promoted"])
+    discovery_mark_parser.add_argument("--note", default="")
+    discovery_mark_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     auto_winners_parser = sub.add_parser("auto-winners", help="Show recent Auto winners for all targets or one domain, URL, IP, CIDR, or service alias.")
     auto_winners_parser.add_argument("target", nargs="?", default="", help="Optional target filter. Blank means all recent winners.")
     auto_winners_parser.add_argument("--limit", type=int, default=10)
@@ -8855,6 +9163,53 @@ def main() -> int:
                     f"{item['target']}\tstate={item['route_state']}\tserver={item['server_id']}"
                     f"\trule={rule_label}{auto_label}"
                 )
+        return 0
+    if args.command == "domain-discovery-list":
+        init_db(args.db, args.inventory)
+        with connect(args.db) as conn:
+            entries = domain_discovery_rows(conn, status=args.status, limit=args.limit)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No discovered domains.")
+            for item in entries:
+                print(
+                    f"{item['domain']}\tstatus={item['status']}\thits={item['hit_count']}\t"
+                    f"users={','.join(item.get('user_ids') or []) or '-'}\t"
+                    f"clients={','.join(item.get('client_ips') or []) or '-'}\t"
+                    f"last_seen={item['last_seen_at']}"
+                )
+        return 0
+    if args.command == "domain-discovery-record":
+        init_db(args.db, args.inventory)
+        with connect(args.db) as conn:
+            item = record_domain_discovery(
+                conn,
+                domain=args.domain,
+                user_id=args.user_id,
+                client_ip=args.client_ip,
+                source=args.source,
+                note=args.note,
+            )
+        if args.json:
+            print(json.dumps(item, ensure_ascii=False, indent=2))
+        else:
+            print(f"Discovered domain recorded: {item['domain']} status={item['status']} hits={item['hit_count']}")
+        return 0
+    if args.command == "domain-discovery-mark":
+        result = save_domain_discovery_status(
+            args.db,
+            args.inventory,
+            domain=args.domain,
+            status=args.status,
+            note=args.note,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            item = result["item"]
+            print(f"Discovered domain marked: {item['domain']} status={item['status']}")
         return 0
     if args.command == "auto-winners":
         result = recent_auto_winners(args.db, args.inventory, target=args.target, limit=args.limit)
