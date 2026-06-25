@@ -2981,6 +2981,30 @@ def transport_config_summaries(conn: sqlite3.Connection) -> list[dict[str, Any]]
     return result
 
 
+def mark_transport_config_unavailable(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    server_id: str,
+    transport_type: str,
+    interface_name: str | None = None,
+    source: str,
+    version: str = "",
+    reason: str,
+) -> dict[str, Any]:
+    return save_transport_config(
+        db_path,
+        inventory_path,
+        server_id=server_id,
+        transport_type=transport_type,
+        interface_name=interface_name,
+        config={"unavailable": True, "reason": reason},
+        enabled=False,
+        source=source,
+        version=version,
+    )
+
+
 def save_transport_config(
     db_path: Path,
     inventory_path: Path,
@@ -3484,6 +3508,10 @@ def lokvpn_outbound_tag(outbound: dict[str, Any]) -> str:
     return re.sub(r"\s+", "", str(outbound.get("tag") or "")).upper()
 
 
+class LokvpnProfileUnavailable(ValueError):
+    pass
+
+
 def find_lokvpn_outbound(subscription: Any, profile: str) -> dict[str, Any]:
     wanted = [item.upper() for item in LOKVPN_PROFILE_TAGS[profile]]
     vless_outbounds = [
@@ -3496,7 +3524,7 @@ def find_lokvpn_outbound(subscription: Any, profile: str) -> dict[str, Any]:
         if tag in by_tag:
             return by_tag[tag]
     available = ", ".join(sorted(tag for tag in by_tag if tag)) or "none"
-    raise ValueError(f"LokVPN profile {profile} is not present in subscription; available tags: {available}")
+    raise LokvpnProfileUnavailable(f"LokVPN profile {profile} is not present in subscription; available tags: {available}")
 
 
 def parse_lokvpn_outbound(profile: str, outbound: dict[str, Any]) -> dict[str, Any]:
@@ -3581,6 +3609,7 @@ def refresh_lokvpn_transports(
     *,
     server_ids: list[str] | None = None,
     sub_url: str = "",
+    subscription: Any | None = None,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     with connect(db_path) as conn:
@@ -3595,20 +3624,21 @@ def refresh_lokvpn_transports(
     sub_url = sub_url or read_secret_value(["LOKVPN_SUB_URL", "SUB_URL"], DEFAULT_LOKVPN_SUB_URL_FILE)
     refreshed: list[dict[str, Any]] = []
     failed: list[dict[str, Any]] = []
-    if not sub_url:
+    if subscription is None and not sub_url:
         return {
             "provider": "lokvpn",
             "refreshed": [],
             "failed": [{"server_id": server_id, "error": "LokVPN subscription URL is not configured"} for server_id in selected_ids],
         }
-    try:
-        subscription = fetch_lokvpn_subscription(sub_url)
-    except Exception as exc:
-        return {
-            "provider": "lokvpn",
-            "refreshed": [],
-            "failed": [{"server_id": server_id, "error": f"subscription fetch failed: {exc}"} for server_id in selected_ids],
-        }
+    if subscription is None:
+        try:
+            subscription = fetch_lokvpn_subscription(sub_url)
+        except Exception as exc:
+            return {
+                "provider": "lokvpn",
+                "refreshed": [],
+                "failed": [{"server_id": server_id, "error": f"subscription fetch failed: {exc}"} for server_id in selected_ids],
+            }
     for server_id in selected_ids:
         try:
             refreshed.append(
@@ -3620,6 +3650,18 @@ def refresh_lokvpn_transports(
                     subscription=subscription,
                 )
             )
+        except LokvpnProfileUnavailable as exc:
+            profile = lokvpn_profile_from_server_id(server_id)
+            saved = mark_transport_config_unavailable(
+                db_path,
+                inventory_path,
+                server_id=server_id,
+                transport_type="vless-reality-tun",
+                source="lokvpn-subscription",
+                version=profile,
+                reason=str(exc),
+            )
+            failed.append({"server_id": server_id, "error": str(exc), "disabled": True, "updated_at": saved["updated_at"]})
         except Exception as exc:
             failed.append({"server_id": server_id, "error": str(exc)})
     return {"provider": "lokvpn", "refreshed": refreshed, "failed": failed}
