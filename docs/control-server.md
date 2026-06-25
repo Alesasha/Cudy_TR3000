@@ -418,6 +418,12 @@ The endpoint manifest is also available without agent auth:
 GET /api/control/endpoints
 ```
 
+The live API manifest is intentionally short-lived (`cache_seconds=300`,
+`valid_until` about 10 minutes after generation). Static Cudy fallback files use
+a longer window (`cache_seconds=1800`, `valid_until` about 2 hours after
+generation), so the 30-minute fallback sync task does not publish a manifest
+that looks stale between scheduled runs.
+
 Publish the same manifest as a static Cudy fallback file:
 
 ```powershell

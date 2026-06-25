@@ -21,6 +21,10 @@ import paramiko
 from vpn_control_app import control_endpoints_manifest
 
 
+CUDY_STATIC_MANIFEST_CACHE_SECONDS = 1800
+CUDY_STATIC_MANIFEST_VALID_SECONDS = 7200
+
+
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
 DEFAULT_CUDY_HOST = "192.168.8.1"
@@ -81,7 +85,10 @@ def ssh_write_file(client: paramiko.SSHClient, path: str, content: str, timeout:
 
 
 def publish(args: argparse.Namespace) -> dict[str, str]:
-    manifest = control_endpoints_manifest()
+    manifest = control_endpoints_manifest(
+        valid_for_seconds=CUDY_STATIC_MANIFEST_VALID_SECONDS,
+        cache_seconds=CUDY_STATIC_MANIFEST_CACHE_SECONDS,
+    )
     payload = json.dumps(manifest, ensure_ascii=False, indent=2) + "\n"
     if args.dry_run:
         return {

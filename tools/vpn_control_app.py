@@ -1987,9 +1987,11 @@ def split_csv_env(value: str) -> list[str]:
     return result
 
 
-def control_endpoints_manifest() -> dict[str, Any]:
+def control_endpoints_manifest(*, valid_for_seconds: int = 600, cache_seconds: int = 300) -> dict[str, Any]:
     generated_at = now()
-    valid_until = (datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=600)).isoformat()
+    valid_until = (
+        datetime.now(timezone.utc).replace(microsecond=0) + timedelta(seconds=valid_for_seconds)
+    ).isoformat()
     primary_url = os.environ.get("VPN_CONTROL_PRIMARY_URL", DEFAULT_CONTROL_PRIMARY_URL).strip()
     primary_host = os.environ.get("VPN_CONTROL_PRIMARY_SSH_HOST", DEFAULT_CONTROL_PRIMARY_SSH_HOST).strip()
     primary_user = os.environ.get("VPN_CONTROL_PRIMARY_SSH_USER", DEFAULT_CONTROL_PRIMARY_SSH_USER).strip()
@@ -2025,7 +2027,7 @@ def control_endpoints_manifest() -> dict[str, Any]:
         "generation": os.environ.get("VPN_CONTROL_GENERATION", "manual"),
         "generated_at": generated_at,
         "valid_until": valid_until,
-        "cache_seconds": 300,
+        "cache_seconds": cache_seconds,
         "endpoints": endpoints,
     }
 

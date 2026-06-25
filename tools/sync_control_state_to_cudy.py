@@ -31,12 +31,21 @@ from backup_control_server import (
     ssh_exec,
 )
 from sync_control_manifest_to_cudy import (
+    CUDY_STATIC_MANIFEST_CACHE_SECONDS,
+    CUDY_STATIC_MANIFEST_VALID_SECONDS,
     DEFAULT_CUDY_HOST,
     DEFAULT_CUDY_PASSWORD_FILE,
     DEFAULT_CUDY_USER,
     ssh_write_file,
 )
 from vpn_control_app import control_endpoints_manifest, now
+
+
+def cudy_static_control_endpoints_manifest() -> dict[str, Any]:
+    return control_endpoints_manifest(
+        valid_for_seconds=CUDY_STATIC_MANIFEST_VALID_SECONDS,
+        cache_seconds=CUDY_STATIC_MANIFEST_CACHE_SECONDS,
+    )
 
 
 DEFAULT_CUDY_STATE_DIR = "/root/cudy-control-fallback"
@@ -148,6 +157,7 @@ def publish_to_cudy(
         f"ls -1t cudy-control-*.tgz 2>/dev/null | tail -n +{int(keep_remote) + 1} | xargs -r rm -f\n",
         timeout,
     )
+    endpoint_manifest = cudy_static_control_endpoints_manifest()
     status = {
         "schema_version": 1,
         "source_host": source_host,
@@ -158,11 +168,16 @@ def publish_to_cudy(
         "remote_current": remote_current,
         "bytes": size,
         "sha256": digest,
-        "endpoint_manifest": control_endpoints_manifest(),
+        "endpoint_manifest": endpoint_manifest,
     }
     status_json = json.dumps(status, ensure_ascii=False, indent=2) + "\n"
     ssh_write_file(client, f"{web_dir}/state.json", status_json, timeout)
-    ssh_write_file(client, f"{web_dir}/endpoints.json", json.dumps(control_endpoints_manifest(), ensure_ascii=False, indent=2) + "\n", timeout)
+    ssh_write_file(
+        client,
+        f"{web_dir}/endpoints.json",
+        json.dumps(endpoint_manifest, ensure_ascii=False, indent=2) + "\n",
+        timeout,
+    )
     ssh_exec(client, f"chmod 0644 {shlex.quote(web_dir)}/state.json {shlex.quote(web_dir)}/endpoints.json", timeout)
     return status
 

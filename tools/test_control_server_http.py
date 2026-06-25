@@ -83,6 +83,10 @@ def main() -> int:
             endpoints = manifest.get("endpoints") or []
             if not endpoints:
                 raise AssertionError("endpoint manifest is empty")
+            if not manifest.get("valid_until"):
+                raise AssertionError(f"endpoint manifest has no valid_until: {manifest!r}")
+            if manifest.get("cache_seconds") != 300:
+                raise AssertionError(f"unexpected live manifest cache_seconds: {manifest!r}")
             if endpoints[0].get("role") != "primary":
                 raise AssertionError(f"first endpoint is not primary: {endpoints[0]!r}")
             status_raw = subprocess.check_output(
