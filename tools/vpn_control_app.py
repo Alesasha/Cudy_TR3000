@@ -1148,6 +1148,7 @@ ADMIN_HTML = r"""<!doctype html>
         ["Service", badge(status.ok, status.ok ? "OK" : "WARN"), `uptime ${fmtAge((status.service || {}).uptime_seconds)}`],
         ["Agents", `${(status.agents || {}).online || 0}/${(status.agents || {}).enabled || 0}`, `recent ${(status.agents || {}).recent_seconds || "-"}s`],
         ["Probe jobs", `${(status.probe_jobs || {}).pending || 0} pending`, `${(status.probe_jobs || {}).failed_recent || 0}/${(status.probe_jobs || {}).failed || 0} recent failed`],
+        ["Discovery", `${(status.domain_discovery || {}).pending || 0} pending`, `${(status.domain_discovery || {}).total || 0} total`],
         ["Transports", `${(status.transports || {}).enabled || 0}/${(status.transports || {}).total || 0}`, `oldest ${fmtAge((status.transports || {}).oldest_age_seconds)}`],
         ["Auto worker", badge(autoWorker.enabled, autoWorker.enabled ? "on" : "off"), `last ${fmtAge(autoWorker.last_finished_age_seconds)}`],
         ["Provider worker", badge(providerWorker.enabled, providerWorker.enabled ? "on" : "off"), `last ${fmtAge(providerWorker.last_finished_age_seconds)}`],
@@ -1168,6 +1169,7 @@ ADMIN_HTML = r"""<!doctype html>
         ["Fallback", fallback.ok ? "ok" : "warn", fmtAge(fallback.age_seconds), fallback.error || fallback.archive_name || ""],
         ["Providers", "info", fmtAge((status.transports || {}).oldest_age_seconds), providerDetails || "-"],
         ["Probe jobs", (status.probe_jobs || {}).failed_recent ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
+        ["Domain discovery", "info", `latest ${fmtAge((status.domain_discovery || {}).latest_seen_age_seconds)}`, JSON.stringify((status.domain_discovery || {}).by_status || {})],
         ["Operations", "info", `backup ${fmtAge(backup.age_seconds)}`, `backup=${backup.name || "-"}; fallback-log=${fmtAge((((status.operations || {}).local_cudy_fallback_sync || {}).task_log || {}).age_seconds)}`],
       ].concat(warnings.map(item => ["Warning", "warn", "-", item]))
         .concat(advisories.map(item => ["Advisory", "info", "-", item]));
@@ -5531,6 +5533,10 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             warnings.append("Cudy fallback state is stale or unreachable from this process")
         pending_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'pending'")
         failed_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'failed'")
+        domain_discovery_by_status = grouped_counts(conn, "SELECT status AS key, COUNT(*) AS count FROM domain_discovery_queue GROUP BY status")
+        pending_domain_discovery = int(domain_discovery_by_status.get("pending") or 0)
+        total_domain_discovery = sum(int(value or 0) for value in domain_discovery_by_status.values())
+        latest_domain_discovery = row(conn, "SELECT MAX(last_seen_at) AS value FROM domain_discovery_queue")
         failed_probe_cutoff_epoch = reference.replace(microsecond=0).timestamp() - PROBE_FAILED_WARN_SECONDS
         failed_probe_cutoff = datetime.fromtimestamp(failed_probe_cutoff_epoch, timezone.utc).replace(microsecond=0).isoformat()
         failed_recent_probe_jobs = count_value(
@@ -5550,6 +5556,8 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         offline_enabled_agents = sum(1 for item in agents if item["enabled"] and not item["online"])
         if offline_enabled_agents:
             advisories.append(f"{offline_enabled_agents} enabled agent(s) are offline or stale")
+        if pending_domain_discovery:
+            advisories.append(f"{pending_domain_discovery} discovered domain(s) are pending admin review")
         if failed_recent_probe_jobs:
             warnings.append(f"{failed_recent_probe_jobs} probe job(s) failed within {PROBE_FAILED_WARN_SECONDS}s")
         if stale_transports:
@@ -5612,6 +5620,13 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                 "latest_finished_at": (latest_probe_finished or {}).get("value"),
                 "latest_finished_age_seconds": timestamp_age_seconds((latest_probe_finished or {}).get("value"), reference=reference),
             },
+            "domain_discovery": {
+                "by_status": domain_discovery_by_status,
+                "total": total_domain_discovery,
+                "pending": pending_domain_discovery,
+                "latest_seen_at": (latest_domain_discovery or {}).get("value"),
+                "latest_seen_age_seconds": timestamp_age_seconds((latest_domain_discovery or {}).get("value"), reference=reference),
+            },
             "transports": {
                 "total": len(transports),
                 "enabled": sum(1 for item in transports if item["enabled"]),
@@ -5669,6 +5684,14 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
             "summary": (
                 f"{(status.get('probe_jobs') or {}).get('pending') or 0} pending, "
                 f"{(status.get('probe_jobs') or {}).get('failed_recent') or 0} recent failed"
+            ),
+        },
+        {
+            "name": "domain_discovery",
+            "ok": True,
+            "summary": (
+                f"{(status.get('domain_discovery') or {}).get('pending') or 0} pending, "
+                f"{(status.get('domain_discovery') or {}).get('total') or 0} total"
             ),
         },
         {

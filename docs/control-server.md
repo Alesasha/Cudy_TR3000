@@ -238,6 +238,7 @@ It includes:
   SQLite after a provider subscription stops returning that location;
 - worker heartbeat for Auto probe and provider refresh workers;
 - advertised primary/fallback control endpoints;
+- domain-discovery queue counts;
 - Cudy fallback-state reachability;
 - local backup archive and local fallback-sync log freshness when those files
   exist on the host running the command.
