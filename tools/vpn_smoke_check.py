@@ -51,6 +51,7 @@ CHECKS = [
     Check("control tunnel-user backup help loads", ["tools/backup_control_server_via_tunnel_user.py", "--help"]),
     Check("control clone help loads", ["tools/clone_control_server.py", "--help"]),
     Check("control VPS bootstrap help loads", ["tools/bootstrap_control_vps.py", "--help"]),
+    Check("Cudy fallback status checks", ["tools/check_cudy_fallback_status.py", "--strict"], timeout=30),
     Check("Cudy runtime snapshot refreshes", ["tools/vpn_inventory.py", "refresh-cudy"], online=True, timeout=120),
     Check("Cudy user-route status reads", ["tools/vpn_control_app.py", "status-user-routes"], online=True, timeout=60),
     Check(
