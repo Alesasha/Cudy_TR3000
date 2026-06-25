@@ -33,6 +33,8 @@ ok ip=8 cleanup=0 transports=2 prepared=1 stored=1 libbox=unknown config=ok engi
 
 Latest Release APK smoke on the physical phone:
 
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.0-20260625.apk`;
+- SHA256: `731E5F334BBA359C4BC51A188A9341BB15B0EB2F03EBBB2B0B2F0DDBAF352271`;
 - foreground service stayed running;
 - Android VPN was established on `tun2`;
 - control-server reported `isasha_X7Pro_Cudy-android` online and healthy;

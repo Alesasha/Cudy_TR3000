@@ -19,7 +19,8 @@ This is the current implementation order for the managed VPN control project.
   jobs.
 - Maintain SQLite/config backups.
 - Add a clear health/status page with provider status, agents, last policy,
-  last probes, and backup age. The first machine-readable API is `/api/status`.
+  last probes, and backup age. Machine-readable endpoints are `/api/status`
+  for admins and public `/readyz` for production readiness checks.
 
 ## 3. Fallback Control Path
 
@@ -61,6 +62,9 @@ This is the current implementation order for the managed VPN control project.
   provider APIs.
 - Agent-side provider refresh remains only as fallback.
 - Start only needed LokVPN/VPNtype transports; stop unused slots immediately.
+- LokVPN profiles missing from the current subscription are marked as disabled
+  transport configs, so they stop participating in Auto until the subscription
+  returns them again.
 
 ## 6. Windows Agent
 
@@ -72,6 +76,9 @@ This is the current implementation order for the managed VPN control project.
   `transport_plan`; unused exits are stopped automatically.
 - Clear logs and status command.
 - Smoke-test after Windows reboot.
+- Managed routing smoke now accepts any active managed exit for Auto-routed
+  targets, for example `proxyde` for `ifconfig.me` and `proxynl` for Telegram
+  CIDRs.
 - Verify Telegram, Gemini, ifconfig, speedtest, and direct traffic.
 
 ## 7. Android Agent
@@ -92,6 +99,9 @@ This is the current implementation order for the managed VPN control project.
   networking before the first SSH control fetch.
 - Release APK build is available with a versioned local copy under
   `build/releases/`.
+- Latest release smoke on the physical phone passed for
+  `NashVPN-CudyAgent-android-arm64-v1.0-20260625.apk`; control-server reported
+  `isasha_X7Pro_Cudy-android` online with `health.ok=true`.
 
 ## 8. Linux Agent
 
