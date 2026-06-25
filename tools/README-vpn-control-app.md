@@ -201,6 +201,15 @@ Aliases are editable from the user and admin UI. Each alias expands to a
 comma-separated list of domains, IPv4 addresses, or CIDRs. For example, the
 Telegram alias expands to the known Telegram IPv4 CIDR set.
 
+Aliases can also be managed from the CLI, which is useful when the web UI is
+not available:
+
+```powershell
+python tools\vpn_control_app.py service-alias-list
+python tools\vpn_control_app.py service-alias-set testtg "149.154.160.0/20,telegram.org" --label "Test Telegram"
+python tools\vpn_control_app.py service-alias-delete testtg
+```
+
 ## Route Testing
 
 Measure selected Cudy exits from the router itself:

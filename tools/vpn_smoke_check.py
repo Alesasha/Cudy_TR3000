@@ -42,6 +42,7 @@ CHECKS = [
     Check("Auto winners list", ["tools/vpn_control_app.py", "auto-winners", "ifconfig.me"]),
     Check("route lookup resolves service alias", ["tools/vpn_control_app.py", "route-lookup", "telegram", "--user-id", "isasha_X7Pro_Cudy"]),
     Check("route lookup reports direct", ["tools/vpn_control_app.py", "route-lookup", "216.239.36.21", "--user-id", "isasha_X7Pro_Cudy"]),
+    Check("service alias CLI regression", ["tools/test_service_alias_cli.py"]),
     Check("Cudy client lifecycle regression", ["tools/test_cudy_client_lifecycle.py"]),
     Check("Cudy router migration generator regression", ["tools/test_generate_cudy_router_migration.py"]),
     Check("Cudy router preflight regression", ["tools/test_cudy_router_preflight.py"]),

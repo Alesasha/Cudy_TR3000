@@ -8905,6 +8905,19 @@ def build_parser() -> argparse.ArgumentParser:
     route_lookup_parser.add_argument("--user-id", required=True)
     route_lookup_parser.add_argument("--json", action="store_true", help="Print full JSON lookup result.")
 
+    service_alias_list_parser = sub.add_parser("service-alias-list", help="List service aliases used by route lookup.")
+    service_alias_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    service_alias_set_parser = sub.add_parser("service-alias-set", help="Create or update a service alias.")
+    service_alias_set_parser.add_argument("alias")
+    service_alias_set_parser.add_argument("targets", help="Comma/space-separated target list: domains, IPs, or CIDRs.")
+    service_alias_set_parser.add_argument("--label", default="", help="Display label. Defaults to alias.")
+    service_alias_set_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    service_alias_delete_parser = sub.add_parser("service-alias-delete", help="Delete a service alias.")
+    service_alias_delete_parser.add_argument("alias")
+    service_alias_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     discovery_list_parser = sub.add_parser("domain-discovery-list", help="List unknown domains discovered by route lookup.")
     discovery_list_parser.add_argument("--status", default="", help="Filter by pending, reviewed, ignored, or promoted.")
     discovery_list_parser.add_argument("--limit", type=int, default=100)
@@ -9439,6 +9452,38 @@ def main() -> int:
                     f"{item['target']}\tstate={item['route_state']}\tserver={item['server_id']}"
                     f"\trule={rule_label}{auto_label}"
                 )
+        return 0
+    if args.command == "service-alias-list":
+        init_db(args.db, args.inventory)
+        with connect(args.db) as conn:
+            entries = service_alias_rows(conn)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No service aliases.")
+            for item in entries:
+                print(f"{item['alias']}\tlabel={item['label']}\ttargets={','.join(item.get('targets') or [])}")
+        return 0
+    if args.command == "service-alias-set":
+        result = save_service_alias(
+            args.db,
+            args.inventory,
+            alias=args.alias,
+            label=args.label or args.alias,
+            targets=args.targets,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"{result['alias']}\tlabel={result['label']}\ttargets={','.join(result.get('targets') or [])}")
+        return 0
+    if args.command == "service-alias-delete":
+        result = delete_service_alias(args.db, args.inventory, alias=args.alias)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"deleted={result['alias']}")
         return 0
     if args.command == "domain-discovery-list":
         init_db(args.db, args.inventory)
