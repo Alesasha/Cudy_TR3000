@@ -9,6 +9,17 @@ router state:
 - `backups/airties/snapshots/20260625-102516/`
 - `backups/cudy/snapshots/20260625-102803/`
 
+To regenerate the local dry-run migration plan from those snapshots:
+
+```powershell
+python tools\generate_cudy_router_migration.py `
+  --airties-snapshot backups\airties\snapshots\20260625-102516 `
+  --cudy-snapshot backups\cudy\snapshots\20260625-102803
+```
+
+The generated shell plan is guarded with an early `exit 1`. It is intended for
+review and editing before any router cutover, not direct execution.
+
 ## Current Topology
 
 - AirTies is the current ISP-facing router.
@@ -66,10 +77,12 @@ rollback path through AirTies is available.
 5. Recreate only required port forwards.
 6. Open the AWG listen port on Cudy WAN directly. Do not create a self-forward
    for the Cudy AWG listener after Cudy becomes the border router.
-7. Keep Cudy VPN/proxy firewall zones and policy routing intact.
-8. Disable remote telnet, remote web management, UPnP, WPS, and TR-069 unless
+7. Do not recreate AirTies self-forwards to `192.168.1.1`; after cutover that
+   address belongs to Cudy.
+8. Keep Cudy VPN/proxy firewall zones and policy routing intact.
+9. Disable remote telnet, remote web management, UPnP, WPS, and TR-069 unless
    there is an explicit operational reason to keep them.
-9. Validate external access from a non-home network after cutover.
+10. Validate external access from a non-home network after cutover.
 
 ## Validation Checklist
 
