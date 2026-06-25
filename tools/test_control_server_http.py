@@ -30,6 +30,26 @@ def fetch_json(url: str, *, timeout: int = 5) -> dict:
     return json.loads(raw)
 
 
+def fetch_text(opener: urllib.request.OpenerDirector, url: str, *, timeout: int = 5) -> str:
+    with opener.open(url, timeout=timeout) as response:
+        return response.read().decode("utf-8")
+
+
+def fetch_json_with_opener(opener: urllib.request.OpenerDirector, url: str, *, timeout: int = 5) -> dict:
+    return json.loads(fetch_text(opener, url, timeout=timeout))
+
+
+def post_json(opener: urllib.request.OpenerDirector, url: str, payload: dict, *, timeout: int = 5) -> dict:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"content-type": "application/json"},
+        method="POST",
+    )
+    with opener.open(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def wait_for_healthz(base_url: str, *, timeout_seconds: int = 20) -> None:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
@@ -65,6 +85,24 @@ def main() -> int:
             "--no-auto-worker",
             "--no-provider-refresh-worker",
         ]
+        subprocess.check_call(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "vpn_control_app.py"),
+                "--db",
+                str(db_path),
+                "--inventory",
+                str(INVENTORY),
+                "create-user",
+                "smoke-admin",
+                "--role",
+                "admin",
+                "--password",
+                "smoke-password",
+            ],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+        )
         proc = subprocess.Popen(
             command,
             cwd=ROOT,
@@ -89,6 +127,45 @@ def main() -> int:
                 raise AssertionError(f"unexpected live manifest cache_seconds: {manifest!r}")
             if endpoints[0].get("role") != "primary":
                 raise AssertionError(f"first endpoint is not primary: {endpoints[0]!r}")
+
+            opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+            login_page = fetch_text(opener, f"{base_url}/login")
+            for snippet in ("loginForm", "/api/login"):
+                if snippet not in login_page:
+                    raise AssertionError(f"login page is missing {snippet!r}")
+            login = post_json(
+                opener,
+                f"{base_url}/api/login",
+                {"username": "smoke-admin", "password": "smoke-password"},
+            )
+            if login.get("ok") is not True:
+                raise AssertionError(f"login failed: {login!r}")
+            admin_page = fetch_text(opener, f"{base_url}/admin")
+            for snippet in (
+                "globalDefaultPriorityForm",
+                "globalRouteAutoText",
+                "adminRouteAutoText",
+                "adminLookupForm",
+                "autoProbeJobsBody",
+                "providerTransportsBody",
+            ):
+                if snippet not in admin_page:
+                    raise AssertionError(f"admin page is missing {snippet!r}")
+            for forbidden in ("Auto Candidate Lists", "autoCandidatesForm"):
+                if forbidden in admin_page:
+                    raise AssertionError(f"admin page exposes obsolete Auto candidate UI: {forbidden}")
+            admin_payload = fetch_json_with_opener(opener, f"{base_url}/api/admin")
+            for key in ("servers", "users", "routes", "auto_candidates", "service_aliases"):
+                if key not in admin_payload:
+                    raise AssertionError(f"/api/admin is missing {key!r}")
+            winners = fetch_json_with_opener(opener, f"{base_url}/api/admin/auto-winners?target=telegram&limit=10")
+            if "winners" not in winners:
+                raise AssertionError(f"auto winners payload is malformed: {winners!r}")
+            lookup = fetch_json_with_opener(opener, f"{base_url}/api/route-lookup?target=216.239.36.21")
+            results = lookup.get("results") or []
+            if not results or results[0].get("route_state") != "direct":
+                raise AssertionError(f"route lookup should report direct for unmanaged IP: {lookup!r}")
+
             status_raw = subprocess.check_output(
                 [
                     sys.executable,
