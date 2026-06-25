@@ -20,6 +20,19 @@ python tools\generate_cudy_router_migration.py `
 The generated shell plan is guarded with an early `exit 1`. It is intended for
 review and editing before any router cutover, not direct execution.
 
+To run an offline preflight risk check:
+
+```powershell
+python tools\cudy_router_preflight.py `
+  --airties-snapshot backups\airties\snapshots\20260625-102516 `
+  --cudy-snapshot backups\cudy\snapshots\20260625-102803
+```
+
+The preflight writes ignored local reports:
+
+- `backups/airties/snapshots/20260625-102516/cudy-main-router-preflight.md`
+- `backups/airties/snapshots/20260625-102516/cudy-main-router-preflight.json`
+
 ## Current Topology
 
 - AirTies is the current ISP-facing router.
@@ -97,3 +110,17 @@ rollback path through AirTies is available.
   `ifconfig.me`, and direct traffic.
 - Required camera/Home Assistant/RDP/CZ_API forwards work externally.
 - AirTies can be reconnected quickly if WAN VLAN/static routing fails.
+
+## Current Preflight Notes
+
+The first preflight against the June 25 snapshots found no hard missing Cudy AWG
+listener/firewall rule, but it did highlight items to review before cutover:
+
+- AirTies WAN uses VLAN `2`; confirm the correct OpenWrt syntax for this Cudy
+  build before applying any WAN change.
+- Cudy currently has host routes via the old AirTies LAN gateway
+  `192.168.1.1`; those routes must be reviewed after Cudy becomes the gateway.
+- Some active AirTies port-forward targets are not DHCP-reserved in AirTies.
+  They may be static on the devices, but verify them before relying on forwards.
+- AirTies remote management, UPnP, and TR-069 were enabled. Prefer keeping
+  these disabled on Cudy.
