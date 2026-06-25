@@ -241,6 +241,13 @@ That means:
 - the agent keeps the SSH tunnel to `uswest` alive;
 - route apply status is posted back to the control-server.
 
+Build a refreshed per-device production ZIP from repository source plus local
+secrets:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File ..\Build-WindowsAgentPackage.ps1 -AgentId isasha_R7_Cudy-windows
+```
+
 Check the installed task and recent agent log:
 
 ```powershell
