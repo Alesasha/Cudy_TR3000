@@ -60,7 +60,10 @@ if ($ServerId -or $InterfaceAlias) {
 }
 
 $argsList = [System.Collections.Generic.List[string]]::new()
+$argsList.Add("-WindowStyle") | Out-Null
+$argsList.Add("Hidden") | Out-Null
 $argsList.Add("-NoProfile") | Out-Null
+$argsList.Add("-NonInteractive") | Out-Null
 $argsList.Add("-ExecutionPolicy") | Out-Null
 $argsList.Add("Bypass") | Out-Null
 Add-Arg -Args $argsList -Name "-File" -Value $script
@@ -91,6 +94,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -RestartCount 10 `
     -RestartInterval (New-TimeSpan -Minutes 1)
+$settings.Hidden = $true
 
 Register-ScheduledTask `
     -TaskName $TaskName `

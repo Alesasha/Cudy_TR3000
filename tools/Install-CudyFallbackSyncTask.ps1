@@ -35,7 +35,9 @@ if ($RepetitionDays -lt 1) {
 }
 
 $argsList = @(
+    "-WindowStyle", "Hidden",
     "-NoProfile",
+    "-NonInteractive",
     "-ExecutionPolicy", "Bypass",
     "-File", (Quote-Arg $runner)
 )
@@ -62,6 +64,7 @@ $settings = New-ScheduledTaskSettingsSet `
     -MultipleInstances IgnoreNew `
     -RestartCount 3 `
     -RestartInterval (New-TimeSpan -Minutes 5)
+$settings.Hidden = $true
 
 Register-ScheduledTask `
     -TaskName $TaskName `
