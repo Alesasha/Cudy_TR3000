@@ -200,10 +200,24 @@ __CUDY_AGENT_ZIP_BASE64_BELOW__
     $selfInstallText = ($selfHeader.TrimEnd("`r", "`n") + "`n" + $zipBase64 + "`n") -replace "`r`n", "`n"
     $selfInstallText = $selfInstallText -replace "`r", "`n"
     [System.IO.File]::WriteAllText($selfInstallPath, $selfInstallText, $encoding)
+    $selfInstallZipPath = Join-Path $resolvedOutputDir "$AgentId-self-install.zip"
+    if (Test-Path -LiteralPath $selfInstallZipPath) {
+        Remove-Item -LiteralPath $selfInstallZipPath -Force
+    }
+    $readmeSource = Join-Path $source "SELF-INSTALL-README-RU.txt"
+    $readmeTemp = Join-Path ([System.IO.Path]::GetTempPath()) "$AgentId-SELF-INSTALL-README-RU.txt"
+    if (Test-Path -LiteralPath $readmeSource) {
+        Copy-TextFileLf -SourcePath $readmeSource -DestinationPath $readmeTemp
+        Compress-Archive -LiteralPath @($selfInstallPath, $readmeTemp) -DestinationPath $selfInstallZipPath -Force
+        Remove-Item -LiteralPath $readmeTemp -Force
+    } else {
+        Compress-Archive -LiteralPath $selfInstallPath -DestinationPath $selfInstallZipPath -Force
+    }
     $zip = Get-Item -LiteralPath $zipPath
     Write-Host "Linux agent package zip: $($zip.FullName)"
     Write-Host "bytes=$($zip.Length)"
     Write-Host "modified=$($zip.LastWriteTime.ToString('s'))"
     Write-Host "Linux agent one-file installer: $freshInstallPath"
     Write-Host "Linux agent self-contained installer: $selfInstallPath"
+    Write-Host "Linux agent self-contained zip: $selfInstallZipPath"
 }
