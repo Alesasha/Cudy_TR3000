@@ -114,6 +114,41 @@ SERVICE_ALIAS_SEEDS = [
             "youtubei.googleapis.com",
         ],
     },
+    {
+        "aliases": ["gemini", "google-ai", "гемини", "джемини"],
+        "label": "Gemini",
+        "targets": [
+            "gemini.google.com",
+            "aistudio.google.com",
+        ],
+    },
+    {
+        "aliases": ["mailru", "mail.ru", "mail", "майл", "мэйл"],
+        "label": "Mail.ru",
+        "targets": [
+            "mail.ru",
+            "e.mail.ru",
+            "smtp.mail.ru",
+            "imap.mail.ru",
+            "pop.mail.ru",
+        ],
+    },
+    {
+        "aliases": ["speedtest", "спидтест"],
+        "label": "Speedtest",
+        "targets": [
+            "speedtest.net",
+            "www.speedtest.net",
+        ],
+    },
+    {
+        "aliases": ["linux-mirrors", "linuxmint-mirrors", "ubuntu-mirrors", "зеркала"],
+        "label": "Linux mirrors",
+        "targets": [
+            "mirror.yandex.ru",
+            "mirror.logol.ru",
+        ],
+    },
 ]
 
 

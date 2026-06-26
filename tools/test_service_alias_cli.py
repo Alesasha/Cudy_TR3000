@@ -78,12 +78,25 @@ def main() -> int:
 
         aliases = json.loads(run_cli(db_path, "service-alias-list", "--json"))
         assert_true(any(item["alias"] == "testtg" for item in aliases), "created alias should be listed")
+        assert_true(any(item["alias"] == "телеграм" for item in aliases), "telegram Cyrillic alias should be seeded")
+        assert_true(any(item["alias"] == "ютуб" for item in aliases), "youtube Cyrillic alias should be seeded")
+        assert_true(any(item["alias"] == "gemini" for item in aliases), "Gemini alias should be seeded")
+        assert_true(any(item["alias"] == "mailru" for item in aliases), "Mail.ru alias should be seeded")
+        assert_true(any(item["alias"] == "speedtest" for item in aliases), "Speedtest alias should be seeded")
+        assert_true(any(item["alias"] == "linux-mirrors" for item in aliases), "Linux mirrors alias should be seeded")
 
         lookup = json.loads(run_cli(db_path, "route-lookup", "testtg", "--user-id", "alias-user", "--json"))
         assert_equal(lookup["alias"]["label"], "Test Telegram", "lookup alias label")
         assert_equal(len(lookup["results"]), 2, "lookup should expand alias targets")
         assert_equal(lookup["results"][0]["target"], "149.154.160.0/20", "lookup first target")
         assert_equal(lookup["results"][1]["target"], "telegram.org", "lookup second target")
+
+        gemini_lookup = json.loads(run_cli(db_path, "route-lookup", "gemini", "--user-id", "alias-user", "--json"))
+        assert_equal(gemini_lookup["alias"]["label"], "Gemini", "Gemini alias label")
+        assert_true(
+            any(item["target"] == "gemini.google.com" for item in gemini_lookup["results"]),
+            "Gemini lookup should include gemini.google.com",
+        )
 
         deleted = json.loads(run_cli(db_path, "service-alias-delete", "testtg", "--json"))
         assert_equal(deleted["alias"], "testtg", "deleted alias")

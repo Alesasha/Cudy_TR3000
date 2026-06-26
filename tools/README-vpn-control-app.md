@@ -195,6 +195,10 @@ Built-in aliases include:
 ```text
 telegram, tg, телеграм
 youtube, yt, ютуб
+gemini, google-ai, гемини, джемини
+mailru, mail.ru, mail, майл, мэйл
+speedtest, спидтест
+linux-mirrors, linuxmint-mirrors, ubuntu-mirrors, зеркала
 ```
 
 Aliases are editable from the user and admin UI. Each alias expands to a
