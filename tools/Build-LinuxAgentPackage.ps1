@@ -111,9 +111,99 @@ if (-not $SkipZip) {
     Compress-Archive -LiteralPath $stageItems.FullName -DestinationPath $zipPath -Force
     $freshInstallPath = Join-Path $resolvedOutputDir "$AgentId-install.sh"
     Copy-TextFileLf -SourcePath (Join-Path $source "fresh_install_from_zip.sh") -DestinationPath $freshInstallPath
+    $selfInstallPath = Join-Path $resolvedOutputDir "$AgentId-self-install.sh"
+    $zipBytes = [System.IO.File]::ReadAllBytes($zipPath)
+    $zipBase64 = [Convert]::ToBase64String($zipBytes, [Base64FormattingOptions]::InsertLineBreaks)
+    $selfHeader = @'
+#!/usr/bin/env bash
+set -euo pipefail
+
+work_dir="$(pwd)"
+script_path="${BASH_SOURCE[0]:-$0}"
+script_name="$(basename "$script_path")"
+tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/cudy-agent-self-install.XXXXXX")"
+cleanup() {
+  rm -rf "$tmp_dir"
+}
+trap cleanup EXIT
+
+extract_payload() {
+  local output="$1"
+  local marker="__CUDY_AGENT_ZIP_BASE64_BELOW__"
+  if command -v awk >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
+    awk "found {print} /^$marker$/ {found=1}" "$script_path" | base64 -d > "$output"
+    return 0
+  fi
+  python3 - "$script_path" "$output" <<'PY'
+import base64
+import sys
+script, output = sys.argv[1:3]
+marker = "__CUDY_AGENT_ZIP_BASE64_BELOW__\n"
+data = open(script, "rb").read().split(marker.encode(), 1)[1]
+open(output, "wb").write(base64.b64decode(data))
+PY
+}
+
+echo "== extract embedded package =="
+extract_payload "$tmp_dir/package.zip"
+
+echo "== stop previous service if present =="
+if command -v systemctl >/dev/null 2>&1; then
+  sudo systemctl stop cudy-managed-agent.service 2>/dev/null || true
+fi
+
+echo "== remove old files and directories in $work_dir =="
+find "$work_dir" -mindepth 1 -maxdepth 1 -print0 | while IFS= read -r -d '' item; do
+  if [ "$(basename "$item")" = "$script_name" ]; then
+    continue
+  fi
+  echo "remove: $item"
+  sudo chmod -R u+rwX "$item" 2>/dev/null || true
+  sudo rm -rf --one-file-system "$item"
+done
+
+echo "== unpack fresh package =="
+if command -v unzip >/dev/null 2>&1; then
+  unzip -o "$tmp_dir/package.zip" -d "$work_dir"
+else
+  python3 - "$tmp_dir/package.zip" "$work_dir" <<'PY'
+import sys
+import zipfile
+archive, target = sys.argv[1:3]
+with zipfile.ZipFile(archive) as zf:
+    zf.extractall(target)
+PY
+fi
+
+echo "== make scripts executable =="
+chmod +x "$work_dir"/*.sh
+if [ -f "$work_dir/runtime/sing-box" ]; then
+  chmod +x "$work_dir/runtime/sing-box"
+fi
+
+echo "== install and start agent =="
+cd "$work_dir"
+sudo ./one_click_install.sh
+
+echo
+echo "== production smoke test =="
+./test_prod_agent.sh
+
+echo
+echo "== final status =="
+./status.sh || true
+
+exit 0
+__CUDY_AGENT_ZIP_BASE64_BELOW__
+'@
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $selfInstallText = ($selfHeader.TrimEnd("`r", "`n") + "`n" + $zipBase64 + "`n") -replace "`r`n", "`n"
+    $selfInstallText = $selfInstallText -replace "`r", "`n"
+    [System.IO.File]::WriteAllText($selfInstallPath, $selfInstallText, $encoding)
     $zip = Get-Item -LiteralPath $zipPath
     Write-Host "Linux agent package zip: $($zip.FullName)"
     Write-Host "bytes=$($zip.Length)"
     Write-Host "modified=$($zip.LastWriteTime.ToString('s'))"
     Write-Host "Linux agent one-file installer: $freshInstallPath"
+    Write-Host "Linux agent self-contained installer: $selfInstallPath"
 }

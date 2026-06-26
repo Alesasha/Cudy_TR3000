@@ -73,3 +73,7 @@ fi
 echo "== install =="
 cd "$work_dir"
 sudo ./one_click_install.sh
+
+echo
+echo "== production smoke test =="
+./test_prod_agent.sh

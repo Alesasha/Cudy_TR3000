@@ -55,6 +55,7 @@ def main() -> int:
     assert_contains(fresh_install, 'find "$work_dir" -mindepth 1 -maxdepth 1 -type d', label="fresh_install_from_zip.sh")
     assert_contains(fresh_install, "sudo rm -rf --one-file-system", label="fresh_install_from_zip.sh")
     assert_contains(fresh_install, "sudo ./one_click_install.sh", label="fresh_install_from_zip.sh")
+    assert_contains(fresh_install, "./test_prod_agent.sh", label="fresh_install_from_zip.sh")
     assert_contains(installer, "from urllib.error import URLError", label="install_singbox_runtime.sh")
     assert_contains(installer, "cannot query GitHub release API", label="install_singbox_runtime.sh")
 
@@ -69,6 +70,9 @@ def main() -> int:
     assert_contains(builder, "Copy-TextFileLf", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "-replace \"`r`n\", \"`n\"", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "$AgentId-install.sh", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "$AgentId-self-install.sh", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "__CUDY_AGENT_ZIP_BASE64_BELOW__", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "production smoke test", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "IncludeRuntime", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "runtime", label="Build-LinuxAgentPackage.ps1")
 
