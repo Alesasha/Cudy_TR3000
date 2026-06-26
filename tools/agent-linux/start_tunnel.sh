@@ -16,6 +16,8 @@ CONTROL_USER="$(strip_cr "${CONTROL_USER:-cudy-tunnel-linux}")"
 CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
 CONTROL_REMOTE_PORT="$(strip_cr "${CONTROL_REMOTE_PORT:-8765}")"
 SSH_KEY="$(strip_cr "${SSH_KEY:-./uswest_control_tunnel_ed25519}")"
+CONTROL_CONNECT_TIMEOUT="$(strip_cr "${CONTROL_CONNECT_TIMEOUT:-12}")"
+KNOWN_HOSTS_FILE="$(strip_cr "${KNOWN_HOSTS_FILE:-./known_hosts}")"
 
 pin_control_route() {
   local gw_dev gw dev
@@ -58,9 +60,17 @@ ip route get "$CONTROL_HOST" || true
 exec ssh \
   -i "$SSH_KEY" \
   -p "$CONTROL_PORT" \
+  -o BatchMode=yes \
+  -o IdentitiesOnly=yes \
+  -o PasswordAuthentication=no \
+  -o KbdInteractiveAuthentication=no \
+  -o StrictHostKeyChecking=accept-new \
+  -o UserKnownHostsFile="$KNOWN_HOSTS_FILE" \
   -o ExitOnForwardFailure=yes \
-  -o ConnectTimeout=20 \
+  -o ConnectTimeout="$CONTROL_CONNECT_TIMEOUT" \
+  -o ConnectionAttempts=1 \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
+  -o LogLevel=VERBOSE \
   -N -L "${CONTROL_LOCAL_PORT}:127.0.0.1:${CONTROL_REMOTE_PORT}" \
   "${CONTROL_USER}@${CONTROL_HOST}"

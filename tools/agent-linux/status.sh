@@ -29,6 +29,11 @@ if command -v curl >/dev/null 2>&1; then
 else
   echo "curl is not available"
 fi
+if command -v ss >/dev/null 2>&1; then
+  echo
+  echo "control listeners/processes:"
+  ss -ltnp 2>/dev/null | grep -E "(:${CONTROL_LOCAL_PORT}\\b|ssh)" || true
+fi
 
 echo
 echo "== routes =="

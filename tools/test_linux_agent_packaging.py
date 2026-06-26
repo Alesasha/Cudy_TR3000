@@ -60,6 +60,15 @@ def main() -> int:
     assert_contains(self_install_readme, "bash ./install.sh", label="SELF-INSTALL-README-RU.txt")
     assert_contains(installer, "from urllib.error import URLError", label="install_singbox_runtime.sh")
     assert_contains(installer, "cannot query GitHub release API", label="install_singbox_runtime.sh")
+    assert_contains(start_tunnel, "-o BatchMode=yes", label="start_tunnel.sh")
+    assert_contains(start_tunnel, "-o IdentitiesOnly=yes", label="start_tunnel.sh")
+    assert_contains(start_tunnel, "-o StrictHostKeyChecking=accept-new", label="start_tunnel.sh")
+    assert_contains(start_tunnel, "CONTROL_CONNECT_TIMEOUT", label="start_tunnel.sh")
+    assert_contains(managed, "CONTROL_TUNNEL_WAIT_SECONDS", label="managed_agent.sh")
+    assert_contains(managed, "stop_control_tunnel()", label="managed_agent.sh")
+    assert_contains(managed, "dump_control_tunnel_logs()", label="managed_agent.sh")
+    assert_contains(status, "control listeners/processes", label="status.sh")
+    assert_contains(status, "ss -ltnp", label="status.sh")
 
     for label, script in {
         "managed_agent.sh": managed,

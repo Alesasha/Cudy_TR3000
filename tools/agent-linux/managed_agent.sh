@@ -13,6 +13,7 @@ strip_cr() {
 POLL_SECONDS="$(strip_cr "${POLL_SECONDS:-60}")"
 CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-95.182.91.203}")"
 CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
+CONTROL_TUNNEL_WAIT_SECONDS="$(strip_cr "${CONTROL_TUNNEL_WAIT_SECONDS:-25}")"
 DIRECT_BASELINE="$(strip_cr "${DIRECT_BASELINE:-1}")"
 EXTRA_INTERFACE_MAPS="$(strip_cr "${EXTRA_INTERFACE_MAPS:-}")"
 LOG_PATH="$(strip_cr "${LOG_PATH:-./managed-agent.log}")"
@@ -25,19 +26,46 @@ log() {
   printf '[%s] %s\n' "$(date -Is)" "$*" | tee -a "$LOG_PATH"
 }
 
+stop_control_tunnel() {
+  local pid
+  if [ -f run/control-tunnel.pid ]; then
+    pid="$(cat run/control-tunnel.pid 2>/dev/null || true)"
+    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+      log "stopping stale SSH control tunnel pid=$pid"
+      kill "$pid" 2>/dev/null || true
+      sleep 1
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+    rm -f run/control-tunnel.pid
+  fi
+}
+
+dump_control_tunnel_logs() {
+  log "control tunnel stderr tail:"
+  tail -80 logs/control-tunnel.err.log 2>/dev/null | tee -a "$LOG_PATH" || true
+  log "control tunnel stdout tail:"
+  tail -40 logs/control-tunnel.out.log 2>/dev/null | tee -a "$LOG_PATH" || true
+}
+
 ensure_tunnel() {
   if curl -fsS --connect-timeout 3 --max-time 5 "${VPN_CONTROL_URL}/healthz" >/dev/null 2>&1; then
     return 0
   fi
+  stop_control_tunnel
+  : >logs/control-tunnel.out.log
+  : >logs/control-tunnel.err.log
   log "starting SSH control tunnel on 127.0.0.1:${CONTROL_LOCAL_PORT}"
   nohup ./start_tunnel.sh >logs/control-tunnel.out.log 2>logs/control-tunnel.err.log &
   echo "$!" > run/control-tunnel.pid
-  for _ in $(seq 1 15); do
+  for _ in $(seq 1 "$CONTROL_TUNNEL_WAIT_SECONDS"); do
     if curl -fsS --connect-timeout 3 --max-time 5 "${VPN_CONTROL_URL}/healthz" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
+  log "control tunnel did not become ready within ${CONTROL_TUNNEL_WAIT_SECONDS}s"
+  dump_control_tunnel_logs
+  stop_control_tunnel
   return 1
 }
 
