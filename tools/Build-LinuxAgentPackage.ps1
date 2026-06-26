@@ -22,6 +22,18 @@ if (-not (Test-Path -LiteralPath $agentDir)) {
     throw "Agent secrets directory not found: $agentDir"
 }
 
+function Copy-TextFileLf {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourcePath,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+    $text = [System.IO.File]::ReadAllText($SourcePath)
+    $text = $text -replace "`r`n", "`n"
+    $text = $text -replace "`r", "`n"
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    [System.IO.File]::WriteAllText($DestinationPath, $text, $encoding)
+}
+
 $requiredSecretFiles = @(
     "agent.env",
     "uswest_control_tunnel_ed25519",
@@ -64,11 +76,11 @@ foreach ($file in $sourceFiles) {
     if (-not (Test-Path -LiteralPath $src)) {
         throw "Source file is missing: $src"
     }
-    Copy-Item -LiteralPath $src -Destination (Join-Path $stageDir $file) -Force
+    Copy-TextFileLf -SourcePath $src -DestinationPath (Join-Path $stageDir $file)
 }
 
-Copy-Item -LiteralPath (Join-Path $root "tools\route_agent.py") -Destination (Join-Path $stageDir "route_agent.py") -Force
-Copy-Item -LiteralPath (Join-Path $agentDir "agent.env") -Destination (Join-Path $stageDir "agent.env") -Force
+Copy-TextFileLf -SourcePath (Join-Path $root "tools\route_agent.py") -DestinationPath (Join-Path $stageDir "route_agent.py")
+Copy-TextFileLf -SourcePath (Join-Path $agentDir "agent.env") -DestinationPath (Join-Path $stageDir "agent.env")
 Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519") -Destination (Join-Path $stageDir "uswest_control_tunnel_ed25519") -Force
 Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519.pub") -Destination (Join-Path $stageDir "uswest_control_tunnel_ed25519.pub") -Force
 

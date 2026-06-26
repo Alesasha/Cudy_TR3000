@@ -6,12 +6,16 @@ set -a
 [ -f ./agent.env ] && . ./agent.env
 set +a
 
-CONTROL_HOST="${CONTROL_HOST:-95.182.91.203}"
-CONTROL_PORT="${CONTROL_PORT:-22}"
-CONTROL_USER="${CONTROL_USER:-cudy-tunnel-linux}"
-CONTROL_LOCAL_PORT="${CONTROL_LOCAL_PORT:-18765}"
-CONTROL_REMOTE_PORT="${CONTROL_REMOTE_PORT:-8765}"
-SSH_KEY="${SSH_KEY:-./uswest_control_tunnel_ed25519}"
+strip_cr() {
+  printf '%s' "$1" | tr -d '\r'
+}
+
+CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-95.182.91.203}")"
+CONTROL_PORT="$(strip_cr "${CONTROL_PORT:-22}")"
+CONTROL_USER="$(strip_cr "${CONTROL_USER:-cudy-tunnel-linux}")"
+CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
+CONTROL_REMOTE_PORT="$(strip_cr "${CONTROL_REMOTE_PORT:-8765}")"
+SSH_KEY="$(strip_cr "${SSH_KEY:-./uswest_control_tunnel_ed25519}")"
 
 pin_control_route() {
   local gw_dev gw dev

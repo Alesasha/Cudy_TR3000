@@ -6,12 +6,19 @@ set -a
 . ./agent.env
 set +a
 
-POLL_SECONDS="${POLL_SECONDS:-60}"
-CONTROL_HOST="${CONTROL_HOST:-95.182.91.203}"
-CONTROL_LOCAL_PORT="${CONTROL_LOCAL_PORT:-18765}"
-DIRECT_BASELINE="${DIRECT_BASELINE:-1}"
-EXTRA_INTERFACE_MAPS="${EXTRA_INTERFACE_MAPS:-}"
-LOG_PATH="${LOG_PATH:-./managed-agent.log}"
+strip_cr() {
+  printf '%s' "$1" | tr -d '\r'
+}
+
+POLL_SECONDS="$(strip_cr "${POLL_SECONDS:-60}")"
+CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-95.182.91.203}")"
+CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
+DIRECT_BASELINE="$(strip_cr "${DIRECT_BASELINE:-1}")"
+EXTRA_INTERFACE_MAPS="$(strip_cr "${EXTRA_INTERFACE_MAPS:-}")"
+LOG_PATH="$(strip_cr "${LOG_PATH:-./managed-agent.log}")"
+VPN_AGENT_TOKEN="$(strip_cr "${VPN_AGENT_TOKEN:-}")"
+VPN_AGENT_DEVICE_ID="$(strip_cr "${VPN_AGENT_DEVICE_ID:-}")"
+export VPN_AGENT_TOKEN VPN_AGENT_DEVICE_ID
 export VPN_CONTROL_URL="http://127.0.0.1:${CONTROL_LOCAL_PORT}"
 
 log() {

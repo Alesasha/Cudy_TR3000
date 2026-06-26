@@ -14,6 +14,9 @@ fi
 
 mkdir -p run logs transports
 chmod +x ./*.sh
+if [ -f ./runtime/sing-box ]; then
+  chmod +x ./runtime/sing-box || true
+fi
 
 on_error() {
   code=$?
