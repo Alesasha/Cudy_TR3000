@@ -242,13 +242,16 @@ __CUDY_AGENT_ZIP_BASE64_BELOW__
     }
     $readmeSource = Join-Path $source "SELF-INSTALL-README-RU.txt"
     $readmeTemp = Join-Path ([System.IO.Path]::GetTempPath()) "$AgentId-SELF-INSTALL-README-RU.txt"
+    $simpleInstallTemp = Join-Path ([System.IO.Path]::GetTempPath()) "install.sh"
+    Copy-TextFileLf -SourcePath $selfInstallPath -DestinationPath $simpleInstallTemp
     if (Test-Path -LiteralPath $readmeSource) {
         Copy-TextFileLf -SourcePath $readmeSource -DestinationPath $readmeTemp
-        Compress-Archive -LiteralPath @($selfInstallPath, $readmeTemp) -DestinationPath $selfInstallZipPath -Force
+        Compress-Archive -LiteralPath @($simpleInstallTemp, $readmeTemp) -DestinationPath $selfInstallZipPath -Force
         Remove-Item -LiteralPath $readmeTemp -Force
     } else {
-        Compress-Archive -LiteralPath $selfInstallPath -DestinationPath $selfInstallZipPath -Force
+        Compress-Archive -LiteralPath $simpleInstallTemp -DestinationPath $selfInstallZipPath -Force
     }
+    Remove-Item -LiteralPath $simpleInstallTemp -Force
     $zip = Get-Item -LiteralPath $zipPath
     Write-Host "Linux agent package zip: $($zip.FullName)"
     Write-Host "bytes=$($zip.Length)"
