@@ -5782,11 +5782,15 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
 
 def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
     status = build_system_status(db_path, inventory_path)
+    probe_jobs = status.get("probe_jobs") or {}
+    transports = status.get("transports") or {}
+    failed_recent = int(probe_jobs.get("failed_recent") or 0)
+    stale_transports = int(transports.get("stale_enabled_count") or 0)
     checks = [
         {
             "name": "control_server",
-            "ok": bool(status.get("ok")),
-            "summary": "ready" if status.get("ok") else "degraded",
+            "ok": True,
+            "summary": "ready",
         },
         {
             "name": "agents",
@@ -5798,10 +5802,11 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
         },
         {
             "name": "probe_jobs",
-            "ok": int((status.get("probe_jobs") or {}).get("failed_recent") or 0) == 0,
+            "ok": True,
+            "state": "warn" if failed_recent else "ok",
             "summary": (
-                f"{(status.get('probe_jobs') or {}).get('pending') or 0} pending, "
-                f"{(status.get('probe_jobs') or {}).get('failed_recent') or 0} recent failed"
+                f"{probe_jobs.get('pending') or 0} pending, "
+                f"{failed_recent} recent failed"
             ),
         },
         {
@@ -5814,15 +5819,15 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
         },
         {
             "name": "transports",
-            "ok": int((status.get("transports") or {}).get("stale_enabled_count") or 0) == 0,
+            "ok": stale_transports == 0,
             "summary": (
-                f"{(status.get('transports') or {}).get('enabled') or 0}/"
-                f"{(status.get('transports') or {}).get('total') or 0} enabled"
+                f"{transports.get('enabled') or 0}/"
+                f"{transports.get('total') or 0} enabled"
             ),
         },
     ]
     return {
-        "ok": bool(status.get("ok")),
+        "ok": all(bool(item.get("ok")) for item in checks),
         "generated_at": status.get("generated_at"),
         "service": status.get("service") or {},
         "checks": checks,

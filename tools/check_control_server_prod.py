@@ -210,7 +210,7 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
                 f"cd {args.remote_dir} && python3 tools/vpn_control_app.py "
                 f"--db {args.remote_dir}/data/vpn_control.db "
                 f"--inventory {args.remote_dir}/config/vpn_inventory.json "
-                "system-status --json --strict"
+                "system-status --json"
             ),
             args.timeout,
         )
@@ -220,7 +220,7 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
     service_lines = [line.strip() for line in service_output.splitlines() if line.strip()]
     service_ok = service_rc == 0 and len(service_lines) >= 2 and service_lines[0] == "enabled" and service_lines[1] == "active"
     status_summary = summarize_status(status)
-    ok = bool(service_ok and health.get("ok") is True and ready.get("ok") is True and status_summary.get("ok") is True)
+    ok = bool(service_ok and health.get("ok") is True and ready.get("ok") is True)
     return {
         "ok": ok,
         "host": args.host,

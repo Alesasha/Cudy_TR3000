@@ -8,7 +8,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from vpn_control_app import PROBE_FAILED_WARN_SECONDS, build_system_status, init_db
+from vpn_control_app import PROBE_FAILED_WARN_SECONDS, build_readiness_status, build_system_status, init_db
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,6 +52,12 @@ def main() -> int:
             raise AssertionError(f"recent failed job counter is wrong: {recent_status['probe_jobs']!r}")
         if not any("probe job" in warning for warning in recent_status["warnings"]):
             raise AssertionError(f"recent failed job should warn: {recent_status['warnings']!r}")
+        readiness = build_readiness_status(db_path, INVENTORY)
+        if readiness["ok"] is not True:
+            raise AssertionError(f"recent failed probe should not make readiness fail: {readiness!r}")
+        probe_check = next((item for item in readiness["checks"] if item.get("name") == "probe_jobs"), {})
+        if probe_check.get("state") != "warn" or probe_check.get("ok") is not True:
+            raise AssertionError(f"probe readiness check should be warning-only: {probe_check!r}")
     print("System status probe warning smoke passed.")
     return 0
 
