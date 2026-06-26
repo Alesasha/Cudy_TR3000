@@ -40,6 +40,31 @@ def main() -> int:
     finally:
         route_agent.plan_commands = original_plan_commands  # type: ignore[assignment]
 
+    original_run_text = route_agent.run_text
+    original_probe_bind_value = route_agent.probe_bind_value
+    try:
+        route_agent.probe_bind_value = lambda interface_name: interface_name  # type: ignore[assignment]
+        route_agent.run_text = lambda command, timeout: (  # type: ignore[assignment]
+            28,
+            "curl: (28) Connection timed out after 5002 milliseconds\n"
+            "http_code=301\n"
+            "time_total=5.535081\n"
+            "remote_ip=151.101.130.219\n"
+            "size_download=0\n"
+            "speed_download=0\n",
+        )
+        probe = route_agent.curl_probe(
+            url="https://speedtest.net/",
+            interface_name="proxyde",
+            connect_timeout=5,
+            max_time=12,
+        )
+        if not probe.get("ok") or probe.get("http_code_int") != 301:
+            raise AssertionError(f"3xx HTTP probe should count as route-reachable: {probe!r}")
+    finally:
+        route_agent.run_text = original_run_text  # type: ignore[assignment]
+        route_agent.probe_bind_value = original_probe_bind_value  # type: ignore[assignment]
+
     print("Route agent plan regression passed.")
     return 0
 

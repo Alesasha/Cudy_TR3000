@@ -520,6 +520,12 @@ def probe_bind_value(interface_name: str) -> str:
     return interface_name
 
 
+def http_probe_reachable(http_code: int) -> bool:
+    # For Auto routing we need to know whether the target is reachable through
+    # the exit. A redirect or auth/client-error page still proves the route.
+    return 200 <= http_code < 500
+
+
 def curl_probe(
     *,
     url: str,
@@ -578,7 +584,7 @@ def curl_probe(
         parsed["speed_mbps"] = round(float(parsed.get("speed_download") or "0") * 8 / 1_000_000, 2)
     except ValueError:
         parsed["speed_mbps"] = None
-    parsed["ok"] = rc == 0 and 200 <= int(parsed["http_code_int"]) < 500
+    parsed["ok"] = http_probe_reachable(int(parsed["http_code_int"]))
     return parsed
 
 
