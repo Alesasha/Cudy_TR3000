@@ -61,6 +61,10 @@ This is the current implementation order for the managed VPN control project.
   transports needed by applied routes and pending probe jobs.
 - Regression coverage now verifies that Auto probe jobs prefer an active agent
   that already reported the target domain.
+- Provider-transport probe jobs now require an agent that reports
+  `can_manage_transports=true`; this prevents the scheduler from assigning
+  LokVPN/VPNtype probe windows to a client that can route but cannot start those
+  exits.
 
 ## 5. Provider Transports
 

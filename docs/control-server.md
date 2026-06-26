@@ -213,8 +213,10 @@ degraded:
 GET /readyz
 ```
 
-`/readyz` returns a compact JSON payload with `checks` and uses HTTP `503` when
-the same status model reports `ok=false`. The CLI equivalent is:
+`/readyz` returns a compact JSON payload with `checks` and uses HTTP `503` only
+when a readiness-critical check fails. Operational warnings such as recent
+failed Auto probe jobs remain visible in the payload, but they do not make the
+control API unavailable to agents. The stricter operational CLI equivalent is:
 
 ```bash
 python3 /opt/cudy-control/tools/vpn_control_app.py \
@@ -223,9 +225,10 @@ python3 /opt/cudy-control/tools/vpn_control_app.py \
   system-status --strict
 ```
 
-The same payload format is produced by `system-status --json`. Worker heartbeat
-is stored in SQLite, so both the HTTP endpoint and a separate CLI invocation can
-show whether the Auto probe and provider refresh workers have recently run.
+The fuller operational payload is produced by `system-status --json`. Worker
+heartbeat is stored in SQLite, so both the HTTP endpoint and a separate CLI
+invocation can show whether the Auto probe and provider refresh workers have
+recently run.
 
 It includes:
 
@@ -255,8 +258,10 @@ python tools\check_control_server_prod.py --strict
 ```
 
 The check validates `vpn-control.service`, `/healthz`, `/readyz`, worker
-freshness, agent summary, and transport freshness. It requires the local ignored
-control-server SSH password file or `CONTROL_BACKUP_SSH_PASSWORD`.
+freshness, agent summary, and transport freshness. Operational warnings are
+reported in the JSON output but do not fail the checker while `/readyz` remains
+ready. It requires the local ignored control-server SSH password file or
+`CONTROL_BACKUP_SSH_PASSWORD`.
 
 If new SSH sessions hang during the banner stage but the existing local control
 tunnel is alive, the checker falls back to `http://127.0.0.1:18765` and reports
