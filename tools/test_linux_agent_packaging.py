@@ -70,6 +70,8 @@ def main() -> int:
         assert_contains(script, "tr -d '\\r'", label=label)
 
     assert_contains(builder, "Copy-TextFileLf", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "New-ZipFromDirectoryUnix", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "$entryName = $relative -replace '\\\\', '/'", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "-replace \"`r`n\", \"`n\"", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "$AgentId-install.sh", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "$AgentId-self-install.sh", label="Build-LinuxAgentPackage.ps1")
@@ -77,6 +79,8 @@ def main() -> int:
     assert_contains(builder, "SELF-INSTALL-README-RU.txt", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "__CUDY_AGENT_ZIP_BASE64_BELOW__", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "production smoke test", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "unzip_rc=$?", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, 'if [ "$unzip_rc" -gt 1 ]; then', label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "IncludeRuntime", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "runtime", label="Build-LinuxAgentPackage.ps1")
 

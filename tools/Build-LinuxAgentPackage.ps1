@@ -34,6 +34,35 @@ function Copy-TextFileLf {
     [System.IO.File]::WriteAllText($DestinationPath, $text, $encoding)
 }
 
+function New-ZipFromDirectoryUnix {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceDirectory,
+        [Parameter(Mandatory = $true)][string]$DestinationPath
+    )
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    if (Test-Path -LiteralPath $DestinationPath) {
+        Remove-Item -LiteralPath $DestinationPath -Force
+    }
+    $sourceResolved = (Resolve-Path -LiteralPath $SourceDirectory).Path
+    $destinationResolved = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($DestinationPath)
+    $zip = [System.IO.Compression.ZipFile]::Open($destinationResolved, [System.IO.Compression.ZipArchiveMode]::Create)
+    try {
+        Get-ChildItem -LiteralPath $sourceResolved -Recurse -File | ForEach-Object {
+            $relative = $_.FullName.Substring($sourceResolved.Length).TrimStart('\', '/')
+            $entryName = $relative -replace '\\', '/'
+            [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zip,
+                $_.FullName,
+                $entryName,
+                [System.IO.Compression.CompressionLevel]::Optimal
+            ) | Out-Null
+        }
+    } finally {
+        $zip.Dispose()
+    }
+}
+
 $requiredSecretFiles = @(
     "agent.env",
     "uswest_control_tunnel_ed25519",
@@ -104,11 +133,11 @@ if (-not $SkipZip) {
     if (Test-Path -LiteralPath $zipPath) {
         Remove-Item -LiteralPath $zipPath -Force
     }
-    $stageItems = Get-ChildItem -LiteralPath $stageDir -Force
+    $stageItems = Get-ChildItem -LiteralPath $stageDir -Recurse -File -Force
     if (-not $stageItems) {
         throw "Stage directory is empty: $stageDir"
     }
-    Compress-Archive -LiteralPath $stageItems.FullName -DestinationPath $zipPath -Force
+    New-ZipFromDirectoryUnix -SourceDirectory $stageDir -DestinationPath $zipPath
     $freshInstallPath = Join-Path $resolvedOutputDir "$AgentId-install.sh"
     Copy-TextFileLf -SourcePath (Join-Path $source "fresh_install_from_zip.sh") -DestinationPath $freshInstallPath
     $selfInstallPath = Join-Path $resolvedOutputDir "$AgentId-self-install.sh"
@@ -164,7 +193,14 @@ done
 
 echo "== unpack fresh package =="
 if command -v unzip >/dev/null 2>&1; then
+  set +e
   unzip -o "$tmp_dir/package.zip" -d "$work_dir"
+  unzip_rc=$?
+  set -e
+  if [ "$unzip_rc" -gt 1 ]; then
+    echo "ERROR: unzip failed with exit code $unzip_rc" >&2
+    exit "$unzip_rc"
+  fi
 else
   python3 - "$tmp_dir/package.zip" "$work_dir" <<'PY'
 import sys
