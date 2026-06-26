@@ -4555,15 +4555,31 @@ def agent_reports_domain(agent: dict[str, Any], *, domain: str, user_id: str) ->
     return False
 
 
-def agent_can_probe(agent: dict[str, Any]) -> bool:
+def agent_can_manage_transports(agent: dict[str, Any]) -> bool:
+    status = agent.get("status") or {}
+    capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
+    return bool(capabilities.get("can_manage_transports"))
+
+
+def agent_can_probe(agent: dict[str, Any], *, requires_managed_transports: bool = False) -> bool:
     status = agent.get("status") or {}
     capabilities = status.get("capabilities") if isinstance(status.get("capabilities"), dict) else {}
     if "can_probe" in capabilities:
-        return bool(capabilities.get("can_probe"))
-    platform_name = str(status.get("platform") or agent.get("platform") or "").lower()
-    if platform_name == "android":
+        can_probe = bool(capabilities.get("can_probe"))
+    else:
+        platform_name = str(status.get("platform") or agent.get("platform") or "").lower()
+        can_probe = platform_name != "android"
+    if requires_managed_transports and not agent_can_manage_transports(agent):
         return False
-    return True
+    return can_probe
+
+
+def candidates_require_managed_transports(servers: dict[str, dict[str, Any]], candidate_server_ids: list[str]) -> bool:
+    for server_id in candidate_server_ids:
+        server = servers.get(server_id) or {}
+        if server.get("transport_required"):
+            return True
+    return False
 
 
 def choose_probe_agent(
@@ -4571,8 +4587,13 @@ def choose_probe_agent(
     *,
     domain: str,
     user_id: str,
+    requires_managed_transports: bool = False,
 ) -> str:
-    probe_agents = [agent for agent in agents if agent_can_probe(agent)]
+    probe_agents = [
+        agent
+        for agent in agents
+        if agent_can_probe(agent, requires_managed_transports=requires_managed_transports)
+    ]
     for agent in probe_agents:
         if agent_reports_domain(agent, domain=domain, user_id=user_id):
             return str(agent["device_id"])
@@ -4741,7 +4762,12 @@ def create_auto_probe_jobs_once(
                 candidates=candidates,
                 max_candidates=max(1, int(max_candidates_per_job)),
             )
-            assigned_device_id = choose_probe_agent(agents, domain=domain, user_id=user_id)
+            assigned_device_id = choose_probe_agent(
+                agents,
+                domain=domain,
+                user_id=user_id,
+                requires_managed_transports=candidates_require_managed_transports(servers, probe_candidates),
+            )
             if not assigned_device_id and not agents:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "no_active_agent"})
                 continue
@@ -6657,14 +6683,13 @@ def export_user_routes(db_path: Path, inventory_path: Path, output_dir: Path) ->
             continue
         requested_server_id = server_id
         auto_policy = None
-        if requested_server_id == "auto" and target_type == "domain":
+        route_key = domain or target
+        if requested_server_id == "auto":
+            route_key = domain if target_type == "domain" else auto_cache_key_for_ip_route(target)
             with connect(db_path) as conn:
-                auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
-        elif requested_server_id == "auto":
-            warnings.append(f"{user_id}/{label}: IP/CIDR route cannot use auto; skipped")
-            continue
+                auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=route_key)
         resolved_server_id, cached = resolve_route_server(
-            domain=domain or target,
+            domain=route_key,
             requested_server_id=requested_server_id,
             servers=servers,
             auto_cache=cached_auto,

@@ -315,7 +315,7 @@ def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
                 json.dumps(
                     {
                         "platform": "windows",
-                        "capabilities": {"can_probe": True},
+                        "capabilities": {"can_manage_transports": True, "can_probe": True},
                         "domain_routes": [{"domain": "other.example"}],
                     }
                 ),
@@ -324,7 +324,7 @@ def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
                 json.dumps(
                     {
                         "platform": "linux",
-                        "capabilities": {"can_probe": True},
+                        "capabilities": {"can_manage_transports": True, "can_probe": True},
                         "domain_routes": [{"domain": "worker-agent.example"}],
                     }
                 ),
@@ -350,9 +350,42 @@ def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
     )
 
 
+def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
+    target_cidr = "203.0.113.0/24"
+    cache_key = app.auto_cache_key_for_ip_route(target_cidr)
+    app.save_auto_cache_entry(
+        db_path,
+        INVENTORY,
+        domain=cache_key,
+        selected_server_id="proxyde",
+        score_ms=222,
+        status="ok",
+        metadata={"user_id": TEST_USER_ID},
+    )
+    app.save_user_ip_route(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        target_cidr=target_cidr,
+        server_id="auto",
+    )
+
+    manifest = app.export_user_routes(db_path, INVENTORY, tmp / "user-routes")
+    target_warnings = [warning for warning in manifest["warnings"] if target_cidr in warning]
+    assert_equal(target_warnings, [], "user route export should not warn for cached auto IP route")
+    matching = [route for route in manifest["exported_routes"] if route["target"] == target_cidr]
+    assert_equal(len(matching), 1, "cached auto IP route should be exported")
+    route = matching[0]
+    assert_equal(route["requested_server_id"], "auto", "cached auto IP route requested server")
+    assert_equal(route["server_id"], "proxyde", "cached auto IP route resolved server")
+    assert_equal(route["interface"], "proxyde", "cached auto IP route interface")
+    assert_equal(route["auto_status"], "ok", "cached auto IP route status")
+
+
 def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-", ignore_cleanup_errors=True) as tmp:
         db_path = Path(tmp) / "vpn_control.db"
+        tmp_path = Path(tmp)
         app.init_db(db_path, INVENTORY)
         run_priority_resolution_check(db_path)
         run_all_rest_check(db_path)
@@ -361,6 +394,7 @@ def main() -> int:
         run_unresolved_auto_domain_falls_back_to_direct_check(db_path)
         run_agent_transport_plan_is_minimal_check(db_path)
         run_auto_worker_prefers_domain_agent_check(db_path)
+        run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
         gc.collect()
 
     print("Auto priority policy regression passed.")
