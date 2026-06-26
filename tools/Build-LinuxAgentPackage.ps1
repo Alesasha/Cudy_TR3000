@@ -57,6 +57,7 @@ $sourceFiles = @(
     "QUICKSTART-RU.md",
     "README.md",
     "agent.env.example",
+    "fresh_install_from_zip.sh",
     "install_singbox_runtime.sh",
     "install_systemd.sh",
     "managed_agent.sh",
@@ -108,8 +109,11 @@ if (-not $SkipZip) {
         throw "Stage directory is empty: $stageDir"
     }
     Compress-Archive -LiteralPath $stageItems.FullName -DestinationPath $zipPath -Force
+    $freshInstallPath = Join-Path $resolvedOutputDir "$AgentId-install.sh"
+    Copy-TextFileLf -SourcePath (Join-Path $source "fresh_install_from_zip.sh") -DestinationPath $freshInstallPath
     $zip = Get-Item -LiteralPath $zipPath
     Write-Host "Linux agent package zip: $($zip.FullName)"
     Write-Host "bytes=$($zip.Length)"
     Write-Host "modified=$($zip.LastWriteTime.ToString('s'))"
+    Write-Host "Linux agent one-file installer: $freshInstallPath"
 }

@@ -28,6 +28,7 @@ def assert_not_contains(text: str, needle: str, *, label: str) -> None:
 def main() -> int:
     restore = read_text(AGENT_DIR / "restore_direct.sh")
     one_click = read_text(AGENT_DIR / "one_click_install.sh")
+    fresh_install = read_text(AGENT_DIR / "fresh_install_from_zip.sh")
     installer = read_text(AGENT_DIR / "install_singbox_runtime.sh")
     managed = read_text(AGENT_DIR / "managed_agent.sh")
     start_tunnel = read_text(AGENT_DIR / "start_tunnel.sh")
@@ -51,6 +52,9 @@ def main() -> int:
     assert_contains(one_click, 'socket.getaddrinfo("api.github.com", 443)', label="one_click_install.sh")
     assert_contains(one_click, "DNS cannot resolve api.github.com", label="one_click_install.sh")
     assert_contains(one_click, "chmod +x ./runtime/sing-box", label="one_click_install.sh")
+    assert_contains(fresh_install, 'find "$work_dir" -mindepth 1 -maxdepth 1 -type d', label="fresh_install_from_zip.sh")
+    assert_contains(fresh_install, "sudo rm -rf --one-file-system", label="fresh_install_from_zip.sh")
+    assert_contains(fresh_install, "sudo ./one_click_install.sh", label="fresh_install_from_zip.sh")
     assert_contains(installer, "from urllib.error import URLError", label="install_singbox_runtime.sh")
     assert_contains(installer, "cannot query GitHub release API", label="install_singbox_runtime.sh")
 
@@ -64,6 +68,7 @@ def main() -> int:
 
     assert_contains(builder, "Copy-TextFileLf", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "-replace \"`r`n\", \"`n\"", label="Build-LinuxAgentPackage.ps1")
+    assert_contains(builder, "$AgentId-install.sh", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "IncludeRuntime", label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, "runtime", label="Build-LinuxAgentPackage.ps1")
 
