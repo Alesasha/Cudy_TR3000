@@ -177,7 +177,9 @@ echo "== extract embedded package =="
 extract_payload "$tmp_dir/package.zip"
 
 echo "== stop previous service if present =="
-if command -v systemctl >/dev/null 2>&1; then
+if [ -x "$work_dir/uninstall_systemd.sh" ]; then
+  (cd "$work_dir" && sudo ./uninstall_systemd.sh cudy-managed-agent.service) || true
+elif command -v systemctl >/dev/null 2>&1; then
   sudo systemctl stop cudy-managed-agent.service 2>/dev/null || true
 fi
 

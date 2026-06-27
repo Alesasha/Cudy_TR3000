@@ -43,6 +43,23 @@ on_error() {
 trap on_error ERR
 trap fix_workdir_permissions EXIT
 
+stop_all_managed_transports() {
+  shopt -s nullglob
+  for pid_file in run/*.pid; do
+    name="$(basename "$pid_file" .pid)"
+    [ "$name" = "control-tunnel" ] && continue
+    ./stop_singbox_transport.sh "$name" || true
+  done
+  for config_file in transports/*.json; do
+    name="$(basename "$config_file" .json)"
+    ./stop_singbox_transport.sh "$name" || true
+  done
+  shopt -u nullglob
+}
+
+echo "== stop stale managed transports =="
+stop_all_managed_transports
+
 echo "== restore direct baseline before install =="
 ./restore_direct.sh || true
 

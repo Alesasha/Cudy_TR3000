@@ -16,6 +16,16 @@ if [ -f "$pid_file" ]; then
     kill -9 "$pid" 2>/dev/null || true
   fi
 fi
+
+if command -v pgrep >/dev/null 2>&1; then
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+  done < <(pgrep -f "sing-box run -c transports/${name}\\.json" 2>/dev/null || true)
+fi
+
 rm -f "$pid_file" "run/${name}.sha256"
 if ip link show "$name" >/dev/null 2>&1; then
   ip link delete "$name" 2>/dev/null || true

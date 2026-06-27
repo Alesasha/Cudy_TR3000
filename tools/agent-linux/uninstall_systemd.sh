@@ -25,5 +25,17 @@ if [ -f run/control-tunnel.pid ]; then
   rm -f run/control-tunnel.pid
 fi
 
+shopt -s nullglob
+for pid_file in run/*.pid; do
+  name="$(basename "$pid_file" .pid)"
+  [ "$name" = "control-tunnel" ] && continue
+  ./stop_singbox_transport.sh "$name" || true
+done
+for config_file in transports/*.json; do
+  name="$(basename "$config_file" .json)"
+  ./stop_singbox_transport.sh "$name" || true
+done
+shopt -u nullglob
+
 ./restore_direct.sh || true
 echo "uninstalled: $service_name"
