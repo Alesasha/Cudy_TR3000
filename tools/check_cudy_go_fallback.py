@@ -82,6 +82,8 @@ printf '\\nready='
 curl -fsS --max-time 5 http://127.0.0.1:8765/readyz
 printf '\\nruntime='
 curl -fsS --max-time 10 http://127.0.0.1:8765/api/cudy/runtime
+printf '\\nagent_preview='
+curl -fsS --max-time 15 http://127.0.0.1:8765/api/cudy/agent-preview
 printf '\\n'
 """.strip(),
             args.timeout,
@@ -95,6 +97,7 @@ printf '\\n'
     service = next((line.split("=", 1)[1] for line in lines if line.startswith("service=")), "")
     ready = parse_json_line(output, "ready=")
     runtime = parse_json_line(output, "runtime=")
+    agent_preview = parse_json_line(output, "agent_preview=")
 
     checks = [
         {"name": "service", "ok": service == "running", "summary": service or "missing"},
@@ -110,6 +113,15 @@ printf '\\n'
                 f"links={len(runtime.get('links') or [])}"
             ),
         },
+        {
+            "name": "agent-preview",
+            "ok": "configured" in agent_preview,
+            "summary": (
+                f"configured={bool(agent_preview.get('configured'))}; "
+                f"routes={len(agent_preview.get('routes') or [])}; "
+                f"transports={len(agent_preview.get('transport_plan') or [])}"
+            ),
+        },
     ]
     return {
         "ok": all(item["ok"] for item in checks),
@@ -122,6 +134,13 @@ printf '\\n'
             "supported_interfaces": len(runtime.get("supported_interfaces") or []),
             "links": len(runtime.get("links") or []),
             "warnings": runtime.get("warnings") or [],
+        },
+        "agent_preview": {
+            "configured": bool(agent_preview.get("configured")),
+            "routes": len(agent_preview.get("routes") or []),
+            "transports": len(agent_preview.get("transport_plan") or []),
+            "warnings": agent_preview.get("warnings") or [],
+            "error": agent_preview.get("error") or "",
         },
     }
 

@@ -90,16 +90,7 @@ func TestRuntimeStatus(t *testing.T) {
 		publicDir:   t.TempDir(),
 		maxStateAge: time.Hour,
 		now:         func() time.Time { return now },
-		run: fakeRunner(map[string]string{
-			"uname -m 2>/dev/null || true": "aarch64\n",
-			"grep '^DISTRIB_TARGET=' /etc/openwrt_release 2>/dev/null | cut -d= -f2- | tr -d \"'\\\"\" || true":                             "mediatek/filogic\n",
-			"uci -q get pbr.config.supported_interface 2>/dev/null || true":                                                                 "awg1 awg2 proxyde proxynl\n",
-			"sed -n \"s/^TARGET_INTERFACE='\\([^']*\\)'.*/\\1/p\" /usr/share/pbr/pbr.user.opencck-merged-vpn 2>/dev/null | tail -1 || true": "awg1\n",
-			"ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | sed 's/@.*//' || true":                                                 "lo\nbr-lan\nawg1\nproxyde\n",
-			"ip -4 -o addr show 2>/dev/null | awk '{print $2 \"\\t\" $4}' || true":                                                          "br-lan\t192.168.8.1/24\nawg1\t10.8.1.8/32\nproxyde\t172.26.0.1/30\n",
-			"cat /etc/crontabs/root 2>/dev/null || true":                                                                                    "# comment\n7 5 * * * /usr/bin/vpntype-proxy-refresh-all\n",
-			"ss -ltnp 2>/dev/null || true": "LISTEN 0 128 127.0.0.1:8765 0.0.0.0:* users:((\"cudy-fallback\"))\n",
-		}),
+		run:         fakeRuntimeRunner(),
 	}
 
 	status := srv.runtime(context.Background())
@@ -120,6 +111,86 @@ func TestRuntimeStatus(t *testing.T) {
 	}
 }
 
+func TestAgentPreviewNotConfigured(t *testing.T) {
+	srv := &server{agentConfigPath: filepath.Join(t.TempDir(), "missing.json"), now: time.Now}
+	status := srv.agentPreview(context.Background())
+	if status.Configured {
+		t.Fatalf("preview configured=true for missing config")
+	}
+	if status.OK || status.Error == "" {
+		t.Fatalf("unexpected preview for missing config: %#v", status)
+	}
+}
+
+func TestAgentPreviewFromControlServer(t *testing.T) {
+	now := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/agent/config" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("unexpected auth header: %s", got)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"user":   map[string]any{"id": "DC_via_Cudy"},
+			"device": map[string]any{"id": "DC_via_Cudy-linux"},
+			"transport_plan": []map[string]any{
+				{
+					"server_id":      "proxyde",
+					"interface_name": "proxyde",
+					"transport_type": "sing-box-json",
+					"config_json":    map[string]any{"secret": "must-not-leak"},
+				},
+				{
+					"server_id":      "proxynl",
+					"interface_name": "proxynl",
+					"transport_type": "sing-box-json",
+				},
+			},
+			"domain_routes": []map[string]any{
+				{"domain": "ifconfig.me", "source": "user", "requested_server_id": "auto", "server_id": "proxyde"},
+			},
+			"ip_routes": []map[string]any{
+				{"target_cidr": "149.154.160.0/20", "source": "global", "requested_server_id": "auto", "server_id": "proxynl"},
+			},
+		})
+	}))
+	defer control.Close()
+
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "agent.json")
+	writeTestJSON(t, settingsPath, map[string]any{
+		"control_url": control.URL,
+		"device_id":   "cudy-home",
+		"token":       "test-token",
+	})
+	srv := &server{
+		agentConfigPath: settingsPath,
+		now:             func() time.Time { return now },
+		run:             fakeRuntimeRunner(),
+	}
+	status := srv.agentPreview(context.Background())
+	if !status.OK {
+		t.Fatalf("preview ok=false: %#v", status)
+	}
+	if status.DeviceID != "cudy-home" || status.UserID != "DC_via_Cudy" {
+		t.Fatalf("identity mismatch: device=%s user=%s", status.DeviceID, status.UserID)
+	}
+	if len(status.TransportPlan) != 2 || !status.TransportPlan[0].Applicable {
+		t.Fatalf("unexpected transport preview: %#v", status.TransportPlan)
+	}
+	if len(status.Routes) != 2 || !status.Routes[0].Applicable || !status.Routes[1].Applicable {
+		t.Fatalf("unexpected route preview: %#v", status.Routes)
+	}
+	raw, err := json.Marshal(status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "must-not-leak") || strings.Contains(string(raw), "config_json") {
+		t.Fatalf("preview leaked raw transport config: %s", string(raw))
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, payload any) {
 	t.Helper()
 	raw, err := json.Marshal(payload)
@@ -129,6 +200,19 @@ func writeTestJSON(t *testing.T, path string, payload any) {
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func fakeRuntimeRunner() commandRunner {
+	return fakeRunner(map[string]string{
+		"uname -m 2>/dev/null || true": "aarch64\n",
+		"grep '^DISTRIB_TARGET=' /etc/openwrt_release 2>/dev/null | cut -d= -f2- | tr -d \"'\\\"\" || true":                             "mediatek/filogic\n",
+		"uci -q get pbr.config.supported_interface 2>/dev/null || true":                                                                 "awg1 awg2 proxyde proxynl\n",
+		"sed -n \"s/^TARGET_INTERFACE='\\([^']*\\)'.*/\\1/p\" /usr/share/pbr/pbr.user.opencck-merged-vpn 2>/dev/null | tail -1 || true": "awg1\n",
+		"ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | sed 's/@.*//' || true":                                                 "lo\nbr-lan\nawg1\nproxyde\nproxynl\n",
+		"ip -4 -o addr show 2>/dev/null | awk '{print $2 \"\\t\" $4}' || true":                                                          "br-lan\t192.168.8.1/24\nawg1\t10.8.1.8/32\nproxyde\t172.26.0.1/30\nproxynl\t172.26.1.1/30\n",
+		"cat /etc/crontabs/root 2>/dev/null || true":                                                                                    "# comment\n7 5 * * * /usr/bin/vpntype-proxy-refresh-all\n",
+		"ss -ltnp 2>/dev/null || true": "LISTEN 0 128 127.0.0.1:8765 0.0.0.0:* users:((\"cudy-fallback\"))\n",
+	})
 }
 
 func fakeRunner(outputs map[string]string) commandRunner {

@@ -42,7 +42,8 @@ Linux, and Cudy fallback routing.
 - `tools/sync_control_state_to_cudy.py` plus `Run/Install-CudyFallbackSync*.ps1`
   - keep an encrypted-at-rest-by-location control-state copy on Cudy fallback.
 - `cmd/cudy-fallback/` - first compact Go fallback runtime for Cudy/OpenWrt;
-  serves health/readiness and the synced endpoint/state artifacts.
+  serves health/readiness, synced endpoint/state artifacts, runtime status, and
+  a read-only LAN-agent policy preview.
 - `tools/Build-CudyFallbackGo.ps1` - cross-compile the Cudy fallback Go binary.
 - `tools/deploy_cudy_go_fallback.py` - deploy the compiled Go fallback binary
   to Cudy/OpenWrt through SSH.

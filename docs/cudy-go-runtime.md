@@ -23,6 +23,7 @@ GET /healthz
 GET /readyz
 GET /api/control/endpoints
 GET /api/cudy/runtime
+GET /api/cudy/agent-preview
 GET /cudy-control/endpoints.json
 GET /cudy-control/state.json
 ```
@@ -106,6 +107,35 @@ OpenWrt without applying routes or restarting services:
 - root cron entries;
 - TCP listeners.
 
+`/api/cudy/agent-preview` is also read-only. When
+`/etc/cudy-fallback/agent.json` exists, it fetches `/api/agent/config` from the
+configured control-server and returns only a sanitized Cudy applicability
+preview:
+
+- `transport_plan` entries as `server_id`, `interface`, `transport_type`, and
+  whether the interface is present and PBR-supported on Cudy;
+- `domain_routes` and `ip_routes` as targets plus the interface Cudy would use;
+- warnings for missing targets, missing interface mappings, absent interfaces,
+  or interfaces not listed in `pbr.config.supported_interface`.
+
+The endpoint deliberately does not return raw transport configs, provider
+credentials, tokens, or route-apply commands. It does not modify routes, PBR,
+or sing-box services.
+
+Minimal agent settings file:
+
+```json
+{
+  "control_url": "http://127.0.0.1:18765",
+  "agent_config_path": "/api/agent/config",
+  "device_id": "cudy-home",
+  "token_file": "/etc/cudy-fallback/agent.token"
+}
+```
+
+Keep both files readable only by root. Until the later SSH-control-tunnel step,
+`control_url` must already be reachable from Cudy.
+
 Public/static access can still be provided by uhttpd serving `/www/cudy-control`
 or by a controlled reverse proxy rule later. Do not expose a broader fallback
 API on WAN until authentication and state-restore behavior are explicitly
@@ -129,8 +159,8 @@ check window.
 
 After the fallback service is deployed and stable:
 
-1. Add a local agent loop that pulls `/api/agent/config` from primary control
-   and applies only LAN-wide Cudy routes.
+1. Add a local control tunnel and then a LAN-agent apply mode gated behind an
+   explicit flag. The first deployed step is only `/api/cudy/agent-preview`.
 2. Move provider refresh orchestration behind a Go command wrapper, while
    leaving existing OpenWrt shell scripts as the execution backend.
 3. Only after that, consider a minimal offline `/api/agent/config` fallback from

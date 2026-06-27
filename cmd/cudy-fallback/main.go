@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -16,10 +17,13 @@ import (
 )
 
 type server struct {
-	publicDir   string
-	maxStateAge time.Duration
-	now         func() time.Time
-	run         commandRunner
+	publicDir        string
+	agentConfigPath  string
+	maxStateAge      time.Duration
+	now              func() time.Time
+	run              commandRunner
+	httpClient       *http.Client
+	fetchAgentConfig func(context.Context, agentSettings) (map[string]any, error)
 }
 
 type commandRunner func(ctx context.Context, name string, args ...string) (string, error)
@@ -56,6 +60,50 @@ type runtimeResponse struct {
 	Warnings            []string            `json:"warnings"`
 }
 
+type agentSettings struct {
+	ControlURL      string `json:"control_url"`
+	AgentConfigPath string `json:"agent_config_path,omitempty"`
+	DeviceID        string `json:"device_id,omitempty"`
+	Token           string `json:"token,omitempty"`
+	TokenFile       string `json:"token_file,omitempty"`
+}
+
+type agentPreviewResponse struct {
+	OK            bool               `json:"ok"`
+	Configured    bool               `json:"configured"`
+	GeneratedAt   string             `json:"generated_at"`
+	ControlURL    string             `json:"control_url,omitempty"`
+	DeviceID      string             `json:"device_id,omitempty"`
+	UserID        string             `json:"user_id,omitempty"`
+	TransportPlan []transportPreview `json:"transport_plan,omitempty"`
+	Routes        []routePreview     `json:"routes,omitempty"`
+	Warnings      []string           `json:"warnings,omitempty"`
+	Error         string             `json:"error,omitempty"`
+}
+
+type transportPreview struct {
+	ServerID           string `json:"server_id"`
+	Interface          string `json:"interface"`
+	TransportType      string `json:"transport_type,omitempty"`
+	InterfacePresent   bool   `json:"interface_present"`
+	InterfaceSupported bool   `json:"interface_supported"`
+	Applicable         bool   `json:"applicable"`
+}
+
+type routePreview struct {
+	Kind               string `json:"kind"`
+	Target             string `json:"target"`
+	Source             string `json:"source,omitempty"`
+	RequestedServerID  string `json:"requested_server_id,omitempty"`
+	ServerID           string `json:"server_id"`
+	ResolvedServerID   string `json:"resolved_server_id,omitempty"`
+	Interface          string `json:"interface,omitempty"`
+	InterfacePresent   bool   `json:"interface_present"`
+	InterfaceSupported bool   `json:"interface_supported"`
+	Applicable         bool   `json:"applicable"`
+	Warning            string `json:"warning,omitempty"`
+}
+
 var cudyServices = []string{
 	"cudy-fallback",
 	"pbr",
@@ -84,14 +132,17 @@ var cudyServices = []string{
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8765", "HTTP listen address")
 	publicDir := flag.String("public-dir", "/www/cudy-control", "directory containing endpoints.json and state.json")
+	agentConfigPath := flag.String("agent-config", "/etc/cudy-fallback/agent.json", "optional agent settings for read-only policy preview")
 	maxStateAge := flag.Duration("max-state-age", 3*time.Hour, "maximum accepted age for state.json")
 	flag.Parse()
 
 	srv := &server{
-		publicDir:   *publicDir,
-		maxStateAge: *maxStateAge,
-		now:         func() time.Time { return time.Now().UTC() },
-		run:         runCommand,
+		publicDir:       *publicDir,
+		agentConfigPath: *agentConfigPath,
+		maxStateAge:     *maxStateAge,
+		now:             func() time.Time { return time.Now().UTC() },
+		run:             runCommand,
+		httpClient:      &http.Client{Timeout: 12 * time.Second},
 	}
 
 	mux := http.NewServeMux()
@@ -99,6 +150,7 @@ func main() {
 	mux.HandleFunc("/readyz", srv.handleReady)
 	mux.HandleFunc("/api/control/endpoints", srv.handleEndpoints)
 	mux.HandleFunc("/api/cudy/runtime", srv.handleRuntime)
+	mux.HandleFunc("/api/cudy/agent-preview", srv.handleAgentPreview)
 	mux.HandleFunc("/cudy-control/endpoints.json", srv.handleEndpoints)
 	mux.HandleFunc("/cudy-control/state.json", srv.handleState)
 
@@ -143,6 +195,12 @@ func (s *server) handleRuntime(w http.ResponseWriter, _ *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.runtime(ctx))
+}
+
+func (s *server) handleAgentPreview(w http.ResponseWriter, _ *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.agentPreview(ctx))
 }
 
 func (s *server) ready() readyResponse {
@@ -244,6 +302,257 @@ func (s *server) serviceStatus(ctx context.Context, run commandRunner, warnings 
 
 func (s *server) path(name string) string {
 	return filepath.Join(s.publicDir, name)
+}
+
+func (s *server) agentPreview(ctx context.Context) agentPreviewResponse {
+	now := s.now().UTC()
+	settings, err := readAgentSettings(s.agentConfigPath)
+	if err != nil {
+		return agentPreviewResponse{
+			OK:          false,
+			Configured:  false,
+			GeneratedAt: now.Format(time.RFC3339),
+			Error:       err.Error(),
+		}
+	}
+
+	fetch := s.fetchAgentConfig
+	if fetch == nil {
+		fetch = s.fetchAgentConfigHTTP
+	}
+	config, err := fetch(ctx, settings)
+	if err != nil {
+		return agentPreviewResponse{
+			OK:          false,
+			Configured:  true,
+			GeneratedAt: now.Format(time.RFC3339),
+			ControlURL:  settings.ControlURL,
+			DeviceID:    settings.DeviceID,
+			Error:       err.Error(),
+		}
+	}
+
+	runtime := s.runtime(ctx)
+	supported := stringSet(runtime.SupportedInterfaces)
+	present := stringSet(runtime.Links)
+	transports := previewTransports(config, supported, present)
+	routes := previewRoutes(config, transports, supported, present)
+	warnings := append([]string{}, runtime.Warnings...)
+	for _, route := range routes {
+		if route.Warning != "" {
+			warnings = append(warnings, fmt.Sprintf("%s %s: %s", route.Kind, route.Target, route.Warning))
+		}
+	}
+
+	return agentPreviewResponse{
+		OK:            len(warnings) == 0,
+		Configured:    true,
+		GeneratedAt:   now.Format(time.RFC3339),
+		ControlURL:    settings.ControlURL,
+		DeviceID:      firstNonEmpty(settings.DeviceID, stringFromMap(config, "device.id"), stringFromMap(config, "device_id")),
+		UserID:        stringFromMap(config, "user.id"),
+		TransportPlan: transports,
+		Routes:        routes,
+		Warnings:      warnings,
+	}
+}
+
+func readAgentSettings(path string) (agentSettings, error) {
+	if path == "" {
+		return agentSettings{}, errors.New("agent config path is empty")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return agentSettings{}, err
+	}
+	var settings agentSettings
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		return agentSettings{}, err
+	}
+	settings.ControlURL = strings.TrimSpace(settings.ControlURL)
+	settings.AgentConfigPath = strings.TrimSpace(settings.AgentConfigPath)
+	settings.DeviceID = strings.TrimSpace(settings.DeviceID)
+	settings.Token = strings.TrimSpace(settings.Token)
+	settings.TokenFile = strings.TrimSpace(settings.TokenFile)
+	if settings.ControlURL == "" {
+		return agentSettings{}, errors.New("control_url is missing in agent config")
+	}
+	if settings.AgentConfigPath == "" {
+		settings.AgentConfigPath = "/api/agent/config"
+	}
+	if settings.Token == "" && settings.TokenFile != "" {
+		tokenPath := settings.TokenFile
+		if !filepath.IsAbs(tokenPath) {
+			tokenPath = filepath.Join(filepath.Dir(path), tokenPath)
+		}
+		tokenRaw, err := os.ReadFile(tokenPath)
+		if err != nil {
+			return agentSettings{}, fmt.Errorf("read token_file: %w", err)
+		}
+		settings.Token = strings.TrimSpace(string(tokenRaw))
+	}
+	if settings.Token == "" {
+		return agentSettings{}, errors.New("token or token_file is missing in agent config")
+	}
+	return settings, nil
+}
+
+func (s *server) fetchAgentConfigHTTP(ctx context.Context, settings agentSettings) (map[string]any, error) {
+	client := s.httpClient
+	if client == nil {
+		client = &http.Client{Timeout: 12 * time.Second}
+	}
+	endpoint := strings.TrimRight(settings.ControlURL, "/") + "/" + strings.TrimLeft(settings.AgentConfigPath, "/")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "cudy-go-fallback/0.1")
+	req.Header.Set("Authorization", "Bearer "+settings.Token)
+	res, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("agent config fetch failed: status=%d body=%s", res.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, err
+	}
+	if payload == nil {
+		return nil, errors.New("agent config response is empty")
+	}
+	return payload, nil
+}
+
+func previewTransports(config map[string]any, supported map[string]bool, present map[string]bool) []transportPreview {
+	rows := []transportPreview{}
+	for _, item := range asMapSlice(config["transport_plan"]) {
+		serverID := stringValue(item["server_id"])
+		iface := stringValue(item["interface_name"])
+		if iface == "" {
+			iface = serverID
+		}
+		if serverID == "" && iface == "" {
+			continue
+		}
+		presentOK := iface != "" && present[iface]
+		supportedOK := iface != "" && supported[iface]
+		rows = append(rows, transportPreview{
+			ServerID:           serverID,
+			Interface:          iface,
+			TransportType:      stringValue(item["transport_type"]),
+			InterfacePresent:   presentOK,
+			InterfaceSupported: supportedOK,
+			Applicable:         iface != "" && presentOK && supportedOK,
+		})
+	}
+	return rows
+}
+
+func previewRoutes(config map[string]any, transports []transportPreview, supported map[string]bool, present map[string]bool) []routePreview {
+	transportByServer := map[string]transportPreview{}
+	for _, item := range transports {
+		if item.ServerID != "" {
+			transportByServer[item.ServerID] = item
+		}
+	}
+
+	rows := []routePreview{}
+	for _, item := range asMapSlice(config["domain_routes"]) {
+		rows = append(rows, buildRoutePreview("domain", stringValue(item["domain"]), item, transportByServer, supported, present))
+	}
+	for _, item := range asMapSlice(config["ip_routes"]) {
+		rows = append(rows, buildRoutePreview("ip", stringValue(item["target_cidr"]), item, transportByServer, supported, present))
+	}
+	for _, item := range asMapSlice(config["cleanup_ip_routes"]) {
+		row := buildRoutePreview("cleanup_ip", stringValue(item["target_cidr"]), item, transportByServer, supported, present)
+		row.Applicable = row.Target != ""
+		row.Warning = ""
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func buildRoutePreview(kind string, target string, item map[string]any, transportByServer map[string]transportPreview, supported map[string]bool, present map[string]bool) routePreview {
+	serverID := stringValue(item["server_id"])
+	requestedServerID := stringValue(item["requested_server_id"])
+	resolvedServerID := stringValue(item["resolved_server_id"])
+	source := stringValue(item["source"])
+	if serverID == "" && kind == "cleanup_ip" {
+		serverID = "cleanup"
+	}
+
+	if serverID == "direct" || serverID == "" {
+		return routePreview{
+			Kind:              kind,
+			Target:            target,
+			Source:            source,
+			RequestedServerID: requestedServerID,
+			ServerID:          firstNonEmpty(serverID, "direct"),
+			ResolvedServerID:  resolvedServerID,
+			Applicable:        target != "",
+		}
+	}
+
+	if transport, ok := transportByServer[serverID]; ok {
+		return routePreview{
+			Kind:               kind,
+			Target:             target,
+			Source:             source,
+			RequestedServerID:  requestedServerID,
+			ServerID:           serverID,
+			ResolvedServerID:   resolvedServerID,
+			Interface:          transport.Interface,
+			InterfacePresent:   transport.InterfacePresent,
+			InterfaceSupported: transport.InterfaceSupported,
+			Applicable:         target != "" && transport.Applicable,
+			Warning:            routeWarning(target, transport.Interface, transport.InterfacePresent, transport.InterfaceSupported),
+		}
+	}
+
+	iface := stringFromMap(item, "server.interface")
+	if iface == "" && (supported[serverID] || present[serverID]) {
+		iface = serverID
+	}
+	presentOK := iface != "" && present[iface]
+	supportedOK := iface != "" && supported[iface]
+	return routePreview{
+		Kind:               kind,
+		Target:             target,
+		Source:             source,
+		RequestedServerID:  requestedServerID,
+		ServerID:           serverID,
+		ResolvedServerID:   resolvedServerID,
+		Interface:          iface,
+		InterfacePresent:   presentOK,
+		InterfaceSupported: supportedOK,
+		Applicable:         target != "" && iface != "" && presentOK && supportedOK,
+		Warning:            routeWarning(target, iface, presentOK, supportedOK),
+	}
+}
+
+func routeWarning(target string, iface string, present bool, supported bool) string {
+	if target == "" {
+		return "target is empty"
+	}
+	if iface == "" {
+		return "server has no interface mapping"
+	}
+	if !present {
+		return "interface is not present on Cudy"
+	}
+	if !supported {
+		return "interface is not in pbr supported_interface"
+	}
+	return ""
 }
 
 func validateEndpoints(payload map[string]any, err error, now time.Time) (bool, string) {
@@ -362,6 +671,65 @@ func parseActiveLines(raw string) []string {
 		lines = append(lines, line)
 	}
 	return lines
+}
+
+func stringSet(values []string) map[string]bool {
+	result := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			result[value] = true
+		}
+	}
+	return result
+}
+
+func asMapSlice(value any) []map[string]any {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := []map[string]any{}
+	for _, item := range items {
+		row, ok := item.(map[string]any)
+		if ok {
+			result = append(result, row)
+		}
+	}
+	return result
+}
+
+func stringValue(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return ""
+	}
+}
+
+func stringFromMap(payload map[string]any, path string) string {
+	var current any = payload
+	for _, part := range strings.Split(path, ".") {
+		row, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current = row[part]
+	}
+	return stringValue(current)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, code int, payload any) {
