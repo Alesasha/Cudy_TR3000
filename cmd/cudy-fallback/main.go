@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -8,7 +9,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -16,7 +19,10 @@ type server struct {
 	publicDir   string
 	maxStateAge time.Duration
 	now         func() time.Time
+	run         commandRunner
 }
+
+type commandRunner func(ctx context.Context, name string, args ...string) (string, error)
 
 type check struct {
 	Name    string `json:"name"`
@@ -35,6 +41,46 @@ type healthResponse struct {
 	OK bool `json:"ok"`
 }
 
+type runtimeResponse struct {
+	OK                  bool                `json:"ok"`
+	GeneratedAt         string              `json:"generated_at"`
+	Architecture        string              `json:"architecture,omitempty"`
+	OpenWrtTarget       string              `json:"openwrt_target,omitempty"`
+	SupportedInterfaces []string            `json:"supported_interfaces"`
+	TargetInterface     string              `json:"target_interface,omitempty"`
+	Links               []string            `json:"links"`
+	IPv4                map[string][]string `json:"ipv4"`
+	Services            map[string]string   `json:"services"`
+	CronEntries         []string            `json:"cron_entries"`
+	Listeners           []string            `json:"listeners"`
+	Warnings            []string            `json:"warnings"`
+}
+
+var cudyServices = []string{
+	"cudy-fallback",
+	"pbr",
+	"sing-box",
+	"sing-box-vpntype",
+	"sing-box-lokvpn",
+	"sing-box-proxygb",
+	"sing-box-proxyca",
+	"sing-box-proxyfr",
+	"sing-box-proxyby",
+	"sing-box-proxyae",
+	"sing-box-proxyhk",
+	"sing-box-proxykz",
+	"sing-box-proxytr",
+	"sing-box-proxyil",
+	"sing-box-proxycz",
+	"sing-box-proxypl",
+	"sing-box-proxyfi",
+	"sing-box-proxynl",
+	"sing-box-proxyal",
+	"sing-box-proxyru",
+	"sing-box-proxyus",
+	"sing-box-proxyde",
+}
+
 func main() {
 	listen := flag.String("listen", "127.0.0.1:8765", "HTTP listen address")
 	publicDir := flag.String("public-dir", "/www/cudy-control", "directory containing endpoints.json and state.json")
@@ -45,12 +91,14 @@ func main() {
 		publicDir:   *publicDir,
 		maxStateAge: *maxStateAge,
 		now:         func() time.Time { return time.Now().UTC() },
+		run:         runCommand,
 	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", srv.handleHealth)
 	mux.HandleFunc("/readyz", srv.handleReady)
 	mux.HandleFunc("/api/control/endpoints", srv.handleEndpoints)
+	mux.HandleFunc("/api/cudy/runtime", srv.handleRuntime)
 	mux.HandleFunc("/cudy-control/endpoints.json", srv.handleEndpoints)
 	mux.HandleFunc("/cudy-control/state.json", srv.handleState)
 
@@ -91,6 +139,12 @@ func (s *server) handleState(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (s *server) handleRuntime(w http.ResponseWriter, _ *http.Request) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, s.runtime(ctx))
+}
+
 func (s *server) ready() readyResponse {
 	now := s.now().UTC()
 	checks := []check{}
@@ -124,6 +178,68 @@ func (s *server) ready() readyResponse {
 		Checks:      checks,
 		Warnings:    warnings,
 	}
+}
+
+func (s *server) runtime(ctx context.Context) runtimeResponse {
+	now := s.now().UTC()
+	warnings := []string{}
+	run := s.run
+	if run == nil {
+		run = runCommand
+	}
+
+	runShell := func(label string, script string) string {
+		out, err := run(ctx, "/bin/sh", "-c", script)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("%s: %v", label, err))
+			return ""
+		}
+		return strings.TrimSpace(out)
+	}
+
+	architecture := runShell("architecture", "uname -m 2>/dev/null || true")
+	openwrtTarget := parseOpenWrtTarget(runShell("openwrt_target", "grep '^DISTRIB_TARGET=' /etc/openwrt_release 2>/dev/null | cut -d= -f2- | tr -d \"'\\\"\" || true"))
+	supported := strings.Fields(runShell("supported_interfaces", "uci -q get pbr.config.supported_interface 2>/dev/null || true"))
+	targetInterface := runShell("target_interface", "sed -n \"s/^TARGET_INTERFACE='\\([^']*\\)'.*/\\1/p\" /usr/share/pbr/pbr.user.opencck-merged-vpn 2>/dev/null | tail -1 || true")
+	links := parseLinks(runShell("links", "ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | sed 's/@.*//' || true"))
+	ipv4 := parseIPv4(runShell("ipv4", "ip -4 -o addr show 2>/dev/null | awk '{print $2 \"\\t\" $4}' || true"))
+	cronEntries := parseActiveLines(runShell("cron", "cat /etc/crontabs/root 2>/dev/null || true"))
+	listeners := parseActiveLines(runShell("listeners", "ss -ltnp 2>/dev/null || true"))
+	services := s.serviceStatus(ctx, run, &warnings)
+
+	return runtimeResponse{
+		OK:                  len(warnings) == 0,
+		GeneratedAt:         now.Format(time.RFC3339),
+		Architecture:        architecture,
+		OpenWrtTarget:       openwrtTarget,
+		SupportedInterfaces: supported,
+		TargetInterface:     targetInterface,
+		Links:               links,
+		IPv4:                ipv4,
+		Services:            services,
+		CronEntries:         cronEntries,
+		Listeners:           listeners,
+		Warnings:            warnings,
+	}
+}
+
+func (s *server) serviceStatus(ctx context.Context, run commandRunner, warnings *[]string) map[string]string {
+	services := make(map[string]string, len(cudyServices))
+	for _, name := range cudyServices {
+		script := fmt.Sprintf("if [ -x /etc/init.d/%[1]s ]; then /etc/init.d/%[1]s status 2>/dev/null | head -1 || true; else echo missing; fi", name)
+		out, err := run(ctx, "/bin/sh", "-c", script)
+		if err != nil {
+			*warnings = append(*warnings, fmt.Sprintf("service %s: %v", name, err))
+			services[name] = "error"
+			continue
+		}
+		status := strings.TrimSpace(out)
+		if status == "" {
+			status = "unknown"
+		}
+		services[name] = status
+	}
+	return services
 }
 
 func (s *server) path(name string) string {
@@ -202,6 +318,50 @@ func readJSONFile(path string) (map[string]any, error) {
 		return nil, errors.New("JSON object is empty")
 	}
 	return payload, nil
+}
+
+func runCommand(ctx context.Context, name string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	raw, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		return string(raw), ctx.Err()
+	}
+	if err != nil {
+		return string(raw), err
+	}
+	return string(raw), nil
+}
+
+func parseOpenWrtTarget(value string) string {
+	return strings.Trim(strings.TrimSpace(value), "'\"")
+}
+
+func parseLinks(raw string) []string {
+	return parseActiveLines(raw)
+}
+
+func parseIPv4(raw string) map[string][]string {
+	result := map[string][]string{}
+	for _, line := range strings.Split(raw, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		result[fields[0]] = append(result[fields[0]], fields[1])
+	}
+	return result
+}
+
+func parseActiveLines(raw string) []string {
+	lines := []string{}
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	return lines
 }
 
 func writeJSON(w http.ResponseWriter, code int, payload any) {

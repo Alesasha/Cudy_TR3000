@@ -66,6 +66,7 @@ CHECKS = [
         online=True,
         timeout=60,
     ),
+    Check("Cudy Go fallback service checks", ["tools/check_cudy_go_fallback.py", "--strict"], online=True, timeout=45),
     Check("Cudy runtime snapshot refreshes", ["tools/vpn_inventory.py", "refresh-cudy"], online=True, timeout=120),
     Check("Cudy provider refresh schedule checks", ["tools/vpn_inventory.py", "check-provider-schedule"], online=True),
     Check("Cudy user-route status reads", ["tools/vpn_control_app.py", "status-user-routes"], online=True, timeout=60),

@@ -22,6 +22,7 @@ It serves:
 GET /healthz
 GET /readyz
 GET /api/control/endpoints
+GET /api/cudy/runtime
 GET /cudy-control/endpoints.json
 GET /cudy-control/state.json
 ```
@@ -84,6 +85,16 @@ service=cudy-fallback running
 /readyz ok=true
 ```
 
+`/api/cudy/runtime` is read-only. It collects a compact live snapshot from
+OpenWrt without applying routes or restarting services:
+
+- architecture and OpenWrt target;
+- PBR supported interfaces and current target interface;
+- network links and IPv4 addresses;
+- status of `cudy-fallback`, PBR, and sing-box provider services;
+- root cron entries;
+- TCP listeners.
+
 Public/static access can still be provided by uhttpd serving `/www/cudy-control`
 or by a controlled reverse proxy rule later. Do not expose a broader fallback
 API on WAN until authentication and state-restore behavior are explicitly
@@ -107,13 +118,11 @@ check window.
 
 After the fallback service is deployed and stable:
 
-1. Add a read-only endpoint that reports installed Cudy runtime facts:
-   interfaces, enabled OpenWrt services, fallback archive age.
-2. Add a local agent loop that pulls `/api/agent/config` from primary control
+1. Add a local agent loop that pulls `/api/agent/config` from primary control
    and applies only LAN-wide Cudy routes.
-3. Move provider refresh orchestration behind a Go command wrapper, while
+2. Move provider refresh orchestration behind a Go command wrapper, while
    leaving existing OpenWrt shell scripts as the execution backend.
-4. Only after that, consider a minimal offline `/api/agent/config` fallback from
+3. Only after that, consider a minimal offline `/api/agent/config` fallback from
    the synced control-state archive.
 
 Do not move Cudy to main-router duty until both the current Python/OpenWrt path

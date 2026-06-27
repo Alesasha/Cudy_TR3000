@@ -44,6 +44,8 @@ Linux, and Cudy fallback routing.
 - `cmd/cudy-fallback/` - first compact Go fallback runtime for Cudy/OpenWrt;
   serves health/readiness and the synced endpoint/state artifacts.
 - `tools/Build-CudyFallbackGo.ps1` - cross-compile the Cudy fallback Go binary.
+- `tools/check_cudy_go_fallback.py` - SSH smoke check for the Cudy Go fallback
+  service and read-only runtime endpoint.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.
