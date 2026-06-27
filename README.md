@@ -41,6 +41,9 @@ Linux, and Cudy fallback routing.
   local Windows scheduled backup wrapper for the production control-server.
 - `tools/sync_control_state_to_cudy.py` plus `Run/Install-CudyFallbackSync*.ps1`
   - keep an encrypted-at-rest-by-location control-state copy on Cudy fallback.
+- `cmd/cudy-fallback/` - first compact Go fallback runtime for Cudy/OpenWrt;
+  serves health/readiness and the synced endpoint/state artifacts.
+- `tools/Build-CudyFallbackGo.ps1` - cross-compile the Cudy fallback Go binary.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.
@@ -127,6 +130,7 @@ Start here:
 - [Android libbox runtime](docs/android-libbox-runtime.md)
 - [Dima Linux agent quickstart](docs/dima-linux-agent-quickstart.md)
 - [Windows managed transport POC](docs/windows-managed-transport-poc.md)
+- [Cudy Go runtime](docs/cudy-go-runtime.md)
 - [Security](docs/security.md)
 
 Historical working notes are kept in `MAIN.md` and `BRANCH-*.md`. They are useful

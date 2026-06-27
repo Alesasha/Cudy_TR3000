@@ -39,6 +39,10 @@ This is the current implementation order for the managed VPN control project.
   host for the next control connection.
 - Later, replace the static manifest with a compact Go fallback service on Cudy
   that can serve minimal policy, not only endpoint discovery.
+- The first Go fallback service now lives in `cmd/cudy-fallback`. It keeps the
+  current static artifact contract and serves `/healthz`, `/readyz`,
+  `/api/control/endpoints`, `/cudy-control/endpoints.json`, and
+  `/cudy-control/state.json`.
 
 ## 4. Auto Mode
 
@@ -149,6 +153,9 @@ This is the current implementation order for the managed VPN control project.
   - emergency fallback control path.
 - Gradually remove heavy business logic from Cudy.
 - Keep traffic-drop/load investigations separate from the main control plane.
+- First Go milestone: deploy `cudy-fallback` as a loopback-only OpenWrt service
+  beside the existing static fallback files, then compare its readiness output
+  with `python tools\check_cudy_fallback_status.py --strict`.
 
 ## 11. Final Verification
 

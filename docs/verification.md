@@ -41,6 +41,7 @@ The smoke check does not apply route changes and does not refresh providers with
 | Auto default for unknown domains | Unknown domains still follow `Direct`, but `route-lookup` records direct domain hits into a review queue. Admin can explicitly promote a reviewed domain into `domain -> auto` and optionally queue an immediate Auto probe job. | `python tools\test_domain_discovery.py`, `python tools\vpn_control_app.py domain-discovery-list`, and `python tools\vpn_control_app.py domain-discovery-promote example.com --candidates "proxyde, all-rest" --probe-now` | Decide later whether any domains may be promoted automatically without admin review. |
 | Route lookup aliases | Implemented in user/admin UI and CLI. Aliases expand to domains, IPs, or CIDRs and `Direct` is reported when no rule matches. | `python tools\test_service_alias_cli.py`, `python tools\vpn_control_app.py service-alias-list`, and `python tools\vpn_control_app.py route-lookup telegram --user-id isasha_X7Pro_Cudy` | Add production aliases as needed. |
 | Control backup/fallback artifacts | Implemented. Fallback sync stores secret control-state under Cudy `/root` and public freshness/endpoint metadata under `/www/cudy-control`. | `python tools\test_control_backup_artifacts.py`, `python tools\check_cudy_fallback_status.py --strict`, and `python tools\vpn_smoke_check.py --online` | Periodically test a full clone to a disposable VPS. |
+| Cudy Go fallback runtime | Initial implementation exists as `cmd/cudy-fallback`. It serves the same public endpoint/state artifacts and readiness checks that agents already use for fallback discovery. | `C:\Users\Alexander\sdk\go1.26.4\Go\bin\go.exe test ./cmd/cudy-fallback` and `powershell -ExecutionPolicy Bypass -File tools\Build-CudyFallbackGo.ps1` | Deploy beside the existing static fallback path on Cudy and compare `/readyz` with `check_cudy_fallback_status.py --strict`. |
 | Domain/IP lists needing tunnel | Static override files exist in `openwrt/pbr-overrides`. | Inspect `openwrt\pbr-overrides\*` and Cudy `/etc/pbr-overrides`. | Implement automatic discovery/update and a review workflow. |
 
 ## Auto Selection Target Behavior
@@ -108,3 +109,5 @@ The Go rewrite should start only when these are true:
 - provider refresh preview works for LokVPN and VPNtype;
 - Auto priority policies and Auto cache have a tested end-to-end example;
 - the expected behavior for unknown domains is explicitly chosen.
+- the initial `cmd/cudy-fallback` binary is deployed as a Cudy service and its
+  `/readyz` agrees with the existing static fallback status check.
