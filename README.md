@@ -49,6 +49,8 @@ Linux, and Cudy fallback routing.
   to Cudy/OpenWrt through SSH.
 - `tools/check_cudy_go_fallback.py` - SSH smoke check for the Cudy Go fallback
   service and read-only runtime endpoint.
+- `tools/install_cudy_agent_settings.py` - install root-only Cudy agent
+  settings for the Go read-only policy preview.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.

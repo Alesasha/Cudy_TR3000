@@ -136,6 +136,19 @@ Minimal agent settings file:
 Keep both files readable only by root. Until the later SSH-control-tunnel step,
 `control_url` must already be reachable from Cudy.
 
+Install these settings with the helper, after creating a dedicated Cudy device
+token on the control-server:
+
+```powershell
+$env:CUDY_AGENT_TOKEN = "<dedicated-cudy-device-token>"
+python tools\install_cudy_agent_settings.py --dry-run
+python tools\install_cudy_agent_settings.py
+Remove-Item Env:CUDY_AGENT_TOKEN
+```
+
+The helper never prints the token and stores it separately from `agent.json` as
+`/etc/cudy-fallback/agent.token`.
+
 Public/static access can still be provided by uhttpd serving `/www/cudy-control`
 or by a controlled reverse proxy rule later. Do not expose a broader fallback
 API on WAN until authentication and state-restore behavior are explicitly
