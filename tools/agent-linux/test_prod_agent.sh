@@ -14,14 +14,17 @@ EXPECTED_SERVER="${EXPECTED_SERVER:-proxyde}"
 EXPECTED_INTERFACE="${EXPECTED_INTERFACE:-proxyde}"
 PROBE_URL="${PROBE_URL:-https://ifconfig.me/ip}"
 export VPN_CONTROL_URL="http://127.0.0.1:${CONTROL_LOCAL_PORT}"
+mkdir -p run logs transports
 
 echo "== control tunnel =="
 curl -fsS --connect-timeout 5 --max-time 10 "${VPN_CONTROL_URL}/healthz"
 echo
 
 echo "== control config =="
-python3 ./route_agent.py config --json > run/test-config.json
-python3 - "$DOMAIN" "$EXPECTED_CIDR" "$EXPECTED_SERVER" "$EXPECTED_INTERFACE" run/test-config.json <<'PY'
+test_config="$(mktemp "${TMPDIR:-/tmp}/cudy-agent-config.XXXXXX.json")"
+trap 'rm -f "$test_config"' EXIT
+python3 ./route_agent.py config --json > "$test_config"
+python3 - "$DOMAIN" "$EXPECTED_CIDR" "$EXPECTED_SERVER" "$EXPECTED_INTERFACE" "$test_config" <<'PY'
 import json
 import sys
 

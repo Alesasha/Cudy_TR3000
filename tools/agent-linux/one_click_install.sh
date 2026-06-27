@@ -18,6 +18,16 @@ if [ -f ./runtime/sing-box ]; then
   chmod +x ./runtime/sing-box || true
 fi
 
+fix_workdir_permissions() {
+  if [ "$(id -u)" -eq 0 ] && [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != "root" ]; then
+    if [ -n "${SUDO_UID:-}" ] && [ -n "${SUDO_GID:-}" ]; then
+      chown -R "$SUDO_UID:$SUDO_GID" run logs transports 2>/dev/null || true
+    else
+      chown -R "$SUDO_USER" run logs transports 2>/dev/null || true
+    fi
+  fi
+}
+
 on_error() {
   code=$?
   echo
@@ -31,6 +41,7 @@ on_error() {
   exit "$code"
 }
 trap on_error ERR
+trap fix_workdir_permissions EXIT
 
 echo "== restore direct baseline before install =="
 ./restore_direct.sh || true

@@ -6,6 +6,11 @@ if [ "$(id -u)" -ne 0 ]; then
   exec sudo "$0" "$@"
 fi
 
+keep_transports=0
+if [ "${1:-}" = "--keep-transports" ]; then
+  keep_transports=1
+fi
+
 default_line="$(ip -4 route show default | awk '
   $1 == "default" {
     gw="";
@@ -43,14 +48,25 @@ replace_direct_half "0.0.0.0/1"
 replace_direct_half "128.0.0.0/1"
 
 shopt -s nullglob
-for pid_file in run/*.pid; do
-  name="$(basename "$pid_file" .pid)"
-  [ "$name" = "control-tunnel" ] && continue
-  ./stop_singbox_transport.sh "$name" || true
-done
+if [ "$keep_transports" != "1" ]; then
+  for pid_file in run/*.pid; do
+    name="$(basename "$pid_file" .pid)"
+    [ "$name" = "control-tunnel" ] && continue
+    ./stop_singbox_transport.sh "$name" || true
+  done
+fi
 shopt -u nullglob
 
 if command -v resolvectl >/dev/null 2>&1; then
+  ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1 | while IFS= read -r link_name; do
+    case "$link_name" in
+      amn*|wg*|awg*|tun*|ppp*|sing*|proxy*|lokvpn*)
+        [ "$link_name" = "$dev" ] && continue
+        resolvectl revert "$link_name" >/dev/null 2>&1 || true
+        resolvectl default-route "$link_name" no >/dev/null 2>&1 || true
+        ;;
+    esac
+  done
   dns_value="${RESTORE_DNS_SERVERS:-${gw:-192.168.1.1} 1.1.1.1}"
   read -r -a dns_servers <<< "$dns_value"
   if [ "${#dns_servers[@]}" -gt 0 ]; then

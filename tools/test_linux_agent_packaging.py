@@ -44,6 +44,8 @@ def main() -> int:
     assert_contains(restore, 'read -r -a dns_servers <<< "$dns_value"', label="restore_direct.sh")
     assert_contains(restore, 'resolvectl dns "$dev" "${dns_servers[@]}"', label="restore_direct.sh")
     assert_contains(restore, 'resolvectl default-route "$dev" yes', label="restore_direct.sh")
+    assert_contains(restore, "--keep-transports", label="restore_direct.sh")
+    assert_contains(restore, 'resolvectl revert "$link_name"', label="restore_direct.sh")
     assert_not_contains(
         restore,
         'resolvectl dns "$dev" "${RESTORE_DNS_SERVERS:-192.168.1.254 1.1.1.1}"',
@@ -67,6 +69,11 @@ def main() -> int:
     assert_contains(managed, "CONTROL_TUNNEL_WAIT_SECONDS", label="managed_agent.sh")
     assert_contains(managed, "stop_control_tunnel()", label="managed_agent.sh")
     assert_contains(managed, "dump_control_tunnel_logs()", label="managed_agent.sh")
+    assert_contains(managed, "restore_direct_dns_baseline()", label="managed_agent.sh")
+    assert_contains(managed, "./restore_direct.sh --keep-transports", label="managed_agent.sh")
+    assert_contains(one_click, "fix_workdir_permissions()", label="one_click_install.sh")
+    assert_contains(one_click, "SUDO_UID", label="one_click_install.sh")
+    assert_contains(read_text(AGENT_DIR / "test_prod_agent.sh"), "mktemp", label="test_prod_agent.sh")
     assert_contains(status, "control listeners/processes", label="status.sh")
     assert_contains(status, "ss -ltnp", label="status.sh")
 

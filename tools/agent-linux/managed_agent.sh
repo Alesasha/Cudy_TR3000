@@ -100,6 +100,12 @@ PY
   done
 }
 
+restore_direct_dns_baseline() {
+  if [ -x ./restore_direct.sh ]; then
+    ./restore_direct.sh --keep-transports || true
+  fi
+}
+
 stop_unused_transports() {
   local desired_file="$1"
   local pid_file name
@@ -126,6 +132,7 @@ while true; do
       map_file="run/interface-maps.txt"
       build_interface_args run/fresh-config.json > "$map_file"
       start_transports
+      restore_direct_dns_baseline
       python3 - run/transport-plan.json <<'PY' > run/desired-transports.txt
 import json
 import sys
