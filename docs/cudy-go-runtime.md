@@ -149,6 +149,26 @@ Remove-Item Env:CUDY_AGENT_TOKEN
 The helper never prints the token and stores it separately from `agent.json` as
 `/etc/cudy-fallback/agent.token`.
 
+The optional control-tunnel service is prepared separately. It uses the
+Dropbear/OpenWrt `ssh` client to keep:
+
+```text
+127.0.0.1:18765 -> <control-user>@<uswest>:127.0.0.1:8765
+```
+
+Install it only after the corresponding public key is authorized for the
+restricted tunnel user on the control-server:
+
+```powershell
+python tools\install_cudy_control_tunnel.py --dry-run
+python tools\install_cudy_control_tunnel.py `
+  --identity-file secrets\cudy-control-tunnel\control_tunnel_ed25519 `
+  --enable --start
+```
+
+This tunnel still does not apply routes; it only makes the control API
+reachable for `/api/cudy/agent-preview`.
+
 Public/static access can still be provided by uhttpd serving `/www/cudy-control`
 or by a controlled reverse proxy rule later. Do not expose a broader fallback
 API on WAN until authentication and state-restore behavior are explicitly

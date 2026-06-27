@@ -51,6 +51,8 @@ Linux, and Cudy fallback routing.
   service and read-only runtime endpoint.
 - `tools/install_cudy_agent_settings.py` - install root-only Cudy agent
   settings for the Go read-only policy preview.
+- `tools/install_cudy_control_tunnel.py` - install the optional Cudy-to-control
+  SSH tunnel service used by the Go preview/agent loop.
 - `tools/vpn_inventory.py` - inventory validation and provider/Cudy snapshots.
 - `tools/awg_client_add.py` - AmneziaWG client creation/statistics utility.
 - `openwrt/` - scripts deployed to Cudy/OpenWrt.
