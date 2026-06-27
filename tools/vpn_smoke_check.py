@@ -43,6 +43,7 @@ CHECKS = [
     Check("route lookup resolves service alias", ["tools/vpn_control_app.py", "route-lookup", "telegram", "--user-id", "isasha_X7Pro_Cudy"]),
     Check("route lookup reports direct", ["tools/vpn_control_app.py", "route-lookup", "216.239.36.21", "--user-id", "isasha_X7Pro_Cudy"]),
     Check("service alias CLI regression", ["tools/test_service_alias_cli.py"]),
+    Check("service agent identity regression", ["tools/test_service_agent_identity.py"]),
     Check("Cudy client lifecycle regression", ["tools/test_cudy_client_lifecycle.py"]),
     Check("Cudy router migration generator regression", ["tools/test_generate_cudy_router_migration.py"]),
     Check("Cudy router preflight regression", ["tools/test_cudy_router_preflight.py"]),
@@ -59,6 +60,8 @@ CHECKS = [
     Check("control clone help loads", ["tools/clone_control_server.py", "--help"]),
     Check("control VPS bootstrap help loads", ["tools/bootstrap_control_vps.py", "--help"]),
     Check("control backup/fallback artifact regression", ["tools/test_control_backup_artifacts.py"]),
+    Check("Cudy agent settings installer dry-run", ["tools/install_cudy_agent_settings.py", "--dry-run"]),
+    Check("Cudy control tunnel installer dry-run", ["tools/install_cudy_control_tunnel.py", "--dry-run"]),
     Check("Cudy fallback status checks", ["tools/check_cudy_fallback_status.py", "--strict"], timeout=30),
     Check(
         "Production control-server checks",

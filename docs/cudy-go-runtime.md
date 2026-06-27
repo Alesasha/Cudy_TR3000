@@ -140,11 +140,17 @@ Install these settings with the helper, after creating a dedicated Cudy device
 token on the control-server:
 
 ```powershell
+python tools\vpn_control_app.py service-user-create cudy_lan --display-name "Cudy LAN Agent"
+python tools\vpn_control_app.py device-create cudy_lan --device-id cudy-home --display-name "Cudy Home Router" --platform other --json
 $env:CUDY_AGENT_TOKEN = "<dedicated-cudy-device-token>"
 python tools\install_cudy_agent_settings.py --dry-run
 python tools\install_cudy_agent_settings.py
 Remove-Item Env:CUDY_AGENT_TOKEN
 ```
+
+Run the `vpn_control_app.py` commands against the production control-server DB
+when preparing the real Cudy device. The local DB is useful only for regression
+tests.
 
 The helper never prints the token and stores it separately from `agent.json` as
 `/etc/cudy-fallback/agent.token`.

@@ -8894,6 +8894,13 @@ def build_parser() -> argparse.ArgumentParser:
     create_user_parser.add_argument("--disabled", action="store_true")
     create_user_parser.add_argument("--no-password-change", action="store_true")
 
+    service_user_parser = sub.add_parser("service-user-create", help="Create or update a non-login service user for agents.")
+    service_user_parser.add_argument("user_id")
+    service_user_parser.add_argument("--display-name")
+    service_user_parser.add_argument("--client-ip")
+    service_user_parser.add_argument("--disabled", action="store_true")
+    service_user_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     device_create_parser = sub.add_parser("device-create", help="Create or rotate an agent device token.")
     device_create_parser.add_argument("user_id")
     device_create_parser.add_argument("--device-id")
@@ -9307,6 +9314,30 @@ def main() -> int:
             allow_no_password=args.no_password_change,
         )
         print(f"User saved: {args.user_id} role={args.role}")
+        return 0
+    if args.command == "service-user-create":
+        create_or_update_user(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            display_name=args.display_name or args.user_id,
+            role="user",
+            password=None,
+            client_ip=args.client_ip,
+            enabled=not args.disabled,
+            allow_no_password=True,
+        )
+        result = {
+            "id": args.user_id,
+            "display_name": args.display_name or args.user_id,
+            "role": "user",
+            "client_ip": args.client_ip or "",
+            "enabled": not args.disabled,
+        }
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Service user saved: {args.user_id} role=user enabled={not args.disabled}")
         return 0
     if args.command == "device-create":
         result = create_agent_device(
