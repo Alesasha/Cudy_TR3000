@@ -54,6 +54,17 @@ build\cudy\cudy-fallback-linux-arm64
 The default `GOARCH=arm64` matches the expected Cudy TR3000/OpenWrt target. If
 the live router reports a different architecture, rebuild with `-GoArch`.
 
+Deploy the current build to Cudy:
+
+```powershell
+python tools\deploy_cudy_go_fallback.py --dry-run
+python tools\deploy_cudy_go_fallback.py
+python tools\check_cudy_go_fallback.py --strict
+```
+
+The deploy helper uses SSH exec upload instead of SFTP because the current Cudy
+OpenWrt image does not expose a working SFTP subsystem.
+
 ## OpenWrt Service
 
 The init template is:
