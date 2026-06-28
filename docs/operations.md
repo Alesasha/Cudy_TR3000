@@ -240,8 +240,11 @@ Remove-Item Env:USWEST_SSH_PASSWORD
 ```
 
 The tool writes `/etc/ssh/sshd_config.d/99-cudy-anti-bruteforce.conf`, reloads
-`sshd`, installs or updates the `sshd` fail2ban jail, and prints the top SSH
-source IPs from the last six hours. Current defaults:
+`sshd`, installs or updates the `sshd` fail2ban jail, installs
+`cudy-sshd-watchdog.timer`, and prints the top SSH source IPs from the last six
+hours. The watchdog runs every minute and kills only stale pre-auth/banner SSH
+children older than the configured threshold; it does not match active
+`user@pts/...` sessions. Current defaults:
 
 ```text
 LoginGraceTime 60
@@ -249,6 +252,15 @@ PerSourceMaxStartups 20
 MaxStartups 100:30:300
 UseDNS no
 fail2ban: maxretry=5, findtime=10m, bantime=1h
+cudy-sshd-watchdog: stale=120s, interval=60s
+```
+
+Useful checks after deployment:
+
+```bash
+systemctl status cudy-sshd-watchdog.timer cudy-sshd-watchdog.service
+journalctl -t cudy-sshd-watchdog -S '1 hour ago' --no-pager
+ss -Htn sport = :22 | wc -l
 ```
 
 ## Autostart

@@ -8,9 +8,21 @@ if [ ! -f ./agent.env ]; then
 fi
 
 run_smoke=1
-if [ "${1:-}" = "--skip-smoke" ]; then
-  run_smoke=0
-fi
+strict_smoke=0
+for arg in "$@"; do
+  case "$arg" in
+    --skip-smoke)
+      run_smoke=0
+      ;;
+    --strict-smoke)
+      strict_smoke=1
+      ;;
+    *)
+      echo "ERROR: unknown argument: $arg" >&2
+      exit 2
+      ;;
+  esac
+done
 
 mkdir -p run logs transports
 chmod +x ./*.sh
@@ -96,7 +108,14 @@ fi
 if [ "$run_smoke" = "1" ]; then
   echo
   echo "== one-shot managed agent smoke =="
-  RUN_ONCE=1 ./managed_agent.sh
+  if ! RUN_ONCE=1 ./managed_agent.sh; then
+    echo "WARNING: one-shot managed agent smoke failed." >&2
+    echo "The systemd service will still be installed and will keep retrying in the background." >&2
+    ./restore_direct.sh || true
+    if [ "$strict_smoke" = "1" ]; then
+      exit 1
+    fi
+  fi
 fi
 
 echo

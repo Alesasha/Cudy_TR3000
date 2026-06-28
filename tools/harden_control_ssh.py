@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import os
 import shlex
@@ -67,6 +68,79 @@ def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
 
 def remote_script(args: argparse.Namespace) -> str:
     ignore_ips = " ".join(args.ignore_ip)
+    watchdog_body = textwrap.dedent(
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        stale_seconds="${CUDY_SSHD_WATCHDOG_STALE_SECONDS:-120}"
+        log_tag="cudy-sshd-watchdog"
+
+        mapfile -t stale_rows < <(
+          ps -eo pid=,etimes=,comm=,args= | awk -v stale="$stale_seconds" '
+            $3 == "sshd" && $2 >= stale {
+              line = $0
+              if (line ~ /\\[preauth\\]/ || line ~ /\\[accepted\\]/ || line ~ /sshd: unknown/ || line ~ /sshd: invalid user/) {
+                print $1 "\\t" $2 "\\t" substr(line, index(line, $4))
+              }
+            }
+          '
+        )
+
+        [ "${#stale_rows[@]}" -gt 0 ] || exit 0
+
+        for row in "${stale_rows[@]}"; do
+          pid="${row%%$'\\t'*}"
+          rest="${row#*$'\\t'}"
+          age="${rest%%$'\\t'*}"
+          cmd="${rest#*$'\\t'}"
+          if kill -0 "$pid" 2>/dev/null; then
+            logger -t "$log_tag" "terminating stale sshd preauth/banner pid=$pid age=${age}s cmd=$cmd"
+            kill "$pid" 2>/dev/null || true
+          fi
+        done
+
+        sleep 2
+
+        for row in "${stale_rows[@]}"; do
+          pid="${row%%$'\\t'*}"
+          if kill -0 "$pid" 2>/dev/null; then
+            logger -t "$log_tag" "force killing stale sshd preauth/banner pid=$pid"
+            kill -9 "$pid" 2>/dev/null || true
+          fi
+        done
+        """
+    )
+    watchdog_service = textwrap.dedent(
+        """\
+        [Unit]
+        Description=Cudy SSH preauth/banner watchdog
+        Documentation=man:sshd(8)
+
+        [Service]
+        Type=oneshot
+        Environment=CUDY_SSHD_WATCHDOG_STALE_SECONDS={stale_seconds}
+        ExecStart=/usr/local/sbin/cudy-sshd-watchdog
+        """
+    ).format(stale_seconds=int(args.watchdog_stale_seconds))
+    watchdog_timer = textwrap.dedent(
+        """\
+        [Unit]
+        Description=Run Cudy SSH preauth/banner watchdog periodically
+
+        [Timer]
+        OnBootSec=2min
+        OnUnitActiveSec={interval_seconds}s
+        AccuracySec=15s
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+        """
+    ).format(interval_seconds=int(args.watchdog_interval_seconds))
+    watchdog_body_b64 = base64.b64encode(watchdog_body.encode("utf-8")).decode("ascii")
+    watchdog_service_b64 = base64.b64encode(watchdog_service.encode("utf-8")).decode("ascii")
+    watchdog_timer_b64 = base64.b64encode(watchdog_timer.encode("utf-8")).decode("ascii")
     return textwrap.dedent(
         f"""\
         #!/usr/bin/env bash
@@ -111,10 +185,32 @@ def remote_script(args: argparse.Namespace) -> str:
           systemctl restart fail2ban
         fi
 
+        if [ "{int(not args.skip_watchdog)}" = "1" ]; then
+          python3 - \
+            /usr/local/sbin/cudy-sshd-watchdog {shlex.quote(watchdog_body_b64)} \
+            /etc/systemd/system/cudy-sshd-watchdog.service {shlex.quote(watchdog_service_b64)} \
+            /etc/systemd/system/cudy-sshd-watchdog.timer {shlex.quote(watchdog_timer_b64)} <<'PY'
+        import base64
+        import pathlib
+        import sys
+
+        pairs = sys.argv[1:]
+        for path, payload in zip(pairs[0::2], pairs[1::2]):
+            pathlib.Path(path).write_bytes(base64.b64decode(payload))
+        PY
+          chmod 0755 /usr/local/sbin/cudy-sshd-watchdog
+          chmod 0644 /etc/systemd/system/cudy-sshd-watchdog.service /etc/systemd/system/cudy-sshd-watchdog.timer
+          systemctl daemon-reload
+          systemctl enable --now cudy-sshd-watchdog.timer
+          systemctl start cudy-sshd-watchdog.service || true
+        fi
+
         printf '== sshd effective ==\\n'
         sshd -T | grep -Ei '^(logingracetime|maxstartups|persourcemaxstartups|usedns|passwordauthentication|permitrootlogin)'
         printf '\\n== fail2ban ==\\n'
         fail2ban-client status sshd 2>/dev/null || true
+        printf '\\n== cudy ssh watchdog ==\\n'
+        systemctl --no-pager --full status cudy-sshd-watchdog.timer cudy-sshd-watchdog.service 2>/dev/null || true
         printf '\\n== top SSH source IPs, last 6h ==\\n'
         journalctl -u ssh -S '6 hours ago' --no-pager 2>/dev/null \\
           | grep -E 'Failed password|Invalid user|Timeout before authentication|Connection reset by|Connection closed by' \\
@@ -140,6 +236,9 @@ def main() -> int:
     parser.add_argument("--fail2ban-maxretry", type=int, default=5)
     parser.add_argument("--fail2ban-findtime", default="10m")
     parser.add_argument("--fail2ban-bantime", default="1h")
+    parser.add_argument("--skip-watchdog", action="store_true")
+    parser.add_argument("--watchdog-stale-seconds", type=int, default=120)
+    parser.add_argument("--watchdog-interval-seconds", type=int, default=60)
     args = parser.parse_args()
 
     password = ssh_password(args.ssh_password)

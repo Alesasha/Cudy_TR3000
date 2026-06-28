@@ -225,7 +225,10 @@ sudo ./one_click_install.sh
 
 echo
 echo "== production smoke test =="
-./test_prod_agent.sh
+if ! ./test_prod_agent.sh; then
+  echo "WARNING: production smoke test failed. The installed service will keep retrying in the background." >&2
+  ./status.sh || true
+fi
 
 echo
 echo "== final status =="

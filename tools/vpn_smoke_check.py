@@ -53,6 +53,7 @@ CHECKS = [
     Check("route agent help loads", ["tools/route_agent.py", "--help"]),
     Check("route agent plan regression", ["tools/test_route_agent_plan.py"]),
     Check("Linux agent packaging regression", ["tools/test_linux_agent_packaging.py"]),
+    Check("SSH hardening regression", ["tools/test_ssh_hardening.py"]),
     Check("PowerShell scripts parse", ["tools/check_powershell_syntax.py"], timeout=120),
     Check("shell scripts parse", ["tools/check_shell_syntax.py"]),
     Check("control backup help loads", ["tools/backup_control_server.py", "--help"]),

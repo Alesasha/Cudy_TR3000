@@ -125,6 +125,7 @@ mkdir -p run logs transports
 log "managed linux agent starting pid=$$ control=${VPN_CONTROL_URL}"
 
 while true; do
+  mkdir -p run logs transports
   cycle_ok=0
   if ensure_tunnel; then
     if python3 ./route_agent.py config --json > run/fresh-config.json.tmp; then
