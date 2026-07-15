@@ -29,7 +29,7 @@ DEFAULT_USER = "root"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control"
 
-UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
+UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools", "build/agent-updates"]
 UPLOAD_FILES = ["requirements.txt"]
 EXCLUDE_NAMES = {
     ".git",

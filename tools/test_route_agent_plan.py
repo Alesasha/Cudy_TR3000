@@ -40,6 +40,20 @@ def main() -> int:
     finally:
         route_agent.plan_commands = original_plan_commands  # type: ignore[assignment]
 
+    original_run_powershell_file = route_agent.run_powershell_file
+    try:
+        route_agent.run_powershell_file = lambda script, timeout: (  # type: ignore[assignment]
+            0,
+            '[{"Index":0,"Ok":true,"Output":"ok"},{"Index":1,"Ok":false,"Output":"missing"}]',
+        )
+        applied = route_agent.run_windows_route_batch(
+            ["powershell:Write-Output ok", "optional:powershell:throw 'missing'"]
+        )
+        if not applied[0]["ok"] or not applied[1]["ok"] or "ignored cleanup failure" not in applied[1]["output"]:
+            raise AssertionError(f"Windows route batch result mapping failed: {applied!r}")
+    finally:
+        route_agent.run_powershell_file = original_run_powershell_file  # type: ignore[assignment]
+
     original_run_text = route_agent.run_text
     original_probe_bind_value = route_agent.probe_bind_value
     try:
@@ -61,6 +75,36 @@ def main() -> int:
         )
         if not probe.get("ok") or probe.get("http_code_int") != 301:
             raise AssertionError(f"3xx HTTP probe should count as route-reachable: {probe!r}")
+    finally:
+        route_agent.run_text = original_run_text  # type: ignore[assignment]
+        route_agent.probe_bind_value = original_probe_bind_value  # type: ignore[assignment]
+
+    original_run_text = route_agent.run_text
+    original_probe_bind_value = route_agent.probe_bind_value
+    try:
+        route_agent.probe_bind_value = lambda interface_name: ""  # type: ignore[assignment]
+
+        def fake_geo_block_run(command: list[str], timeout: int) -> tuple[int, str]:
+            body_path = Path(command[command.index("-o") + 1])
+            body_path.write_text("Gemini isn't currently supported in your country. Stay tuned!", encoding="utf-8")
+            return (
+                0,
+                "http_code=200\n"
+                "time_total=0.200000\n"
+                "remote_ip=142.250.1.1\n"
+                "size_download=64\n"
+                "speed_download=1024\n",
+            )
+
+        route_agent.run_text = fake_geo_block_run  # type: ignore[assignment]
+        probe = route_agent.curl_probe(
+            url="https://gemini.google.com/",
+            interface_name="proxyfast",
+            connect_timeout=5,
+            max_time=12,
+        )
+        if probe.get("ok") or probe.get("semantic_status") != "geo_blocked":
+            raise AssertionError(f"Gemini geo-block body must reject the candidate: {probe!r}")
     finally:
         route_agent.run_text = original_run_text  # type: ignore[assignment]
         route_agent.probe_bind_value = original_probe_bind_value  # type: ignore[assignment]

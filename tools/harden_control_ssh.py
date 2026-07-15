@@ -20,6 +20,14 @@ DEFAULT_HOST = "95.182.91.203"
 DEFAULT_USER = "root"
 
 
+def configure_stdio() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
+
 def ssh_password(explicit: str | None) -> str:
     if explicit:
         return explicit
@@ -68,6 +76,32 @@ def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
 
 def remote_script(args: argparse.Namespace) -> str:
     ignore_ips = " ".join(args.ignore_ip)
+    agent_user_regex = "|".join(args.agent_user)
+    fail2ban_filter = textwrap.dedent(
+        f"""\
+        # Managed by Cudy_TR3000 harden_control_ssh.py.
+        #
+        # This filter intentionally stays conservative. Roaming agents use
+        # cudy-tunnel-* users from dynamic IPs, so banner timeouts, disconnects,
+        # and failed key attempts for those users must not become IP bans.
+        #
+        # The watchdog cleans stale pre-auth sshd processes; fail2ban is only
+        # for clear brute-force attempts.
+        [INCLUDES]
+        before = common.conf
+
+        [Definition]
+        failregex = ^%(__prefix_line)sInvalid user .* from <HOST> port \\d+.*$
+                    ^%(__prefix_line)sFailed password for (?!({agent_user_regex})\\b).* from <HOST> port \\d+.*$
+                    ^%(__prefix_line)sFailed publickey for invalid user .* from <HOST> port \\d+.*$
+        ignoreregex = .* for ({agent_user_regex})\\b .*
+                      .* (Connection closed|Connection reset|Timeout before authentication|Connection timed out during banner exchange).*
+
+        [Init]
+        journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+        """
+    )
+    fail2ban_filter_b64 = base64.b64encode(fail2ban_filter.encode("utf-8")).decode("ascii")
     watchdog_body = textwrap.dedent(
         """\
         #!/usr/bin/env bash
@@ -141,6 +175,60 @@ def remote_script(args: argparse.Namespace) -> str:
     watchdog_body_b64 = base64.b64encode(watchdog_body.encode("utf-8")).decode("ascii")
     watchdog_service_b64 = base64.b64encode(watchdog_service.encode("utf-8")).decode("ascii")
     watchdog_timer_b64 = base64.b64encode(watchdog_timer.encode("utf-8")).decode("ascii")
+    firewall_guard = textwrap.dedent(
+        """\
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        chain="CUDY-SSH-GUARD"
+        port="${CUDY_SSH_GUARD_PORT:-22}"
+        recent_name="${CUDY_SSH_GUARD_RECENT_NAME:-CUDYSSH}"
+        hitcount="${CUDY_SSH_GUARD_HITCOUNT:-64}"
+        seconds="${CUDY_SSH_GUARD_SECONDS:-60}"
+        connlimit="${CUDY_SSH_GUARD_CONNLIMIT:-32}"
+
+        iptables -N "$chain" 2>/dev/null || true
+        while iptables -D INPUT -p tcp --dport "$port" -m conntrack --ctstate NEW -j "$chain" 2>/dev/null; do
+          true
+        done
+        iptables -F "$chain"
+
+        # Never rate-limit local/private recovery paths. Roaming public agents
+        # are protected by a generous per-source limit below instead of bans.
+        iptables -A "$chain" -s 127.0.0.1/32 -j RETURN
+        iptables -A "$chain" -s 10.0.0.0/8 -j RETURN
+        iptables -A "$chain" -s 172.16.0.0/12 -j RETURN
+        iptables -A "$chain" -s 192.168.0.0/16 -j RETURN
+
+        # Several agents and admin checks can share one carrier/home NAT IP.
+        # Keep the per-source ceiling high enough for that legitimate burst;
+        # MaxStartups and the stale-preauth watchdog provide the global guard.
+        iptables -A "$chain" -m connlimit --connlimit-above "$connlimit" --connlimit-mask 32 -j DROP
+        iptables -A "$chain" -m recent --name "$recent_name" --rcheck --seconds "$seconds" --hitcount "$hitcount" --rsource -j DROP
+        iptables -A "$chain" -m recent --name "$recent_name" --set --rsource -j RETURN
+
+        iptables -I INPUT 1 -p tcp --dport "$port" -m conntrack --ctstate NEW -j "$chain"
+        """
+    )
+    firewall_guard_service = textwrap.dedent(
+        """\
+        [Unit]
+        Description=Cudy SSH firewall guard
+        Documentation=man:sshd(8)
+        After=network-online.target ssh.service
+        Wants=network-online.target
+
+        [Service]
+        Type=oneshot
+        RemainAfterExit=yes
+        ExecStart=/usr/local/sbin/cudy-ssh-firewall-guard
+
+        [Install]
+        WantedBy=multi-user.target
+        """
+    )
+    firewall_guard_b64 = base64.b64encode(firewall_guard.encode("utf-8")).decode("ascii")
+    firewall_guard_service_b64 = base64.b64encode(firewall_guard_service.encode("utf-8")).decode("ascii")
     return textwrap.dedent(
         f"""\
         #!/usr/bin/env bash
@@ -169,13 +257,21 @@ def remote_script(args: argparse.Namespace) -> str:
             apt-get update -y
             apt-get install -y fail2ban
           fi
-          mkdir -p /etc/fail2ban/jail.d
+          mkdir -p /etc/fail2ban/filter.d /etc/fail2ban/jail.d
+          python3 - /etc/fail2ban/filter.d/cudy-sshd-safe.conf {shlex.quote(fail2ban_filter_b64)} <<'PY'
+        import base64
+        import pathlib
+        import sys
+
+        pathlib.Path(sys.argv[1]).write_bytes(base64.b64decode(sys.argv[2]))
+        PY
           cat >/etc/fail2ban/jail.d/cudy-sshd.conf <<'EOF'
         [sshd]
         enabled = true
         port = ssh
-        filter = sshd
+        filter = cudy-sshd-safe
         backend = systemd
+        banaction = iptables-multiport
         maxretry = {int(args.fail2ban_maxretry)}
         findtime = {shlex.quote(args.fail2ban_findtime)}
         bantime = {shlex.quote(args.fail2ban_bantime)}
@@ -205,12 +301,36 @@ def remote_script(args: argparse.Namespace) -> str:
           systemctl start cudy-sshd-watchdog.service || true
         fi
 
+        if [ "{int(not args.skip_firewall_guard)}" = "1" ]; then
+          python3 - \
+            /usr/local/sbin/cudy-ssh-firewall-guard {shlex.quote(firewall_guard_b64)} \
+            /etc/systemd/system/cudy-ssh-firewall-guard.service {shlex.quote(firewall_guard_service_b64)} <<'PY'
+        import base64
+        import pathlib
+        import sys
+
+        pairs = sys.argv[1:]
+        for path, payload in zip(pairs[0::2], pairs[1::2]):
+            pathlib.Path(path).write_bytes(base64.b64decode(payload))
+        PY
+          chmod 0755 /usr/local/sbin/cudy-ssh-firewall-guard
+          chmod 0644 /etc/systemd/system/cudy-ssh-firewall-guard.service
+          systemctl daemon-reload
+          systemctl enable cudy-ssh-firewall-guard.service
+          # Type=oneshot + RemainAfterExit stays "active" after the first run.
+          # Restart it explicitly so changed limits are applied to iptables now.
+          systemctl restart cudy-ssh-firewall-guard.service
+        fi
+
         printf '== sshd effective ==\\n'
         sshd -T | grep -Ei '^(logingracetime|maxstartups|persourcemaxstartups|usedns|passwordauthentication|permitrootlogin)'
         printf '\\n== fail2ban ==\\n'
         fail2ban-client status sshd 2>/dev/null || true
         printf '\\n== cudy ssh watchdog ==\\n'
         systemctl --no-pager --full status cudy-sshd-watchdog.timer cudy-sshd-watchdog.service 2>/dev/null || true
+        printf '\\n== cudy ssh firewall guard ==\\n'
+        systemctl --no-pager --full status cudy-ssh-firewall-guard.service 2>/dev/null || true
+        iptables -S CUDY-SSH-GUARD 2>/dev/null || true
         printf '\\n== top SSH source IPs, last 6h ==\\n'
         journalctl -u ssh -S '6 hours ago' --no-pager 2>/dev/null \\
           | grep -E 'Failed password|Invalid user|Timeout before authentication|Connection reset by|Connection closed by' \\
@@ -222,6 +342,7 @@ def remote_script(args: argparse.Namespace) -> str:
 
 
 def main() -> int:
+    configure_stdio()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
@@ -236,9 +357,16 @@ def main() -> int:
     parser.add_argument("--fail2ban-maxretry", type=int, default=5)
     parser.add_argument("--fail2ban-findtime", default="10m")
     parser.add_argument("--fail2ban-bantime", default="1h")
+    parser.add_argument(
+        "--agent-user",
+        action="append",
+        default=["cudy-tunnel-windows", "cudy-tunnel-linux", "cudy-tunnel-android"],
+        help="SSH user names used by managed agents; fail2ban will avoid banning likely agent reconnects.",
+    )
     parser.add_argument("--skip-watchdog", action="store_true")
     parser.add_argument("--watchdog-stale-seconds", type=int, default=120)
     parser.add_argument("--watchdog-interval-seconds", type=int, default=60)
+    parser.add_argument("--skip-firewall-guard", action="store_true")
     args = parser.parse_args()
 
     password = ssh_password(args.ssh_password)

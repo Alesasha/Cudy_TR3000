@@ -81,6 +81,8 @@ def main() -> int:
         assert_true(any(item["alias"] == "телеграм" for item in aliases), "telegram Cyrillic alias should be seeded")
         assert_true(any(item["alias"] == "ютуб" for item in aliases), "youtube Cyrillic alias should be seeded")
         assert_true(any(item["alias"] == "gemini" for item in aliases), "Gemini alias should be seeded")
+        assert_true(any(item["alias"] == "chatgpt" for item in aliases), "ChatGPT alias should be seeded")
+        assert_true(any(item["alias"] == "openai" for item in aliases), "OpenAI alias should be seeded")
         assert_true(any(item["alias"] == "mailru" for item in aliases), "Mail.ru alias should be seeded")
         assert_true(any(item["alias"] == "speedtest" for item in aliases), "Speedtest alias should be seeded")
         assert_true(any(item["alias"] == "linux-mirrors" for item in aliases), "Linux mirrors alias should be seeded")
@@ -97,6 +99,34 @@ def main() -> int:
             any(item["target"] == "gemini.google.com" for item in gemini_lookup["results"]),
             "Gemini lookup should include gemini.google.com",
         )
+        assert_true(
+            all(item["route_state"] == "managed" and item["requested_server_id"] == "auto" for item in gemini_lookup["results"]),
+            "Gemini lookup should be a managed Auto route",
+        )
+
+        chatgpt_lookup = json.loads(run_cli(db_path, "route-lookup", "chatgpt", "--user-id", "alias-user", "--json"))
+        assert_equal(chatgpt_lookup["alias"]["label"], "ChatGPT / OpenAI", "ChatGPT alias label")
+        assert_true(
+            any(item["target"] == "chatgpt.com" for item in chatgpt_lookup["results"]),
+            "ChatGPT lookup should include chatgpt.com",
+        )
+        assert_true(
+            all(item["route_state"] == "managed" and item["requested_server_id"] == "auto" for item in chatgpt_lookup["results"]),
+            "ChatGPT lookup should be a managed Auto route",
+        )
+
+        tunnel_list = db_path.parent / "domain-tunnel-list.txt"
+        tunnel_list.write_text("needs-tunnel.example\n# comment\nalso-needs-tunnel.example\n", encoding="utf-8")
+        imported_domains = json.loads(
+            run_cli(db_path, "global-domain-route-import", "auto", str(tunnel_list), "--json")
+        )
+        assert_equal(imported_domains["count"], 2, "domain tunnel-list import count")
+        imported_lookup = json.loads(
+            run_cli(db_path, "route-lookup", "needs-tunnel.example", "--user-id", "alias-user", "--json")
+        )
+        assert_equal(imported_lookup["results"][0]["route_state"], "managed", "imported domain route state")
+        assert_equal(imported_lookup["results"][0]["requested_server_id"], "auto", "imported domain requested server")
+        assert_true(imported_lookup["results"][0]["server_id"] != "direct", "unresolved Auto route must use a tunnel fallback")
 
         deleted = json.loads(run_cli(db_path, "service-alias-delete", "testtg", "--json"))
         assert_equal(deleted["alias"], "testtg", "deleted alias")

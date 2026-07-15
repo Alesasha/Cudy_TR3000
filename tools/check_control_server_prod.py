@@ -15,7 +15,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 from urllib.request import urlopen
 
 import paramiko
@@ -95,6 +95,11 @@ def read_http_json(base_url: str, path: str, timeout: int) -> dict[str, Any]:
     try:
         with urlopen(url, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8", errors="replace"))
+    except HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as decode_exc:
+            raise RuntimeError(f"HTTP fallback failed for {url}: {exc}") from decode_exc
     except (OSError, URLError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"HTTP fallback failed for {url}: {exc}") from exc
     if not isinstance(payload, dict):
@@ -203,7 +208,7 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
             args.timeout,
         )
         health = read_remote_json(client, "curl -fsS --max-time 5 http://127.0.0.1:8765/healthz", args.timeout)
-        ready = read_remote_json(client, "curl -fsS --max-time 5 http://127.0.0.1:8765/readyz", args.timeout)
+        ready = read_remote_json(client, "curl -sS --max-time 5 http://127.0.0.1:8765/readyz", args.timeout)
         status = read_remote_json(
             client,
             (

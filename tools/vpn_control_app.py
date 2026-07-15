@@ -65,11 +65,13 @@ SESSION_COOKIE = "vpn_session"
 SESSION_TTL_SECONDS = 12 * 60 * 60
 PASSWORD_ITERATIONS = 210_000
 DEVICE_TOKEN_PREFIX = "vca_"
+ENROLLMENT_CODE_PREFIX = "cudy-"
 APP_STARTED_AT = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 CUDY_FALLBACK_STATE_URL = os.environ.get("CUDY_FALLBACK_STATE_URL", "http://192.168.8.1/cudy-control/state.json")
 CUDY_FALLBACK_MAX_AGE_SECONDS = int(os.environ.get("CUDY_FALLBACK_MAX_AGE_SECONDS", "3600"))
 CUDY_FALLBACK_STATUS_WARN = os.environ.get("CUDY_FALLBACK_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 CONTROL_BACKUP_DIR = ROOT / "backups" / "control-server"
+AGENT_UPDATE_DIR = ROOT / "build" / "agent-updates"
 CONTROL_BACKUP_MAX_AGE_SECONDS = int(os.environ.get("CONTROL_BACKUP_MAX_AGE_SECONDS", str(36 * 60 * 60)))
 CONTROL_BACKUP_STATUS_WARN = os.environ.get("CONTROL_BACKUP_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -123,6 +125,20 @@ SERVICE_ALIAS_SEEDS = [
         ],
     },
     {
+        "aliases": ["chatgpt", "openai", "gpt", "чатгпт", "чатжпт"],
+        "label": "ChatGPT / OpenAI",
+        "targets": [
+            "chatgpt.com",
+            "chat.openai.com",
+            "openai.com",
+            "auth.openai.com",
+            "platform.openai.com",
+            "cdn.openai.com",
+            "oaistatic.com",
+            "oaiusercontent.com",
+        ],
+    },
+    {
         "aliases": ["mailru", "mail.ru", "mail", "майл", "мэйл"],
         "label": "Mail.ru",
         "targets": [
@@ -131,6 +147,16 @@ SERVICE_ALIAS_SEEDS = [
             "smtp.mail.ru",
             "imap.mail.ru",
             "pop.mail.ru",
+        ],
+    },
+    {
+        "aliases": ["gosuslugi", "gosuslugi.ru", "esia"],
+        "label": "Gosuslugi",
+        "targets": [
+            "gosuslugi.ru",
+            "www.gosuslugi.ru",
+            "esia.gosuslugi.ru",
+            "lk.gosuslugi.ru",
         ],
     },
     {
@@ -150,6 +176,46 @@ SERVICE_ALIAS_SEEDS = [
         ],
     },
 ]
+MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS = [
+    {
+        "server_id": "auto",
+        "note": "Managed AI service Auto route",
+        "domains": [
+            "gemini.google.com",
+            "aistudio.google.com",
+            "chatgpt.com",
+            "chat.openai.com",
+            "openai.com",
+            "auth.openai.com",
+            "platform.openai.com",
+            "cdn.openai.com",
+            "oaistatic.com",
+            "oaiusercontent.com",
+        ],
+    },
+    {
+        "server_id": "direct",
+        "note": "Russian state service direct route",
+        "domains": [
+            "gosuslugi.ru",
+            "www.gosuslugi.ru",
+            "esia.gosuslugi.ru",
+            "lk.gosuslugi.ru",
+        ],
+    },
+]
+GEO_BLOCK_PATTERNS = [
+    "gemini isn't currently supported in your country",
+    "gemini isn\u2019t currently supported in your country",
+    "isn't currently supported in your country",
+    "isn\u2019t currently supported in your country",
+    "not currently supported in your country",
+    "not available in your country",
+    "services are not available in your country",
+    "country is not supported",
+    "unsupported country",
+]
+PROBE_BODY_LIMIT_BYTES = 512 * 1024
 
 
 SCHEMA = """
@@ -288,6 +354,36 @@ CREATE TABLE IF NOT EXISTS agent_status (
   FOREIGN KEY(device_id) REFERENCES agent_devices(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS agent_diagnostics (
+  id TEXT PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  platform TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  report_text TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY(device_id) REFERENCES agent_devices(id) ON DELETE CASCADE,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS agent_enrollment_codes (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  desired_device_id TEXT,
+  display_name TEXT NOT NULL DEFAULT '',
+  platform TEXT NOT NULL DEFAULT 'android',
+  code_salt TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  used_device_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(used_device_id) REFERENCES agent_devices(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS transport_configs (
   server_id TEXT PRIMARY KEY,
   transport_type TEXT NOT NULL,
@@ -339,6 +435,20 @@ CREATE TABLE IF NOT EXISTS service_aliases (
   targets_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS critical_services (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id TEXT NOT NULL DEFAULT '',
+  service_key TEXT NOT NULL,
+  label TEXT NOT NULL,
+  targets_json TEXT NOT NULL,
+  success_pattern TEXT NOT NULL DEFAULT '',
+  failure_pattern TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(user_id, service_key)
 );
 
 CREATE TABLE IF NOT EXISTS domain_discovery_queue (
@@ -601,22 +711,42 @@ USER_HTML = r"""<!doctype html>
       </table>
     </section>
     <section>
-      <h2>Service Aliases</h2>
+      <h2>Lookup Aliases</h2>
+      <p class="muted">Aliases are shortcuts for Route Lookup only. They do not create tunnel rules by themselves. Actual tunnel policy is configured in Domain Routes.</p>
       <form id="aliasForm" class="row">
         <input id="aliasInput" type="text" placeholder="alias, e.g. телеграм" autocomplete="off">
         <input id="aliasLabel" type="text" placeholder="label" autocomplete="off">
-        <input id="aliasTargets" type="text" placeholder="targets: domain, IP/CIDR, ..." autocomplete="off">
+        <input id="aliasTargets" type="text" placeholder="lookup targets: domain, IP/CIDR, ..." autocomplete="off">
         <button type="submit">Save</button>
       </form>
       <p id="aliasStatus" class="status"></p>
       <table>
-        <thead><tr><th>Alias</th><th>Label</th><th>Targets</th><th></th></tr></thead>
+        <thead><tr><th>Alias</th><th>Label</th><th>Lookup Targets</th><th>Routing Effect</th><th></th></tr></thead>
         <tbody id="aliasesBody"></tbody>
+      </table>
+    </section>
+    <section>
+      <h2>Important Services</h2>
+      <p class="muted">The agent checks these services. A local entry with the same key replaces the global check.</p>
+      <form id="criticalServiceForm" class="row">
+        <input id="criticalServiceKey" type="text" placeholder="key, e.g. chatgpt" autocomplete="off">
+        <input id="criticalServiceLabel" type="text" placeholder="label" autocomplete="off">
+        <input id="criticalServiceTargets" type="text" placeholder="URLs, separated by commas" autocomplete="off">
+        <input id="criticalServiceSuccess" type="text" placeholder="success regex (optional)" autocomplete="off">
+        <input id="criticalServiceFailure" type="text" placeholder="failure regex (optional)" autocomplete="off">
+        <label class="inline muted"><input id="criticalServiceEnabled" type="checkbox" checked> Enabled</label>
+        <button type="submit">Save</button>
+      </form>
+      <p id="criticalServiceStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Service</th><th>Scope</th><th>Targets</th><th>Content checks</th><th>Enabled</th><th></th></tr></thead>
+        <tbody id="criticalServicesBody"></tbody>
       </table>
     </section>
   </main>
   <script>
-    const state = { servers: [], routes: [], user: null, aliases: [] };
+    const state = { servers: [], routes: [], user: null, aliases: [], criticalServices: { global: [], local: [], effective: [] } };
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, ch => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
     const serverLabel = id => (id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
     const serverProvider = id => (state.servers.find(s => s.id === id) || { provider: "" }).provider || "";
     const priorityText = policy => policy ? (policy.candidate_server_ids || []).join(", ") : "";
@@ -683,13 +813,39 @@ USER_HTML = r"""<!doctype html>
         <tr>
           <td data-label="Alias">${item.alias}</td>
           <td data-label="Label">${item.label}</td>
-          <td data-label="Targets">${(item.targets || []).join(", ")}</td>
+          <td data-label="Lookup Targets">${(item.targets || []).join(", ")}</td>
+          <td data-label="Routing Effect" class="muted">none; use Route Lookup or Domain Routes</td>
           <td><button class="danger" data-delete-alias="${item.alias}">Delete</button></td>
         </tr>
-      `).join("") : '<tr><td data-label="Alias" colspan="4" class="muted">No aliases.</td></tr>';
+      `).join("") : '<tr><td data-label="Alias" colspan="5" class="muted">No aliases.</td></tr>';
       body.querySelectorAll("[data-delete-alias]").forEach(button => {
         button.addEventListener("click", async () => {
           await api(`/api/service-aliases?alias=${encodeURIComponent(button.dataset.deleteAlias)}`, { method: "DELETE" });
+          await load();
+        });
+      });
+    }
+
+    function renderCriticalServices() {
+      const body = document.getElementById("criticalServicesBody");
+      const locals = new Map((state.criticalServices.local || []).map(item => [item.service_key, item]));
+      const visible = [
+        ...(state.criticalServices.global || []).filter(item => !locals.has(item.service_key)),
+        ...(state.criticalServices.local || [])
+      ];
+      body.innerHTML = visible.length ? visible.map(item => `
+        <tr>
+          <td data-label="Service"><strong>${escapeHtml(item.label)}</strong><br><span class="muted">${escapeHtml(item.service_key)}</span></td>
+          <td data-label="Scope">${item.scope === "global" ? "Global" : "Local"}</td>
+          <td data-label="Targets">${(item.targets || []).map(escapeHtml).join("<br>")}</td>
+          <td data-label="Content checks"><span class="muted">success:</span> ${escapeHtml(item.success_pattern || "-")}<br><span class="muted">failure:</span> ${escapeHtml(item.failure_pattern || "-")}</td>
+          <td data-label="Enabled">${item.enabled ? "yes" : "no"}</td>
+          <td>${item.scope === "user" ? `<button class="danger" data-delete-critical="${escapeHtml(item.service_key)}">Delete local</button>` : ""}</td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No important services configured.</td></tr>';
+      body.querySelectorAll("[data-delete-critical]").forEach(button => {
+        button.addEventListener("click", async () => {
+          await api(`/api/critical-services?service_key=${encodeURIComponent(button.dataset.deleteCritical)}`, { method: "DELETE" });
           await load();
         });
       });
@@ -701,12 +857,14 @@ USER_HTML = r"""<!doctype html>
       state.routes = data.routes;
       state.user = data.user;
       state.aliases = data.aliases || [];
+      state.criticalServices = data.critical_services || { global: [], local: [], effective: [] };
       state.default_auto_candidate_policy = data.default_auto_candidate_policy || null;
       fillServerSelect(document.getElementById("defaultServer"), state.user.default_server_id);
       fillServerSelect(document.getElementById("routeServer"), "auto");
       document.getElementById("defaultPriority").value = priorityText(state.default_auto_candidate_policy);
       renderRoutes();
       renderAliases();
+      renderCriticalServices();
       togglePriorityFields();
     }
 
@@ -794,6 +952,33 @@ USER_HTML = r"""<!doctype html>
         });
         event.target.reset();
         status.textContent = "Alias saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+
+    document.getElementById("criticalServiceForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("criticalServiceStatus");
+      status.className = "status";
+      try {
+        await api("/api/critical-services", {
+          method: "POST",
+          body: JSON.stringify({
+            service_key: document.getElementById("criticalServiceKey").value,
+            label: document.getElementById("criticalServiceLabel").value,
+            targets: document.getElementById("criticalServiceTargets").value,
+            success_pattern: document.getElementById("criticalServiceSuccess").value,
+            failure_pattern: document.getElementById("criticalServiceFailure").value,
+            enabled: document.getElementById("criticalServiceEnabled").checked
+          })
+        });
+        event.target.reset();
+        document.getElementById("criticalServiceEnabled").checked = true;
+        status.textContent = "Saved.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -928,12 +1113,12 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
         <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
         <div class="field"><label>Client IP</label><input id="newUserClientIp" type="text" placeholder="10.77.0.x" autocomplete="off"></div>
-        <label class="inline muted"><input id="newUserCreateCudy" type="checkbox" checked> Create Cudy VPN .conf</label>
+        <label class="inline muted"><input id="newUserCreateCudy" type="checkbox"> Create legacy Cudy peer</label>
         <div class="field">
           <label>Password</label>
           <div class="inline">
-            <input id="newUserPassword" type="password" autocomplete="new-password">
-            <button class="secondary" type="button" data-toggle-password="newUserPassword">Show</button>
+            <input id="newUserPassword" type="password" autocomplete="new-password" placeholder="new password">
+            <button class="secondary" type="button" data-toggle-password="newUserPassword" title="Show/hide the password typed here. Stored passwords cannot be viewed.">Show typed</button>
           </div>
         </div>
         <button type="submit">Create</button>
@@ -957,17 +1142,35 @@ ADMIN_HTML = r"""<!doctype html>
         <thead><tr><th>Target</th><th>State</th><th>Server</th><th>Rule</th><th>Auto</th><th>Notes</th></tr></thead>
         <tbody id="adminLookupBody"></tbody>
       </table>
-      <h3>Service Aliases</h3>
+      <h3>Lookup Aliases</h3>
+      <p class="muted">Aliases only expand names in Route Lookup, for example gemini -> gemini.google.com. They are not tunnel rules. Put domains into Global Domain Routes or per-user Domain Routes to route them.</p>
       <form id="adminAliasForm" class="toolbar">
         <div class="field"><label>Alias</label><input id="adminAliasInput" type="text" placeholder="телеграм" autocomplete="off"></div>
         <div class="field"><label>Label</label><input id="adminAliasLabel" type="text" placeholder="Telegram" autocomplete="off"></div>
-        <div class="field"><label>Targets</label><input id="adminAliasTargets" type="text" placeholder="domain, IP/CIDR, ..." autocomplete="off"></div>
+        <div class="field"><label>Lookup Targets</label><input id="adminAliasTargets" type="text" placeholder="domain, IP/CIDR, ..." autocomplete="off"></div>
         <button type="submit">Save Alias</button>
       </form>
       <p id="adminAliasStatus" class="status"></p>
       <table>
-        <thead><tr><th>Alias</th><th>Label</th><th>Targets</th><th></th></tr></thead>
+        <thead><tr><th>Alias</th><th>Label</th><th>Lookup Targets</th><th>Routing Effect</th><th></th></tr></thead>
         <tbody id="adminAliasesBody"></tbody>
+      </table>
+      <h3>Important Services</h3>
+      <p class="muted">Global checks apply to every agent. A user entry with the same key replaces the global check; a disabled user entry excludes it.</p>
+      <form id="adminCriticalServiceForm" class="toolbar">
+        <div class="field"><label>Scope</label><select id="adminCriticalServiceUser"><option value="">Global</option></select></div>
+        <div class="field"><label>Key</label><input id="adminCriticalServiceKey" type="text" placeholder="chatgpt" autocomplete="off"></div>
+        <div class="field"><label>Label</label><input id="adminCriticalServiceLabel" type="text" placeholder="ChatGPT" autocomplete="off"></div>
+        <div class="field"><label>URLs</label><input id="adminCriticalServiceTargets" type="text" placeholder="https://example.com/" autocomplete="off"></div>
+        <div class="field"><label>Success regex</label><input id="adminCriticalServiceSuccess" type="text" autocomplete="off"></div>
+        <div class="field"><label>Failure regex</label><input id="adminCriticalServiceFailure" type="text" autocomplete="off"></div>
+        <label class="inline muted"><input id="adminCriticalServiceEnabled" type="checkbox" checked> Enabled</label>
+        <button type="submit">Save Service</button>
+      </form>
+      <p id="adminCriticalServiceStatus" class="status"></p>
+      <table>
+        <thead><tr><th>Service</th><th>Scope</th><th>URLs</th><th>Content checks</th><th>Enabled</th><th></th></tr></thead>
+        <tbody id="adminCriticalServicesBody"></tbody>
       </table>
     </section>
     <section>
@@ -984,6 +1187,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
     <section>
       <h2>Global Domain Routes</h2>
+      <p class="muted">This is the global tunnel list. Server Auto means the domain is tunneled through the current Auto winner or the first available candidate until probes pick a better winner.</p>
       <form id="globalDefaultPriorityForm" class="toolbar">
         <div id="globalDefaultAutoField" class="field">
           <label>Default Priority</label>
@@ -1012,6 +1216,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
     <section>
       <h2>Domain Routes</h2>
+      <p class="muted">These per-user routes override global domain routes. Use Auto with an ordered priority list for user-specific candidate preference.</p>
       <form id="userDefaultPriorityForm" class="toolbar">
         <div class="field"><label>User</label><select id="defaultRouteUser"></select></div>
         <div id="userDefaultAutoField" class="field">
@@ -1080,10 +1285,34 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="autoProbeJobsBody"></tbody>
       </table>
       <h3>Agents</h3>
+      <form id="enrollmentForm" class="toolbar">
+        <div class="field"><label>User</label><select id="enrollmentUser"></select></div>
+        <div class="field"><label>Platform</label><select id="enrollmentPlatform"><option value="android">Android</option><option value="windows">Windows</option><option value="linux">Linux</option><option value="macos">macOS</option><option value="other">Other</option></select></div>
+        <div class="field"><label>Device ID</label><input id="enrollmentDeviceId" type="text" placeholder="user-android"></div>
+        <div class="field"><label>Name</label><input id="enrollmentDisplayName" type="text" placeholder="Android phone"></div>
+        <div class="field"><label>TTL hours</label><input id="enrollmentTtlHours" type="number" min="1" max="720" step="1" value="24"></div>
+        <button type="submit">Create one-time code</button>
+      </form>
+      <p id="enrollmentStatus" class="status"></p>
       <table>
-        <thead><tr><th>Device</th><th>User</th><th>Platform</th><th>Last Seen</th><th>Reported</th><th>Health</th><th>Applied</th><th>Errors</th></tr></thead>
+        <thead><tr><th>Code ID</th><th>User</th><th>Device</th><th>Platform</th><th>State</th><th>Expires</th><th>Updated</th><th></th></tr></thead>
+        <tbody id="enrollmentCodesBody"></tbody>
+      </table>
+      <h3>Agent Updates</h3>
+      <table>
+        <thead><tr><th>Platform</th><th>Version</th><th>Code</th><th>Package</th><th>SHA256</th><th>Notes</th></tr></thead>
+        <tbody id="agentUpdatesBody"></tbody>
+      </table>
+      <table>
+        <thead><tr><th>Device</th><th>User</th><th>Platform</th><th>Enabled</th><th>Last Seen</th><th>Reported</th><th>Health</th><th>Applied</th><th>Errors</th><th></th></tr></thead>
         <tbody id="agentStatusBody"></tbody>
       </table>
+      <h3>Diagnostics</h3>
+      <table>
+        <thead><tr><th>Created</th><th>Device</th><th>User</th><th>Platform</th><th>Summary</th><th></th></tr></thead>
+        <tbody id="agentDiagnosticsBody"></tbody>
+      </table>
+      <pre id="agentDiagnosticReport" class="muted"></pre>
     </section>
     <section>
       <h2>Provider Transports</h2>
@@ -1114,7 +1343,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], transportConfigs: [], serviceAliases: [], domainDiscovery: [], systemStatus: null };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const serverLabel = id => (id === ALL_REST || id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
@@ -1154,6 +1383,15 @@ ADMIN_HTML = r"""<!doctype html>
       const hours = Math.round(minutes / 60);
       if (hours < 72) return `${hours}h`;
       return `${Math.round(hours / 24)}d`;
+    }
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, char => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+      }[char]));
     }
     function badge(ok, text) {
       const cls = ok === true ? "ok" : ok === false ? "error" : "";
@@ -1429,13 +1667,12 @@ ADMIN_HTML = r"""<!doctype html>
           <td><input type="checkbox" data-field="enabled" ${u.enabled ? "checked" : ""}></td>
           <td>${u.has_login ? "yes" : "no"}</td>
           <td class="inline">
-            <input type="password" data-field="password" data-password-input="${u.id}" placeholder="new password">
-            <button class="secondary" type="button" data-toggle-row-password="${u.id}">Show</button>
+            <input type="password" data-field="password" data-password-input="${u.id}" placeholder="new password only">
+            <button class="secondary" type="button" data-toggle-row-password="${u.id}" title="Show/hide the new password typed here. Stored passwords cannot be viewed.">Show typed</button>
             <button class="secondary" data-password="${u.id}">Set</button>
           </td>
           <td class="inline">
             <button data-save-user="${u.id}">Save</button>
-            <a class="button secondary" href="/api/admin/client-config?user_id=${encodeURIComponent(u.id)}">Config</a>
             <button class="danger" data-delete-user="${u.id}">Delete</button>
           </td>
         </tr>
@@ -1492,7 +1729,7 @@ ADMIN_HTML = r"""<!doctype html>
           const input = button.closest("tr").querySelector('[data-field="password"]');
           const visible = input.type === "text";
           input.type = visible ? "password" : "text";
-          button.textContent = visible ? "Show" : "Hide";
+          button.textContent = visible ? "Show typed" : "Hide typed";
         });
       });
       body.querySelectorAll("[data-delete-user]").forEach(button => {
@@ -1536,12 +1773,33 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${item.alias}</td>
           <td>${item.label}</td>
           <td>${(item.targets || []).join(", ")}</td>
+          <td class="muted">none; lookup shortcut only</td>
           <td><button class="danger" data-delete-alias="${item.alias}">Delete</button></td>
         </tr>
-      `).join("") : '<tr><td colspan="4" class="muted">No aliases.</td></tr>';
+      `).join("") : '<tr><td colspan="5" class="muted">No aliases.</td></tr>';
       body.querySelectorAll("[data-delete-alias]").forEach(button => {
         button.addEventListener("click", async () => {
           await api(`/api/service-aliases?alias=${encodeURIComponent(button.dataset.deleteAlias)}`, { method: "DELETE" });
+          await load();
+        });
+      });
+    }
+    function renderCriticalServices() {
+      const body = document.getElementById("adminCriticalServicesBody");
+      body.innerHTML = state.criticalServices.length ? state.criticalServices.map(item => `
+        <tr>
+          <td><strong>${escapeHtml(item.label)}</strong><br><span class="muted">${escapeHtml(item.service_key)}</span></td>
+          <td>${item.user_id ? `User: ${escapeHtml(item.user_id)}` : "Global"}</td>
+          <td>${(item.targets || []).map(escapeHtml).join("<br>")}</td>
+          <td><span class="muted">success:</span> ${escapeHtml(item.success_pattern || "-")}<br><span class="muted">failure:</span> ${escapeHtml(item.failure_pattern || "-")}</td>
+          <td>${item.enabled ? "yes" : "no"}</td>
+          <td><button class="danger" data-delete-critical-key="${escapeHtml(item.service_key)}" data-delete-critical-user="${escapeHtml(item.user_id || "")}">Delete</button></td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No important services configured.</td></tr>';
+      body.querySelectorAll("[data-delete-critical-key]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const query = new URLSearchParams({ service_key: button.dataset.deleteCriticalKey, user_id: button.dataset.deleteCriticalUser });
+          await api(`/api/admin/critical-services?${query}`, { method: "DELETE" });
           await load();
         });
       });
@@ -1715,14 +1973,128 @@ ADMIN_HTML = r"""<!doctype html>
             <td>${item.device_id}</td>
             <td>${item.user_id}</td>
             <td>${item.platform || ""}</td>
+            <td><input type="checkbox" data-agent-enabled="${item.device_id}" ${item.enabled ? "checked" : ""}></td>
             <td>${item.last_seen_at || ""}</td>
             <td>${item.reported_at || ""}</td>
             <td>${health.ok === true ? "ok" : health.ok === false ? "fail" : ""}</td>
             <td>${health.applied ?? ""}</td>
             <td>${errors.length ? errors.slice(0, 2).join("; ") : ""}</td>
+            <td class="inline">
+              <button data-save-agent="${item.device_id}">Save</button>
+              <button class="danger" data-delete-agent="${item.device_id}">Delete</button>
+            </td>
           </tr>
         `;
-      }).join("") : '<tr><td colspan="8" class="muted">No agent status.</td></tr>';
+      }).join("") : '<tr><td colspan="10" class="muted">No agent status.</td></tr>';
+      body.querySelectorAll("[data-save-agent]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const deviceId = button.dataset.saveAgent;
+          const enabled = button.closest("tr").querySelector("[data-agent-enabled]").checked;
+          const status = document.getElementById("enrollmentStatus");
+          status.className = "status";
+          try {
+            await api("/api/admin/agent-devices", {
+              method: "POST",
+              body: JSON.stringify({ id: deviceId, enabled })
+            });
+            status.textContent = `Agent device ${enabled ? "enabled" : "disabled"}: ${deviceId}`;
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
+        });
+      });
+      body.querySelectorAll("[data-delete-agent]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const deviceId = button.dataset.deleteAgent;
+          if (!confirm(`Delete agent device ${deviceId} permanently?`)) return;
+          const status = document.getElementById("enrollmentStatus");
+          status.className = "status";
+          try {
+            await api(`/api/admin/agent-devices?id=${encodeURIComponent(deviceId)}&hard=1`, { method: "DELETE" });
+            status.textContent = `Agent device deleted: ${deviceId}`;
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
+        });
+      });
+    }
+    function renderAgentDiagnostics() {
+      const body = document.getElementById("agentDiagnosticsBody");
+      const report = document.getElementById("agentDiagnosticReport");
+      body.innerHTML = state.agentDiagnostics.length ? state.agentDiagnostics.map(item => `
+        <tr>
+          <td>${item.created_at || ""}</td>
+          <td>${item.device_id || ""}</td>
+          <td>${item.user_id || ""}</td>
+          <td>${item.platform || ""}</td>
+          <td>${escapeHtml(item.summary || "")}</td>
+          <td><button data-view-diagnostic="${item.id}">View</button></td>
+        </tr>
+      `).join("") : '<tr><td colspan="6" class="muted">No diagnostics.</td></tr>';
+      body.querySelectorAll("[data-view-diagnostic]").forEach(button => {
+        button.addEventListener("click", () => {
+          const item = state.agentDiagnostics.find(row => row.id === button.dataset.viewDiagnostic);
+          report.textContent = item ? item.report_text || "" : "";
+        });
+      });
+    }
+    function renderEnrollmentCodes() {
+      const body = document.getElementById("enrollmentCodesBody");
+      body.innerHTML = state.enrollmentCodes.length ? state.enrollmentCodes.map(item => {
+        const stateText = item.used_at ? "used" : (item.enabled ? "active" : "disabled");
+        const device = item.used_device_id || item.desired_device_id || "";
+        return `
+          <tr>
+            <td>${item.id}</td>
+            <td>${item.user_id}</td>
+            <td>${device}</td>
+            <td>${item.platform || ""}</td>
+            <td>${stateText}</td>
+            <td>${item.expires_at || ""}</td>
+            <td>${item.updated_at || ""}</td>
+            <td>${!item.used_at && item.enabled ? `<button class="danger" data-revoke-enrollment="${item.id}">Revoke</button>` : ""}</td>
+          </tr>
+        `;
+      }).join("") : '<tr><td colspan="8" class="muted">No enrollment codes.</td></tr>';
+      body.querySelectorAll("[data-revoke-enrollment]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const status = document.getElementById("enrollmentStatus");
+          status.className = "status";
+          try {
+            await api(`/api/admin/enrollment-codes?id=${encodeURIComponent(button.dataset.revokeEnrollment)}`, { method: "DELETE" });
+            status.textContent = "Enrollment code revoked.";
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
+        });
+      });
+    }
+    function renderAgentUpdates() {
+      const body = document.getElementById("agentUpdatesBody");
+      body.innerHTML = state.agentUpdates.length ? state.agentUpdates.map(item => {
+        const packageText = item.download_url
+          ? `<span class="badge ok">available</span> ${item.download_url}`
+          : '<span class="badge">not built</span>';
+        return `
+          <tr>
+            <td>${item.platform}</td>
+            <td>${item.version_name || ""}</td>
+            <td>${item.version_code ?? ""}</td>
+            <td>${packageText}</td>
+            <td>${item.sha256 ? item.sha256.slice(0, 12) + "..." : ""}</td>
+            <td>${item.release_notes || ""}</td>
+          </tr>
+        `;
+      }).join("") : '<tr><td colspan="6" class="muted">No agent update manifests.</td></tr>';
     }
     function renderProviderTransports() {
       const body = document.getElementById("providerTransportsBody");
@@ -1756,12 +2128,17 @@ ADMIN_HTML = r"""<!doctype html>
       state.autoCandidates = data.auto_candidates || [];
       state.probeJobs = data.probe_jobs || [];
       state.agentStatus = data.agent_status || [];
+      state.agentDiagnostics = data.agent_diagnostics || [];
+      state.enrollmentCodes = data.agent_enrollment_codes || [];
+      state.agentUpdates = data.agent_updates || [];
       state.transportConfigs = data.transport_configs || [];
       state.serviceAliases = data.service_aliases || [];
+      state.criticalServices = data.critical_services || [];
       state.domainDiscovery = data.domain_discovery || [];
       renderServers();
       renderUsers();
       renderServiceAliases();
+      renderCriticalServices();
       renderDomainDiscovery();
       renderSystemStatus();
       renderGlobalRoutes();
@@ -1769,11 +2146,16 @@ ADMIN_HTML = r"""<!doctype html>
       renderAutoCache();
       renderAutoProbeJobs();
       renderAgentStatus();
+      renderAgentDiagnostics();
+      renderEnrollmentCodes();
+      renderAgentUpdates();
       renderProviderTransports();
       document.getElementById("adminRouteServer").innerHTML = serverOptions(document.getElementById("adminRouteServer").value || "auto");
       document.getElementById("globalRouteServer").innerHTML = serverOptions(document.getElementById("globalRouteServer").value || "auto");
       document.getElementById("autoCacheServer").innerHTML = physicalServerOptions(document.getElementById("autoCacheServer").value);
       document.getElementById("autoSelectUser").innerHTML = autoCandidateUserOptions(document.getElementById("autoSelectUser").value);
+      document.getElementById("enrollmentUser").innerHTML = userOptions(document.getElementById("enrollmentUser").value);
+      document.getElementById("adminCriticalServiceUser").innerHTML = '<option value="">Global</option>' + state.users.map(user => `<option value="${escapeHtml(user.id)}">${escapeHtml(user.display_name)} (${escapeHtml(user.id)})</option>`).join("");
       document.getElementById("routeUser").innerHTML = userOptions(document.getElementById("routeUser").value);
       document.getElementById("defaultRouteUser").innerHTML = userOptions(document.getElementById("defaultRouteUser").value);
       syncAutoEditorFromExisting("globalDefault");
@@ -1800,9 +2182,9 @@ ADMIN_HTML = r"""<!doctype html>
           })
         });
         event.target.reset();
-        status.innerHTML = result.config_download_url
-          ? `User created. <a href="${result.config_download_url}">Download .conf</a>`
-          : "User created.";
+        status.textContent = result.cudy_client
+          ? `User created. Legacy Cudy peer created: ${result.cudy_client.config_path || result.cudy_client.client_name || result.id || ""}`
+          : "User created. Create a one-time agent enrollment code below.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -1818,6 +2200,31 @@ ADMIN_HTML = r"""<!doctype html>
         const result = await api("/api/admin/sync-cudy-clients", { method: "POST", body: "{}" });
         status.textContent = `Synced Cudy clients: ${result.synced.length}, warnings: ${result.warnings.length}`;
         status.className = result.warnings.length ? "status error" : "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
+    document.getElementById("enrollmentForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("enrollmentStatus");
+      status.className = "status";
+      try {
+        const result = await api("/api/admin/enrollment-codes", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: document.getElementById("enrollmentUser").value,
+            device_id: document.getElementById("enrollmentDeviceId").value,
+            display_name: document.getElementById("enrollmentDisplayName").value,
+            platform: document.getElementById("enrollmentPlatform").value,
+            ttl_hours: Number(document.getElementById("enrollmentTtlHours").value || 24)
+          })
+        });
+        document.getElementById("enrollmentDeviceId").value = "";
+        document.getElementById("enrollmentDisplayName").value = "";
+        status.textContent = `Activation code: ${result.code} (expires ${result.expires_at})`;
+        status.className = "status ok";
         await load();
       } catch (error) {
         status.textContent = error.message;
@@ -1886,12 +2293,39 @@ ADMIN_HTML = r"""<!doctype html>
         status.className = "status error";
       }
     });
+    document.getElementById("adminCriticalServiceForm").addEventListener("submit", async event => {
+      event.preventDefault();
+      const status = document.getElementById("adminCriticalServiceStatus");
+      status.className = "status";
+      try {
+        await api("/api/admin/critical-services", {
+          method: "POST",
+          body: JSON.stringify({
+            user_id: document.getElementById("adminCriticalServiceUser").value,
+            service_key: document.getElementById("adminCriticalServiceKey").value,
+            label: document.getElementById("adminCriticalServiceLabel").value,
+            targets: document.getElementById("adminCriticalServiceTargets").value,
+            success_pattern: document.getElementById("adminCriticalServiceSuccess").value,
+            failure_pattern: document.getElementById("adminCriticalServiceFailure").value,
+            enabled: document.getElementById("adminCriticalServiceEnabled").checked
+          })
+        });
+        event.target.reset();
+        document.getElementById("adminCriticalServiceEnabled").checked = true;
+        status.textContent = "Saved.";
+        status.className = "status ok";
+        await load();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = "status error";
+      }
+    });
     document.querySelectorAll("[data-toggle-password]").forEach(button => {
       button.addEventListener("click", () => {
         const input = document.getElementById(button.dataset.togglePassword);
         const visible = input.type === "text";
         input.type = visible ? "password" : "text";
-        button.textContent = visible ? "Show" : "Hide";
+        button.textContent = visible ? "Show typed" : "Hide typed";
       });
     });
     document.getElementById("globalRouteForm").addEventListener("submit", async event => {
@@ -2194,6 +2628,46 @@ def control_endpoints_manifest(*, valid_for_seconds: int = 600, cache_seconds: i
         "valid_until": valid_until,
         "cache_seconds": cache_seconds,
         "endpoints": endpoints,
+    }
+
+
+def agent_app_version_manifest(platform: str) -> dict[str, Any]:
+    normalized_platform = normalize_platform(platform) or "android"
+    version_path = AGENT_UPDATE_DIR / f"{normalized_platform}.version.json"
+    artifact_suffix = ".apk" if normalized_platform == "android" else ".zip"
+    artifact_path = AGENT_UPDATE_DIR / f"{normalized_platform}{artifact_suffix}"
+    file_version: dict[str, Any] = {}
+    if version_path.exists():
+        try:
+            file_version = json.loads(version_path.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError:
+            file_version = {}
+    if normalized_platform == "android":
+        version_name = (os.environ.get("CUDY_ANDROID_VERSION_NAME") or str(file_version.get("version_name") or "1.0")).strip() or "1.0"
+        version_code = int(os.environ.get("CUDY_ANDROID_VERSION_CODE") or str(file_version.get("version_code") or "1") or "1")
+        download_url = os.environ.get("CUDY_ANDROID_APK_URL", "").strip()
+        sha256 = (os.environ.get("CUDY_ANDROID_APK_SHA256") or str(file_version.get("sha256") or "")).strip()
+        release_notes = os.environ.get("CUDY_ANDROID_RELEASE_NOTES", "").strip()
+    else:
+        env_prefix = f"CUDY_{normalized_platform.upper()}"
+        version_name = (os.environ.get(f"{env_prefix}_VERSION_NAME") or str(file_version.get("version_name") or "")).strip()
+        version_code = int(os.environ.get(f"{env_prefix}_VERSION_CODE") or str(file_version.get("version_code") or "0") or "0")
+        download_url = os.environ.get(f"{env_prefix}_DOWNLOAD_URL", "").strip()
+        sha256 = (os.environ.get(f"{env_prefix}_SHA256") or str(file_version.get("sha256") or "")).strip()
+        release_notes = os.environ.get(f"{env_prefix}_RELEASE_NOTES", "").strip()
+    if not download_url and artifact_path.exists():
+        download_url = f"/api/agent/update-package?platform={normalized_platform}"
+    if artifact_path.exists() and not sha256:
+        sha256 = hashlib.sha256(artifact_path.read_bytes()).hexdigest()
+    return {
+        "ok": True,
+        "platform": normalized_platform,
+        "version_name": version_name,
+        "version_code": version_code,
+        "download_url": download_url,
+        "sha256": sha256,
+        "release_notes": release_notes,
+        "generated_at": now(),
     }
 
 
@@ -2502,6 +2976,42 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     )
     conn.execute(
         """
+        CREATE TABLE IF NOT EXISTS agent_diagnostics (
+          id TEXT PRIMARY KEY,
+          device_id TEXT NOT NULL,
+          user_id TEXT NOT NULL,
+          platform TEXT NOT NULL DEFAULT '',
+          summary TEXT NOT NULL DEFAULT '',
+          report_text TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          FOREIGN KEY(device_id) REFERENCES agent_devices(id) ON DELETE CASCADE,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_enrollment_codes (
+          id TEXT PRIMARY KEY,
+          user_id TEXT NOT NULL,
+          desired_device_id TEXT,
+          display_name TEXT NOT NULL DEFAULT '',
+          platform TEXT NOT NULL DEFAULT 'android',
+          code_salt TEXT NOT NULL,
+          code_hash TEXT NOT NULL,
+          enabled INTEGER NOT NULL DEFAULT 1,
+          expires_at TEXT NOT NULL,
+          used_at TEXT,
+          used_device_id TEXT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+          FOREIGN KEY(used_device_id) REFERENCES agent_devices(id) ON DELETE SET NULL
+        )
+        """
+    )
+    conn.execute(
+        """
         CREATE TABLE IF NOT EXISTS domain_discovery_queue (
           domain TEXT PRIMARY KEY,
           status TEXT NOT NULL DEFAULT 'pending',
@@ -2571,6 +3081,23 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS critical_services (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id TEXT NOT NULL DEFAULT '',
+          service_key TEXT NOT NULL,
+          label TEXT NOT NULL,
+          targets_json TEXT NOT NULL,
+          success_pattern TEXT NOT NULL DEFAULT '',
+          failure_pattern TEXT NOT NULL DEFAULT '',
+          enabled INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(user_id, service_key)
+        )
+        """
+    )
 
 
 def init_db(db_path: Path, inventory_path: Path, *, reset_from_inventory: bool = False) -> None:
@@ -2580,6 +3107,7 @@ def init_db(db_path: Path, inventory_path: Path, *, reset_from_inventory: bool =
         migrate_db(conn)
         seed_inventory(conn, inventory, reset_from_inventory=reset_from_inventory)
         seed_service_aliases(conn)
+        seed_managed_global_domain_routes(conn)
         ensure_default_user(conn)
 
 
@@ -2600,6 +3128,12 @@ def generate_device_token() -> str:
     return DEVICE_TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
+def generate_enrollment_code() -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+    groups = ["".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(3)]
+    return ENROLLMENT_CODE_PREFIX + "-".join(groups)
+
+
 def hash_device_token(token: str, salt_b64: str | None = None) -> tuple[str, str]:
     return hash_password(token, salt_b64)
 
@@ -2609,6 +3143,24 @@ def verify_device_token(token: str, salt_b64: str | None, hash_b64: str | None) 
         return False
     _, expected = hash_device_token(token, salt_b64)
     return hmac.compare_digest(expected, hash_b64)
+
+
+def normalize_enrollment_code(value: str) -> str:
+    code = re.sub(r"\s+", "", value.strip()).upper()
+    if code.startswith(ENROLLMENT_CODE_PREFIX.upper()):
+        code = ENROLLMENT_CODE_PREFIX + code[len(ENROLLMENT_CODE_PREFIX) :].upper()
+    elif code:
+        code = ENROLLMENT_CODE_PREFIX + code
+    return code
+
+
+def parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def normalize_device_id(value: str) -> str:
@@ -2803,6 +3355,23 @@ def seed_inventory(conn: sqlite3.Connection, inventory: dict[str, Any], *, reset
             "metadata_json": json.dumps(auto, ensure_ascii=False, sort_keys=True),
         }
     )
+    rows.append(
+        {
+            "id": "direct",
+            "label": "Direct internet",
+            "provider": "virtual",
+            "kind": "local",
+            "interface": None,
+            "geo_country": "direct",
+            "geo_region": None,
+            "endpoint": None,
+            "switch_command": None,
+            "enabled": True,
+            "user_visible": False,
+            "admin_visible": False,
+            "metadata_json": json.dumps({"id": "direct", "label": "Direct internet", "kind": "local"}, ensure_ascii=False, sort_keys=True),
+        }
+    )
 
     for server in inventory.get("servers", []):
         geo = server.get("geo") or {}
@@ -2951,6 +3520,35 @@ def seed_service_aliases(conn: sqlite3.Connection) -> None:
             )
 
 
+def seed_managed_global_domain_routes(conn: sqlite3.Connection) -> None:
+    timestamp = now()
+    for seed in MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS:
+        server_id = str(seed.get("server_id") or "auto")
+        note = str(seed.get("note") or "Managed global domain route")
+        if server_id not in {"auto", "direct"} and row(conn, "SELECT id FROM servers WHERE id = ?", (server_id,)) is None:
+            continue
+        for domain in seed.get("domains") or []:
+            normalized_domain = normalize_domain(str(domain))
+            conn.execute(
+                """
+                INSERT INTO global_domain_routes (domain, server_id, enabled, created_at, updated_at)
+                VALUES (?, ?, 1, ?, ?)
+                ON CONFLICT(domain) DO NOTHING
+                """,
+                (normalized_domain, server_id, timestamp, timestamp),
+            )
+            conn.execute(
+                """
+                INSERT INTO domain_discovery_queue (
+                  domain, status, source, first_seen_at, last_seen_at, hit_count,
+                  user_ids_json, client_ips_json, note
+                ) VALUES (?, 'promoted', 'managed-seed', ?, ?, 1, '[]', '[]', ?)
+                ON CONFLICT(domain) DO NOTHING
+                """,
+                (normalized_domain, timestamp, timestamp, note),
+            )
+
+
 def ensure_default_user(conn: sqlite3.Connection) -> None:
     timestamp = now()
     conn.execute(
@@ -3093,7 +3691,7 @@ def compact_server(server: dict[str, Any] | None) -> dict[str, Any] | None:
 
 def normalize_transport_type(value: str) -> str:
     transport_type = (value or "").strip()
-    allowed = {"http-proxy-tun", "vless-reality-tun", "sing-box-json"}
+    allowed = {"amneziawg-conf", "http-proxy-tun", "vless-reality-tun", "sing-box-json"}
     if transport_type not in allowed:
         raise ValueError(f"transport_type must be one of: {', '.join(sorted(allowed))}")
     return transport_type
@@ -3113,7 +3711,7 @@ def transport_config_rows(conn: sqlite3.Connection, *, enabled_only: bool = Fals
         f"""
         SELECT t.server_id, t.transport_type, t.interface_name, t.config_json,
                t.enabled, t.source, t.version, t.expires_at, t.created_at, t.updated_at,
-               s.label, s.provider, s.kind
+               s.label, s.provider, s.kind, s.enabled AS server_enabled
         FROM transport_configs t
         JOIN servers s ON s.id = t.server_id
         {where}
@@ -3131,6 +3729,8 @@ def transport_config_rows(conn: sqlite3.Connection, *, enabled_only: bool = Fals
 def transport_endpoint_summary(config: dict[str, Any]) -> str:
     server = str(config.get("server") or "")
     port = config.get("server_port")
+    if not server and config.get("endpoint"):
+        return str(config.get("endpoint") or "")
     if not server and isinstance(config.get("outbounds"), list):
         for outbound in config["outbounds"]:
             if not isinstance(outbound, dict):
@@ -3155,6 +3755,8 @@ def transport_config_summaries(conn: sqlite3.Connection) -> list[dict[str, Any]]
                 "transport_type": item["transport_type"],
                 "interface_name": item["interface_name"],
                 "enabled": bool(item["enabled"]),
+                "server_enabled": bool(item.get("server_enabled")),
+                "active": bool(item["enabled"]) and bool(item.get("server_enabled")),
                 "source": item.get("source") or "",
                 "version": item.get("version") or "",
                 "expires_at": item.get("expires_at"),
@@ -4170,25 +4772,75 @@ def resolve_route_server(
     if requested_server_id != "auto":
         return requested_server_id, None
 
+    raw_candidates = (
+        (auto_policy or {}).get("expanded_candidate_server_ids")
+        or (auto_policy or {}).get("candidate_server_ids")
+        or default_auto_candidate_ids(servers)
+    )
+    effective_candidates = expand_auto_candidate_ids(servers, list(raw_candidates))
+
+    def candidate_is_available(candidate_server_id: str) -> bool:
+        server = servers.get(candidate_server_id)
+        return bool(
+            candidate_server_id != "auto"
+            and server
+            and server.get("enabled")
+            and server.get("user_visible")
+            and server.get("candidate_available", True)
+        )
+
+    def first_available_candidate() -> str | None:
+        for candidate_server_id in effective_candidates:
+            if candidate_is_available(candidate_server_id):
+                return candidate_server_id
+        return None
+
     cached = auto_cache.get(domain)
     if not cached or not cached.get("selected_server_id"):
+        fallback_server_id = first_available_candidate()
         if auto_policy:
             candidates = ", ".join(auto_policy.get("candidate_server_ids") or [])
             warnings.append(
                 f"{context}: Auto has no cached selected server for {domain}; "
-                f"candidate policy {auto_policy['scope']}=[{candidates}]"
+                f"candidate policy {auto_policy['scope']}=[{candidates}]; "
+                f"using fallback {fallback_server_id or 'none'}"
             )
         else:
-            warnings.append(f"{context}: Auto has no cached selected server for {domain}; no candidate policy")
-        return None, cached
+            warnings.append(
+                f"{context}: Auto has no cached selected server for {domain}; "
+                f"using default fallback {fallback_server_id or 'none'}"
+            )
+        return fallback_server_id, cached
 
     selected_server_id = str(cached["selected_server_id"])
     if selected_server_id == "auto":
-        warnings.append(f"{context}: Auto cache for {domain} points back to auto")
-        return None, cached
+        fallback_server_id = first_available_candidate()
+        warnings.append(f"{context}: Auto cache for {domain} points back to auto; using fallback {fallback_server_id or 'none'}")
+        return fallback_server_id, cached
     if selected_server_id not in servers:
-        warnings.append(f"{context}: Auto cache for {domain} points to unknown server {selected_server_id}")
-        return None, cached
+        fallback_server_id = first_available_candidate()
+        warnings.append(
+            f"{context}: Auto cache for {domain} points to unknown server {selected_server_id}; "
+            f"using fallback {fallback_server_id or 'none'}"
+        )
+        return fallback_server_id, cached
+
+    if selected_server_id not in effective_candidates:
+        fallback_server_id = first_available_candidate()
+        scope = (auto_policy or {}).get("scope", "default")
+        warnings.append(
+            f"{context}: Auto cache for {domain} selects {selected_server_id}, which is outside "
+            f"the effective {scope} candidate policy; using fallback {fallback_server_id or 'none'}"
+        )
+        return fallback_server_id, cached
+
+    if not candidate_is_available(selected_server_id):
+        fallback_server_id = first_available_candidate()
+        warnings.append(
+            f"{context}: Auto cache for {domain} selects unavailable server {selected_server_id}; "
+            f"using fallback {fallback_server_id or 'none'}"
+        )
+        return fallback_server_id, cached
 
     return selected_server_id, cached
 
@@ -5086,6 +5738,39 @@ def parse_curl_probe_output(text: str) -> dict[str, Any]:
     return result
 
 
+def body_geo_block_evidence(body_text: str) -> str:
+    normalized = body_text.lower().replace("\u2019", "'")
+    for pattern in GEO_BLOCK_PATTERNS:
+        normalized_pattern = pattern.lower().replace("\u2019", "'")
+        index = normalized.find(normalized_pattern)
+        if index < 0:
+            continue
+        start = max(0, index - 80)
+        end = min(len(body_text), index + len(pattern) + 120)
+        return " ".join(body_text[start:end].split())[:260]
+    return ""
+
+
+def apply_semantic_probe_check(parsed: dict[str, Any], *, body_text: str) -> None:
+    evidence = body_geo_block_evidence(body_text)
+    http_code = int(parsed.get("http_code_int") or 0)
+    try:
+        curl_rc = int(parsed.get("rc", 1))
+    except (TypeError, ValueError):
+        curl_rc = 1
+    parsed["ok"] = curl_rc == 0 and 200 <= http_code < 500
+    if evidence:
+        parsed["semantic_status"] = "geo_blocked"
+        parsed["semantic_evidence"] = evidence
+        parsed["ok"] = False
+    elif parsed["ok"]:
+        parsed["semantic_status"] = "ok"
+    elif curl_rc != 0:
+        parsed["semantic_status"] = "curl_error"
+    else:
+        parsed["semantic_status"] = "http_error"
+
+
 def run_cudy_curl_probe(
     client: paramiko.SSHClient,
     *,
@@ -5096,21 +5781,31 @@ def run_cudy_curl_probe(
     timeout: int,
 ) -> dict[str, Any]:
     command = (
-        "out=$(curl -4 -L -sS -o /dev/null "
+        "body=$(mktemp /tmp/cudy-probe.XXXXXX); "
+        "trap 'rm -f \"$body\"' EXIT; "
+        "out=$(curl -4 -L -sS -o \"$body\" "
         f"--interface {shlex.quote(iface)} "
         f"--connect-timeout {int(connect_timeout)} --max-time {int(max_time)} "
         "-w 'http_code=%{http_code}\\ntime_total=%{time_total}\\nremote_ip=%{remote_ip}\\n"
         "size_download=%{size_download}\\nspeed_download=%{speed_download}\\n' "
         f"{shlex.quote(url)} 2>&1); "
-        "rc=$?; printf 'rc=%s\\n%s\\n' \"$rc\" \"$out\""
+        f"rc=$?; printf 'rc=%s\\n%s\\n__CUDY_PROBE_BODY__\\n' \"$rc\" \"$out\"; "
+        f"head -c {PROBE_BODY_LIMIT_BYTES} \"$body\""
     )
     stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
     stdin.channel.shutdown_write()
     out = stdout.read().decode("utf-8", "replace")
     err = stderr.read().decode("utf-8", "replace")
     stdout.channel.recv_exit_status()
-    parsed = parse_curl_probe_output(out + ("\n" + err if err.strip() else ""))
-    parsed["raw"] = (out + err).strip()
+    combined = out + ("\n" + err if err.strip() else "")
+    marker = "__CUDY_PROBE_BODY__\n"
+    if marker in combined:
+        metrics, body_text = combined.split(marker, 1)
+    else:
+        metrics, body_text = combined, ""
+    parsed = parse_curl_probe_output(metrics)
+    apply_semantic_probe_check(parsed, body_text=body_text)
+    parsed["raw"] = metrics.strip()
     return parsed
 
 
@@ -5202,15 +5897,17 @@ def auto_select_domain(
                 timeout=max(ssh_timeout, max_time + 5),
             )
             http_code = int(probe.get("http_code_int") or 0)
-            ok = probe.get("rc") == 0 and 200 <= http_code < 500
+            ok = bool(probe.get("ok"))
             check.update(
                 {
                     "ok": ok,
-                    "status": "ok" if ok else "failed",
+                    "status": "ok" if ok else str(probe.get("semantic_status") or "failed"),
                     "http_code": http_code,
                     "score_ms": probe.get("time_total_ms"),
                     "remote_ip": probe.get("remote_ip"),
                     "curl_rc": probe.get("rc"),
+                    "semantic_status": probe.get("semantic_status"),
+                    "semantic_evidence": probe.get("semantic_evidence"),
                     "raw": probe.get("raw"),
                 }
             )
@@ -5545,6 +6242,170 @@ def create_agent_device(
     }
 
 
+def create_agent_enrollment_code(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    device_id: str | None = None,
+    display_name: str | None = None,
+    platform: str | None = "android",
+    ttl_hours: int = 24,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_user_id = user_id.strip()
+    normalized_platform = normalize_platform(platform) or "android"
+    normalized_device_id = normalize_device_id(device_id) if device_id else None
+    label = (display_name or normalized_device_id or f"{normalized_user_id}-{normalized_platform}").strip()
+    ttl_hours = max(1, min(int(ttl_hours), 24 * 30))
+    code = generate_enrollment_code()
+    salt, code_hash = hash_device_token(code)
+    timestamp = now()
+    expires_at = (
+        datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=ttl_hours)
+    ).isoformat()
+    code_id = "enroll_" + secrets.token_urlsafe(18)
+    with connect(db_path) as conn:
+        user = row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,))
+        if not user:
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        conn.execute(
+            """
+            INSERT INTO agent_enrollment_codes (
+              id, user_id, desired_device_id, display_name, platform,
+              code_salt, code_hash, enabled, expires_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                code_id,
+                normalized_user_id,
+                normalized_device_id,
+                label,
+                normalized_platform,
+                salt,
+                code_hash,
+                int(bool(enabled)),
+                expires_at,
+                timestamp,
+                timestamp,
+            ),
+        )
+    return {
+        "ok": True,
+        "id": code_id,
+        "user_id": normalized_user_id,
+        "desired_device_id": normalized_device_id,
+        "display_name": label,
+        "platform": normalized_platform,
+        "enabled": bool(enabled),
+        "expires_at": expires_at,
+        "code": code,
+    }
+
+
+def list_agent_enrollment_codes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT c.id, c.user_id, u.display_name AS user_display_name,
+                   c.desired_device_id, c.display_name, c.platform, c.enabled,
+                   c.expires_at, c.used_at, c.used_device_id, c.created_at, c.updated_at
+            FROM agent_enrollment_codes c
+            JOIN users u ON u.id = c.user_id
+            ORDER BY c.created_at DESC
+            """,
+        )
+
+
+def revoke_agent_enrollment_code(db_path: Path, inventory_path: Path, *, code_id: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    timestamp = now()
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE agent_enrollment_codes SET enabled = 0, updated_at = ? WHERE id = ?",
+            (timestamp, code_id.strip()),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Unknown enrollment code: {code_id}")
+    return {"ok": True, "id": code_id.strip()}
+
+
+def consume_agent_enrollment_code(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    code: str,
+    device_id: str | None = None,
+    display_name: str | None = None,
+    platform: str | None = "android",
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_code = normalize_enrollment_code(code)
+    if not normalized_code:
+        raise ValueError("Enrollment code is required")
+    timestamp = now()
+    current_dt = datetime.now(timezone.utc)
+    normalized_platform = normalize_platform(platform) or "android"
+    with connect(db_path) as conn:
+        candidates = rows(
+            conn,
+            """
+            SELECT c.*, u.enabled AS user_enabled
+            FROM agent_enrollment_codes c
+            JOIN users u ON u.id = c.user_id
+            WHERE c.enabled = 1 AND c.used_at IS NULL
+            ORDER BY c.created_at DESC
+            """,
+        )
+    matched: dict[str, Any] | None = None
+    for candidate in candidates:
+        if not bool(candidate.get("user_enabled")):
+            continue
+        expires_at = parse_iso_datetime(candidate.get("expires_at"))
+        if expires_at is None or expires_at < current_dt:
+            continue
+        if verify_device_token(normalized_code, candidate.get("code_salt"), candidate.get("code_hash")):
+            matched = candidate
+            break
+    if matched is None:
+        raise PermissionError("Invalid or expired enrollment code")
+
+    requested_device_id = device_id or matched.get("desired_device_id") or ""
+    if not requested_device_id:
+        suffix = secrets.token_hex(3)
+        requested_device_id = f"{matched['user_id']}-{normalized_platform}-{suffix}"
+    label = display_name or matched.get("display_name") or requested_device_id
+    device = create_agent_device(
+        db_path,
+        inventory_path,
+        user_id=matched["user_id"],
+        device_id=requested_device_id,
+        display_name=label,
+        platform=normalized_platform,
+        enabled=True,
+    )
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE agent_enrollment_codes
+            SET used_at = ?, used_device_id = ?, enabled = 0, updated_at = ?
+            WHERE id = ? AND used_at IS NULL
+            """,
+            (timestamp, device["id"], timestamp, matched["id"]),
+        )
+    return {
+        "ok": True,
+        "user_id": device["user_id"],
+        "device_id": device["id"],
+        "display_name": device["display_name"],
+        "platform": device["platform"],
+        "token": device["token"],
+    }
+
+
 def list_agent_devices(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
     init_db(db_path, inventory_path)
     with connect(db_path) as conn:
@@ -5576,6 +6437,52 @@ def revoke_agent_device(db_path: Path, inventory_path: Path, *, device_id: str) 
     return {"ok": True, "device_id": normalized_device_id, "enabled": False}
 
 
+def set_agent_device_enabled(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    device_id: str,
+    enabled: bool,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_device_id = normalize_device_id(device_id)
+    with connect(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE agent_devices SET enabled = ?, updated_at = ? WHERE id = ?",
+            (int(bool(enabled)), now(), normalized_device_id),
+        )
+        if cursor.rowcount != 1:
+            raise ValueError(f"Unknown device: {normalized_device_id}")
+    return {"ok": True, "device_id": normalized_device_id, "enabled": bool(enabled)}
+
+
+def delete_agent_device(db_path: Path, inventory_path: Path, *, device_id: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_device_id = normalize_device_id(device_id)
+    timestamp = now()
+    with connect(db_path) as conn:
+        existing = row(conn, "SELECT id FROM agent_devices WHERE id = ?", (normalized_device_id,))
+        if not existing:
+            raise ValueError(f"Unknown device: {normalized_device_id}")
+        conn.execute(
+            "UPDATE agent_enrollment_codes SET used_device_id = NULL, updated_at = ? WHERE used_device_id = ?",
+            (timestamp, normalized_device_id),
+        )
+        conn.execute(
+            """
+            UPDATE agent_probe_jobs
+            SET assigned_device_id = CASE WHEN assigned_device_id = ? THEN '' ELSE assigned_device_id END,
+                claimed_by_device_id = CASE WHEN claimed_by_device_id = ? THEN '' ELSE claimed_by_device_id END,
+                updated_at = ?
+            WHERE assigned_device_id = ? OR claimed_by_device_id = ?
+            """,
+            (normalized_device_id, normalized_device_id, timestamp, normalized_device_id, normalized_device_id),
+        )
+        conn.execute("DELETE FROM agent_status WHERE device_id = ?", (normalized_device_id,))
+        conn.execute("DELETE FROM agent_devices WHERE id = ?", (normalized_device_id,))
+    return {"ok": True, "device_id": normalized_device_id, "deleted": True}
+
+
 def agent_status_rows(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
     init_db(db_path, inventory_path)
     with connect(db_path) as conn:
@@ -5595,6 +6502,64 @@ def agent_status_rows(db_path: Path, inventory_path: Path) -> list[dict[str, Any
         except json.JSONDecodeError:
             entry["status"] = {}
     return entries
+
+
+def save_agent_diagnostic_report(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    device: dict[str, Any],
+    summary: str,
+    report_text: str,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    timestamp = now()
+    report_id = f"diag-{int(time.time())}-{secrets.token_hex(4)}"
+    normalized_summary = str(summary or "").strip()[:500]
+    normalized_report = str(report_text or "")
+    max_report_chars = 200_000
+    if len(normalized_report) > max_report_chars:
+        normalized_report = normalized_report[-max_report_chars:]
+        normalized_summary = (normalized_summary + " [truncated]").strip()
+    with connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO agent_diagnostics (
+              id, device_id, user_id, platform, summary, report_text, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                report_id,
+                device["id"],
+                device["user_id"],
+                str(device.get("platform") or ""),
+                normalized_summary,
+                normalized_report,
+                timestamp,
+            ),
+        )
+    return {
+        "ok": True,
+        "id": report_id,
+        "device_id": device["id"],
+        "created_at": timestamp,
+        "bytes": len(normalized_report.encode("utf-8")),
+    }
+
+
+def agent_diagnostic_rows(db_path: Path, inventory_path: Path, *, limit: int = 20) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT id, device_id, user_id, platform, summary, report_text, created_at
+            FROM agent_diagnostics
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(int(limit), 100)),),
+        )
 
 
 def count_value(conn: sqlite3.Connection, sql: str, params: Iterable[Any] = ()) -> int:
@@ -5670,6 +6635,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             SELECT COALESCE(NULLIF(s.provider, ''), 'unknown') AS key,
                    COUNT(*) AS count,
                    SUM(CASE WHEN t.enabled = 1 THEN 1 ELSE 0 END) AS enabled,
+                   SUM(CASE WHEN t.enabled = 1 AND s.enabled = 1 THEN 1 ELSE 0 END) AS active,
                    MIN(t.updated_at) AS oldest_updated_at,
                    MAX(t.updated_at) AS newest_updated_at
             FROM transport_configs t
@@ -5683,6 +6649,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             providers[str(item["key"])] = {
                 "total": int(item.get("count") or 0),
                 "enabled": int(item.get("enabled") or 0),
+                "active": int(item.get("active") or 0),
                 "oldest_updated_at": item.get("oldest_updated_at"),
                 "oldest_age_seconds": timestamp_age_seconds(item.get("oldest_updated_at"), reference=reference),
                 "newest_updated_at": item.get("newest_updated_at"),
@@ -5692,7 +6659,12 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
         stale_by_provider: dict[str, int] = {}
         for item in transports:
             age = timestamp_age_seconds(item.get("updated_at"), reference=reference)
-            if not item.get("enabled") or age is None or age <= TRANSPORT_STALE_WARN_SECONDS:
+            if (
+                not item.get("active")
+                or not provider_transport_required(item)
+                or age is None
+                or age <= TRANSPORT_STALE_WARN_SECONDS
+            ):
                 continue
             provider = item.get("provider") or "unknown"
             stale_by_provider[provider] = stale_by_provider.get(provider, 0) + 1
@@ -5809,6 +6781,7 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
             "transports": {
                 "total": len(transports),
                 "enabled": sum(1 for item in transports if item["enabled"]),
+                "active": sum(1 for item in transports if item["active"]),
                 "by_provider": {key: value["total"] for key, value in providers.items()},
                 "providers": providers,
                 "newest_age_seconds": newest_transport_age,
@@ -5882,8 +6855,8 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
             "name": "transports",
             "ok": stale_transports == 0,
             "summary": (
-                f"{transports.get('enabled') or 0}/"
-                f"{transports.get('total') or 0} enabled"
+                f"{transports.get('active') or 0}/"
+                f"{transports.get('total') or 0} active"
             ),
         },
     ]
@@ -6088,6 +7061,7 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         "cleanup_ip_routes": cleanup_ip_routes,
         "transport_plan": transport_plan,
         "auto_candidates": auto_candidate_policy_rows(conn),
+        "critical_services": effective_critical_services(conn, user_id=user_id),
         "warnings": warnings,
     }
 
@@ -6145,6 +7119,86 @@ def delete_user_domain_route(db_path: Path, inventory_path: Path, *, user_id: st
             (normalized_user_id, normalized_domain),
         )
     return {"ok": True, "user_id": normalized_user_id, "domain": normalized_domain}
+
+
+def list_global_domain_routes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
+    init_db(db_path, inventory_path)
+    with connect(db_path) as conn:
+        return rows(
+            conn,
+            """
+            SELECT domain, server_id, enabled, updated_at
+            FROM global_domain_routes
+            ORDER BY server_id, domain
+            """,
+        )
+
+
+def save_global_domain_route(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    domain: str,
+    server_id: str,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_domain = normalize_domain(domain)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if server_id != "auto":
+            validate_server_id(conn, server_id, require_user_visible=False)
+        conn.execute(
+            """
+            INSERT INTO global_domain_routes (domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(domain)
+            DO UPDATE SET server_id = excluded.server_id,
+                          enabled = excluded.enabled,
+                          updated_at = excluded.updated_at
+            """,
+            (normalized_domain, server_id, int(enabled), timestamp, timestamp),
+        )
+    return {"ok": True, "domain": normalized_domain, "server_id": server_id}
+
+
+def delete_global_domain_route(db_path: Path, inventory_path: Path, *, domain: str) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_domain = normalize_domain(domain)
+    with connect(db_path) as conn:
+        conn.execute("DELETE FROM global_domain_routes WHERE domain = ?", (normalized_domain,))
+    return {"ok": True, "domain": normalized_domain}
+
+
+def iter_domain_override_file(path: Path) -> Iterable[str]:
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        yield normalize_domain(line)
+
+
+def import_global_domain_routes(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    input_files: list[Path],
+    server_id: str,
+    enabled: bool = True,
+) -> dict[str, Any]:
+    imported: list[dict[str, Any]] = []
+    for input_file in input_files:
+        for domain in iter_domain_override_file(input_file):
+            imported.append(
+                save_global_domain_route(
+                    db_path,
+                    inventory_path,
+                    domain=domain,
+                    server_id=server_id,
+                    enabled=enabled,
+                )
+            )
+    return {"ok": True, "server_id": server_id, "imported": imported, "count": len(imported)}
 
 
 def list_user_ip_routes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
@@ -6948,7 +8002,10 @@ printf '%s\n' "$backup"
                 ]
             )
         if restart_pbr:
-            commands.append("/etc/init.d/pbr restart")
+            commands.append(
+                "if [ -x /usr/bin/cudy-pbr-safe-restart ]; then "
+                "/usr/bin/cudy-pbr-safe-restart; else /etc/init.d/pbr restart; fi"
+            )
             commands.append("/etc/init.d/pbr status 2>/dev/null | head -20 || true")
         apply_output = ssh_exec_checked(client, "set -eu\n" + "\n".join(commands) + "\n", ssh_timeout * 3)
         return {
@@ -7110,6 +8167,8 @@ ip rule show 2>/dev/null | grep 'lookup pbr_' || true
 
 
 def validate_server_id(conn: sqlite3.Connection, server_id: str, *, require_user_visible: bool) -> None:
+    if server_id in {"auto", "direct"}:
+        return
     if require_user_visible:
         value = row(conn, "SELECT id FROM servers WHERE id = ? AND enabled = 1 AND user_visible = 1", (server_id,))
     else:
@@ -7208,6 +8267,182 @@ def delete_service_alias(db_path: Path, inventory_path: Path, *, alias: str) -> 
     with connect(db_path) as conn:
         conn.execute("DELETE FROM service_aliases WHERE alias = ?", (normalized_alias,))
     return {"ok": True, "alias": normalized_alias}
+
+
+def normalize_critical_service_key(value: str) -> str:
+    return normalize_alias(value)
+
+
+def normalize_critical_service_target(value: str) -> str:
+    raw = (value or "").strip()
+    if not raw:
+        raise ValueError("Critical service target cannot be empty")
+    parsed = urlparse(raw)
+    if parsed.scheme:
+        if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Critical service targets must use http:// or https://")
+        if parsed.username or parsed.password:
+            raise ValueError("Credentials are not allowed in critical service URLs")
+        return raw
+    normalized = normalize_lookup_target(raw)
+    target = normalized["target"]
+    if normalized["kind"] == "ip" and "/" in target:
+        network = ipaddress.ip_network(target, strict=False)
+        if network.prefixlen != 32:
+            raise ValueError("Critical service IP targets must be individual hosts, not CIDR ranges")
+        target = str(network.network_address)
+    return f"https://{target}/"
+
+
+def parse_critical_service_targets(value: Any) -> list[str]:
+    if isinstance(value, str):
+        items = [item.strip() for item in re.split(r"[,;\r\n]+", value) if item.strip()]
+    elif isinstance(value, list):
+        items = [str(item).strip() for item in value if str(item).strip()]
+    else:
+        raise ValueError("targets must be a list or a comma-separated string")
+    result: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        normalized = normalize_critical_service_target(item)
+        if normalized not in seen:
+            result.append(normalized)
+            seen.add(normalized)
+    if not result:
+        raise ValueError("Critical service targets cannot be empty")
+    if len(result) > 20:
+        raise ValueError("A critical service can contain at most 20 targets")
+    return result
+
+
+def normalize_content_pattern(value: str, *, field: str) -> str:
+    pattern = (value or "").strip()
+    if len(pattern) > 1000:
+        raise ValueError(f"{field} must be at most 1000 characters")
+    if pattern:
+        try:
+            re.compile(pattern, re.IGNORECASE | re.MULTILINE)
+        except re.error as exc:
+            raise ValueError(f"Invalid {field}: {exc}") from exc
+    return pattern
+
+
+def critical_service_rows(conn: sqlite3.Connection, *, user_id: str | None = None) -> list[dict[str, Any]]:
+    params: tuple[Any, ...] = ()
+    where = ""
+    if user_id is not None:
+        where = "WHERE user_id = ?"
+        params = (user_id,)
+    entries = rows(
+        conn,
+        f"""
+        SELECT user_id, service_key, label, targets_json, success_pattern,
+               failure_pattern, enabled, created_at, updated_at
+        FROM critical_services
+        {where}
+        ORDER BY CASE WHEN user_id = '' THEN 0 ELSE 1 END, user_id, label, service_key
+        """,
+        params,
+    )
+    for entry in entries:
+        try:
+            entry["targets"] = json.loads(entry.pop("targets_json") or "[]")
+        except json.JSONDecodeError:
+            entry["targets"] = []
+        entry["enabled"] = bool(entry.get("enabled"))
+        entry["scope"] = "global" if not entry.get("user_id") else "user"
+    return entries
+
+
+def effective_critical_services(conn: sqlite3.Connection, *, user_id: str) -> list[dict[str, Any]]:
+    effective: dict[str, dict[str, Any]] = {
+        item["service_key"]: item
+        for item in critical_service_rows(conn, user_id="")
+        if item.get("enabled")
+    }
+    for item in critical_service_rows(conn, user_id=user_id):
+        if item.get("enabled"):
+            effective[item["service_key"]] = item
+        else:
+            effective.pop(item["service_key"], None)
+    return sorted(effective.values(), key=lambda item: (str(item.get("label") or "").lower(), item["service_key"]))
+
+
+def save_critical_service(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    service_key: str,
+    label: str,
+    targets: Any,
+    success_pattern: str = "",
+    failure_pattern: str = "",
+    enabled: bool = True,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_key = normalize_critical_service_key(service_key or label)
+    normalized_label = (label or normalized_key).strip()[:80]
+    normalized_targets = parse_critical_service_targets(targets)
+    success_pattern = normalize_content_pattern(success_pattern, field="success pattern")
+    failure_pattern = normalize_content_pattern(failure_pattern, field="failure pattern")
+    timestamp = now()
+    with connect(db_path) as conn:
+        if user_id and row(conn, "SELECT id FROM users WHERE id = ?", (user_id,)) is None:
+            raise ValueError(f"Unknown user: {user_id}")
+        conn.execute(
+            """
+            INSERT INTO critical_services (
+              user_id, service_key, label, targets_json, success_pattern,
+              failure_pattern, enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, service_key) DO UPDATE SET
+              label = excluded.label,
+              targets_json = excluded.targets_json,
+              success_pattern = excluded.success_pattern,
+              failure_pattern = excluded.failure_pattern,
+              enabled = excluded.enabled,
+              updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                normalized_key,
+                normalized_label,
+                json.dumps(normalized_targets, ensure_ascii=False),
+                success_pattern,
+                failure_pattern,
+                int(enabled),
+                timestamp,
+                timestamp,
+            ),
+        )
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "service_key": normalized_key,
+        "label": normalized_label,
+        "targets": normalized_targets,
+        "success_pattern": success_pattern,
+        "failure_pattern": failure_pattern,
+        "enabled": bool(enabled),
+    }
+
+
+def delete_critical_service(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    service_key: str,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_key = normalize_critical_service_key(service_key)
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM critical_services WHERE user_id = ? AND service_key = ?",
+            (user_id, normalized_key),
+        )
+    return {"ok": True, "user_id": user_id, "service_key": normalized_key}
 
 
 def json_list_append(raw: str, value: str) -> list[str]:
@@ -7865,6 +9100,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def send_binary_file(self, path: Path, *, download_name: str, content_type: str = "application/octet-stream") -> None:
+        payload = path.read_bytes()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("content-type", content_type)
+        self.send_header("cache-control", "no-store")
+        self.send_header("content-disposition", f'attachment; filename="{download_name}"')
+        self.send_header("content-length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
     def send_json(
         self,
         data: Any,
@@ -7885,9 +9130,11 @@ class Handler(BaseHTTPRequestHandler):
     def send_error_json(self, error: str, status: HTTPStatus = HTTPStatus.BAD_REQUEST) -> None:
         self.send_json({"error": error}, status)
 
-    def send_redirect(self, location: str) -> None:
+    def send_redirect(self, location: str, *, extra_headers: list[tuple[str, str]] | None = None) -> None:
         self.send_response(HTTPStatus.FOUND)
         self.send_header("location", location)
+        for name, value in extra_headers or []:
+            self.send_header(name, value)
         self.send_header("content-length", "0")
         self.end_headers()
 
@@ -7951,10 +9198,9 @@ class Handler(BaseHTTPRequestHandler):
         token = self.headers.get("x-device-token", "").strip()
         return token or None
 
-    def require_agent(self) -> dict[str, Any]:
-        token = self.agent_token()
+    def agent_from_token(self, token: str | None) -> dict[str, Any] | None:
         if not token:
-            raise PermissionError("Agent token required")
+            return None
         cached = self.app.cached_agent(token)
         if cached is not None:
             return cached
@@ -7984,6 +9230,15 @@ class Handler(BaseHTTPRequestHandler):
                     )
                     self.app.cache_agent(token, device)
                     return device
+        return None
+
+    def require_agent(self) -> dict[str, Any]:
+        token = self.agent_token()
+        if not token:
+            raise PermissionError("Agent token required")
+        device = self.agent_from_token(token)
+        if device is not None:
+            return device
         raise PermissionError("Invalid agent token")
 
     def auth_error(self, exc: Exception, *, html_redirect: bool = False, next_path: str = "/") -> None:
@@ -8012,6 +9267,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_html(ADMIN_HTML)
             elif parsed.path == "/login":
                 self.send_html(LOGIN_HTML)
+            elif parsed.path == "/agent-login":
+                query = parse_qs(parsed.query)
+                self.agent_login_redirect(query.get("token", [""])[0])
             elif parsed.path == "/api/bootstrap":
                 user = self.require_user()
                 self.send_json(self.api_bootstrap(user["id"]))
@@ -8026,6 +9284,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.require_user()
                 with self.app.conn() as conn:
                     self.send_json({"ok": True, "aliases": service_alias_rows(conn)})
+            elif parsed.path == "/api/critical-services":
+                user = self.require_user()
+                with self.app.conn() as conn:
+                    self.send_json(
+                        {
+                            "ok": True,
+                            "global": critical_service_rows(conn, user_id=""),
+                            "local": critical_service_rows(conn, user_id=user["id"]),
+                            "effective": effective_critical_services(conn, user_id=user["id"]),
+                        }
+                    )
             elif parsed.path == "/api/control/endpoints":
                 self.send_json(control_endpoints_manifest())
             elif parsed.path == "/api/status":
@@ -8069,6 +9338,44 @@ class Handler(BaseHTTPRequestHandler):
                 device = self.require_agent()
                 with self.app.conn() as conn:
                     self.send_json(build_agent_config(conn, user_id=device["user_id"], device=device))
+            elif parsed.path == "/api/agent/bootstrap":
+                device = self.require_agent()
+                self.send_json(self.api_bootstrap(device["user_id"]))
+            elif parsed.path == "/api/agent/critical-services":
+                device = self.require_agent()
+                with self.app.conn() as conn:
+                    self.send_json(
+                        {
+                            "ok": True,
+                            "services": effective_critical_services(conn, user_id=device["user_id"]),
+                        }
+                    )
+            elif parsed.path == "/api/agent/route-lookup":
+                device = self.require_agent()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    route_lookup(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=device["user_id"],
+                        target=query.get("target", [""])[0],
+                    )
+                )
+            elif parsed.path == "/api/agent/app-version":
+                self.require_agent()
+                query = parse_qs(parsed.query)
+                self.send_json(agent_app_version_manifest(query.get("platform", ["android"])[0]))
+            elif parsed.path == "/api/agent/update-package":
+                self.require_agent()
+                query = parse_qs(parsed.query)
+                platform = normalize_platform(query.get("platform", [""])[0]) or "android"
+                suffix = ".apk" if platform == "android" else ".zip"
+                artifact = AGENT_UPDATE_DIR / f"{platform}{suffix}"
+                if not artifact.exists() or not artifact.is_file():
+                    self.send_error_json("Update package not found", HTTPStatus.NOT_FOUND)
+                    return
+                content_type = "application/vnd.android.package-archive" if suffix == ".apk" else "application/zip"
+                self.send_binary_file(artifact, download_name=artifact.name, content_type=content_type)
             elif parsed.path == "/api/agent/probe-jobs":
                 device = self.require_agent()
                 query = parse_qs(parsed.query)
@@ -8121,6 +9428,21 @@ class Handler(BaseHTTPRequestHandler):
                         targets=data.get("targets") or "",
                     )
                 )
+            elif parsed.path == "/api/critical-services":
+                user = self.require_user()
+                self.send_json(
+                    save_critical_service(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=user["id"],
+                        service_key=str(data.get("service_key") or data.get("label") or ""),
+                        label=str(data.get("label") or ""),
+                        targets=data.get("targets") or "",
+                        success_pattern=str(data.get("success_pattern") or ""),
+                        failure_pattern=str(data.get("failure_pattern") or ""),
+                        enabled=data.get("enabled") is not False,
+                    )
+                )
             elif parsed.path == "/api/admin/servers":
                 self.require_admin()
                 self.send_json(self.api_update_server(data))
@@ -8156,6 +9478,21 @@ class Handler(BaseHTTPRequestHandler):
                         note=str(data.get("note") or ""),
                     )
                 )
+            elif parsed.path == "/api/admin/critical-services":
+                self.require_admin()
+                self.send_json(
+                    save_critical_service(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=str(data.get("user_id") or ""),
+                        service_key=str(data.get("service_key") or data.get("label") or ""),
+                        label=str(data.get("label") or ""),
+                        targets=data.get("targets") or "",
+                        success_pattern=str(data.get("success_pattern") or ""),
+                        failure_pattern=str(data.get("failure_pattern") or ""),
+                        enabled=data.get("enabled") is not False,
+                    )
+                )
             elif parsed.path == "/api/admin/domain-discovery/promote":
                 self.require_admin()
                 self.send_json(
@@ -8185,9 +9522,41 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/sync-cudy-clients":
                 self.require_admin()
                 self.send_json(sync_cudy_clients_from_router(self.app.db_path, self.app.inventory_path))
+            elif parsed.path == "/api/admin/enrollment-codes":
+                self.require_admin()
+                self.send_json(self.api_admin_create_enrollment_code(data))
+            elif parsed.path == "/api/admin/agent-devices":
+                self.require_admin()
+                self.send_json(
+                    set_agent_device_enabled(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        device_id=str(data.get("id") or ""),
+                        enabled=bool(data.get("enabled")),
+                    )
+                )
+            elif parsed.path == "/api/agent/enroll":
+                self.send_json(self.api_agent_enroll(data))
             elif parsed.path == "/api/agent/status":
                 device = self.require_agent()
                 self.send_json(self.api_agent_status(device, data))
+            elif parsed.path == "/api/agent/diagnostics":
+                device = self.require_agent()
+                self.send_json(
+                    save_agent_diagnostic_report(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        device=device,
+                        summary=str(data.get("summary") or ""),
+                        report_text=str(data.get("report") or ""),
+                    )
+                )
+            elif parsed.path == "/api/agent/user-default-server":
+                device = self.require_agent()
+                self.send_json(self.api_agent_set_default_server(device, data))
+            elif parsed.path == "/api/agent/domain-routes":
+                device = self.require_agent()
+                self.send_json(self.api_agent_save_domain_route(device, data))
             elif parsed.path == "/api/agent/probe-jobs/result":
                 device = self.require_agent()
                 self.send_json(
@@ -8258,10 +9627,61 @@ class Handler(BaseHTTPRequestHandler):
                         domain=query.get("domain", [""])[0],
                     )
                 )
+            elif parsed.path == "/api/admin/enrollment-codes":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    revoke_agent_enrollment_code(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        code_id=query.get("id", [""])[0],
+                    )
+                )
+            elif parsed.path == "/api/admin/agent-devices":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                if query.get("hard", ["0"])[0] in {"1", "true", "yes"}:
+                    self.send_json(
+                        delete_agent_device(
+                            self.app.db_path,
+                            self.app.inventory_path,
+                            device_id=query.get("id", [""])[0],
+                        )
+                    )
+                else:
+                    self.send_json(
+                        revoke_agent_device(
+                            self.app.db_path,
+                            self.app.inventory_path,
+                            device_id=query.get("id", [""])[0],
+                        )
+                    )
             elif parsed.path == "/api/service-aliases":
                 self.require_user()
                 query = parse_qs(parsed.query)
                 self.send_json(delete_service_alias(self.app.db_path, self.app.inventory_path, alias=query.get("alias", [""])[0]))
+            elif parsed.path == "/api/critical-services":
+                user = self.require_user()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    delete_critical_service(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=user["id"],
+                        service_key=query.get("service_key", [""])[0],
+                    )
+                )
+            elif parsed.path == "/api/admin/critical-services":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    delete_critical_service(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=query.get("user_id", [""])[0],
+                        service_key=query.get("service_key", [""])[0],
+                    )
+                )
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
         except PermissionError as exc:
@@ -8310,6 +9730,23 @@ class Handler(BaseHTTPRequestHandler):
                 conn.execute("DELETE FROM sessions WHERE token = ?", (token,))
         expired = f"{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
         self.send_json({"ok": True}, extra_headers=[("set-cookie", expired)])
+
+    def agent_login_redirect(self, token: str) -> None:
+        device = self.agent_from_token(str(token or "").strip())
+        if device is None:
+            raise PermissionError("Invalid agent token")
+        session_token = secrets.token_urlsafe(32)
+        expires_at = int(time.time()) + SESSION_TTL_SECONDS
+        with self.app.conn() as conn:
+            conn.execute(
+                "INSERT INTO sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+                (session_token, device["user_id"], now(), expires_at),
+            )
+        cookie = (
+            f"{SESSION_COOKIE}={session_token}; Path=/; HttpOnly; SameSite=Lax; "
+            f"Max-Age={SESSION_TTL_SECONDS}"
+        )
+        self.send_redirect("/", extra_headers=[("set-cookie", cookie)])
 
     def api_agent_status(self, device: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
         timestamp = now()
@@ -8374,8 +9811,35 @@ class Handler(BaseHTTPRequestHandler):
                 "servers": user_servers(conn),
                 "routes": routes,
                 "aliases": service_alias_rows(conn),
+                "critical_services": {
+                    "global": critical_service_rows(conn, user_id=""),
+                    "local": critical_service_rows(conn, user_id=user_id),
+                    "effective": effective_critical_services(conn, user_id=user_id),
+                },
                 "default_auto_candidate_policy": default_policy,
             }
+
+    def api_agent_enroll(self, data: dict[str, Any]) -> dict[str, Any]:
+        return consume_agent_enrollment_code(
+            self.app.db_path,
+            self.app.inventory_path,
+            code=str(data.get("code") or ""),
+            device_id=str(data.get("device_id") or "") or None,
+            display_name=str(data.get("display_name") or "") or None,
+            platform=str(data.get("platform") or "android"),
+        )
+
+    def api_admin_create_enrollment_code(self, data: dict[str, Any]) -> dict[str, Any]:
+        return create_agent_enrollment_code(
+            self.app.db_path,
+            self.app.inventory_path,
+            user_id=str(data.get("user_id") or ""),
+            device_id=str(data.get("device_id") or "") or None,
+            display_name=str(data.get("display_name") or "") or None,
+            platform=str(data.get("platform") or "android"),
+            ttl_hours=int(data.get("ttl_hours") or 24),
+            enabled=True,
+        )
 
     def api_admin(self) -> dict[str, Any]:
         with self.app.conn() as conn:
@@ -8437,6 +9901,7 @@ class Handler(BaseHTTPRequestHandler):
                 "auto_candidates": auto_candidate_policy_rows(conn),
                 "transport_configs": transport_config_summaries(conn),
                 "service_aliases": service_alias_rows(conn),
+                "critical_services": critical_service_rows(conn),
                 "domain_discovery": domain_discovery_rows(conn, limit=100),
                 "probe_jobs": [
                     probe_job_row_to_dict(item)
@@ -8463,11 +9928,23 @@ class Handler(BaseHTTPRequestHandler):
                     ORDER BY d.user_id, d.id
                     """,
                 ),
+                "agent_diagnostics": agent_diagnostic_rows(self.app.db_path, self.app.inventory_path, limit=20),
+                "agent_enrollment_codes": list_agent_enrollment_codes(self.app.db_path, self.app.inventory_path),
+                "agent_updates": [
+                    agent_app_version_manifest(platform)
+                    for platform in ("android", "windows", "linux")
+                ],
                 "agent_status": agent_status,
             }
 
     def api_set_default_server(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = self.require_user()["id"]
+        return self.save_default_server_for_user(user_id, data)
+
+    def api_agent_set_default_server(self, device: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+        return self.save_default_server_for_user(str(device["user_id"]), data)
+
+    def save_default_server_for_user(self, user_id: str, data: dict[str, Any]) -> dict[str, Any]:
         server_id = str(data.get("server_id") or "")
         candidate_server_ids = data.get("auto_candidate_server_ids")
         timestamp = now()
@@ -8572,7 +10049,6 @@ class Handler(BaseHTTPRequestHandler):
         result = {"ok": True}
         if cudy_client:
             result["cudy_client"] = cudy_client
-            result["config_download_url"] = cudy_client["config_download_url"]
         return result
 
     def api_admin_set_password(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -8752,6 +10228,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def api_save_domain_route(self, data: dict[str, Any]) -> dict[str, Any]:
         user_id = self.require_user()["id"]
+        return self.save_domain_route_for_user(user_id, data)
+
+    def api_agent_save_domain_route(self, device: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+        return self.save_domain_route_for_user(str(device["user_id"]), data)
+
+    def save_domain_route_for_user(self, user_id: str, data: dict[str, Any]) -> dict[str, Any]:
         domain = normalize_domain(str(data.get("domain") or ""))
         server_id = str(data.get("server_id") or "")
         candidate_server_ids = data.get("auto_candidate_server_ids")
@@ -8919,6 +10401,22 @@ def build_parser() -> argparse.ArgumentParser:
     device_status_parser = sub.add_parser("device-status", help="List last reported agent status.")
     device_status_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
+    enrollment_create_parser = sub.add_parser("enrollment-create", help="Create a one-time Android/agent enrollment code.")
+    enrollment_create_parser.add_argument("user_id")
+    enrollment_create_parser.add_argument("--device-id")
+    enrollment_create_parser.add_argument("--display-name")
+    enrollment_create_parser.add_argument("--platform", choices=["linux", "windows", "android", "macos", "other"], default="android")
+    enrollment_create_parser.add_argument("--ttl-hours", type=int, default=24)
+    enrollment_create_parser.add_argument("--disabled", action="store_true")
+    enrollment_create_parser.add_argument("--json", action="store_true", help="Print JSON, including the one-time code.")
+
+    enrollment_list_parser = sub.add_parser("enrollment-list", help="List one-time enrollment codes without secret values.")
+    enrollment_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    enrollment_revoke_parser = sub.add_parser("enrollment-revoke", help="Disable a one-time enrollment code.")
+    enrollment_revoke_parser.add_argument("code_id")
+    enrollment_revoke_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
     transport_list_parser = sub.add_parser("transport-list", help="List control-server transport configs.")
     transport_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
@@ -8936,7 +10434,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     transport_json_parser = sub.add_parser("transport-set-json", help="Set a generic JSON config for an agent transport.")
     transport_json_parser.add_argument("server_id")
-    transport_json_parser.add_argument("transport_type", choices=["vless-reality-tun", "sing-box-json", "http-proxy-tun"])
+    transport_json_parser.add_argument("transport_type", choices=["amneziawg-conf", "vless-reality-tun", "sing-box-json", "http-proxy-tun"])
     transport_json_parser.add_argument("--config-json", required=True, help="JSON object or @path.")
     transport_json_parser.add_argument("--interface-name")
     transport_json_parser.add_argument("--source", default="")
@@ -9143,6 +10641,25 @@ def build_parser() -> argparse.ArgumentParser:
     user_domain_delete_parser.add_argument("user_id")
     user_domain_delete_parser.add_argument("domain")
     user_domain_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_domain_list_parser = sub.add_parser("global-domain-route-list", help="List global domain routes.")
+    global_domain_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_domain_set_parser = sub.add_parser("global-domain-route-set", help="Set a global domain route.")
+    global_domain_set_parser.add_argument("domain")
+    global_domain_set_parser.add_argument("server_id")
+    global_domain_set_parser.add_argument("--disabled", action="store_true")
+    global_domain_set_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_domain_delete_parser = sub.add_parser("global-domain-route-delete", help="Delete a global domain route.")
+    global_domain_delete_parser.add_argument("domain")
+    global_domain_delete_parser.add_argument("--json", action="store_true", help="Print JSON.")
+
+    global_domain_import_parser = sub.add_parser("global-domain-route-import", help="Import global domain routes from tunnel-list files.")
+    global_domain_import_parser.add_argument("server_id")
+    global_domain_import_parser.add_argument("input_files", nargs="+", type=Path)
+    global_domain_import_parser.add_argument("--disabled", action="store_true")
+    global_domain_import_parser.add_argument("--json", action="store_true", help="Print JSON.")
 
     user_ip_list_parser = sub.add_parser("user-ip-route-list", help="List per-user IPv4/CIDR routes.")
     user_ip_list_parser.add_argument("--json", action="store_true", help="Print JSON.")
@@ -9390,6 +10907,45 @@ def main() -> int:
                     f"last_seen={item['last_seen_at'] or '-'}\t"
                     f"reported={item['reported_at'] or '-'}\thealth={health}"
                 )
+        return 0
+    if args.command == "enrollment-create":
+        result = create_agent_enrollment_code(
+            args.db,
+            args.inventory,
+            user_id=args.user_id,
+            device_id=args.device_id,
+            display_name=args.display_name,
+            platform=args.platform,
+            ttl_hours=args.ttl_hours,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Enrollment code created: {result['id']} user={result['user_id']} expires={result['expires_at']}")
+            print("Code is shown once. Give it to the user:")
+            print(result["code"])
+        return 0
+    if args.command == "enrollment-list":
+        entries = list_agent_enrollment_codes(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        else:
+            if not entries:
+                print("No enrollment codes.")
+            for item in entries:
+                state = "used" if item.get("used_at") else ("enabled" if item.get("enabled") else "disabled")
+                print(
+                    f"{item['id']}\tuser={item['user_id']}\tplatform={item['platform'] or '-'}\t"
+                    f"state={state}\texpires={item['expires_at'] or '-'}\tdevice={item.get('used_device_id') or item.get('desired_device_id') or '-'}"
+                )
+        return 0
+    if args.command == "enrollment-revoke":
+        result = revoke_agent_enrollment_code(args.db, args.inventory, code_id=args.code_id)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Enrollment code revoked: {result['id']}")
         return 0
     if args.command == "transport-list":
         init_db(args.db, args.inventory)
@@ -9926,6 +11482,49 @@ def main() -> int:
             print(json.dumps(result, ensure_ascii=False, indent=2))
         else:
             print(f"User domain route deleted: {result['user_id']} {result['domain']}")
+        return 0
+    if args.command == "global-domain-route-list":
+        entries = list_global_domain_routes(args.db, args.inventory)
+        if args.json:
+            print(json.dumps(entries, ensure_ascii=False, indent=2))
+        elif not entries:
+            print("Global domain routes are empty.")
+        else:
+            for item in entries:
+                print(f"{item['domain']}\t{item['server_id']}\tenabled={bool(item['enabled'])}")
+        return 0
+    if args.command == "global-domain-route-set":
+        result = save_global_domain_route(
+            args.db,
+            args.inventory,
+            domain=args.domain,
+            server_id=args.server_id,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Global domain route saved: {result['domain']} -> {result['server_id']}")
+        return 0
+    if args.command == "global-domain-route-delete":
+        result = delete_global_domain_route(args.db, args.inventory, domain=args.domain)
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Global domain route deleted: {result['domain']}")
+        return 0
+    if args.command == "global-domain-route-import":
+        result = import_global_domain_routes(
+            args.db,
+            args.inventory,
+            input_files=args.input_files,
+            server_id=args.server_id,
+            enabled=not args.disabled,
+        )
+        if args.json:
+            print(json.dumps(result, ensure_ascii=False, indent=2))
+        else:
+            print(f"Imported {result['count']} global domain route(s) -> {result['server_id']}")
         return 0
     if args.command == "user-ip-route-list":
         entries = list_user_ip_routes(args.db, args.inventory)

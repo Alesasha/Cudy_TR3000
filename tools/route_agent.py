@@ -16,6 +16,7 @@ import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -30,6 +31,18 @@ DEFAULT_CACHE = ROOT / "data" / "route_agent_cache.json"
 DEFAULT_SERVER_URL = "http://127.0.0.1:8765"
 AGENT_VERSION = "0.1"
 DEFAULT_HTTP_TIMEOUT = float(os.environ.get("VPN_AGENT_HTTP_TIMEOUT", "60"))
+GEO_BLOCK_PATTERNS = [
+    "gemini isn't currently supported in your country",
+    "gemini isn\u2019t currently supported in your country",
+    "isn't currently supported in your country",
+    "isn\u2019t currently supported in your country",
+    "not currently supported in your country",
+    "not available in your country",
+    "services are not available in your country",
+    "country is not supported",
+    "unsupported country",
+]
+PROBE_BODY_LIMIT_BYTES = 512 * 1024
 
 
 @dataclass(frozen=True)
@@ -203,19 +216,49 @@ def resolve_ipv4(domain: str) -> list[str]:
     return result
 
 
+def kill_process_tree(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    if is_windows():
+        try:
+            subprocess.run(
+                ["taskkill.exe", "/PID", str(proc.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=5,
+            )
+            return
+        except Exception:
+            pass
+    try:
+        proc.kill()
+    except OSError:
+        pass
+
+
 def run_text(command: list[str], *, timeout: int = 10) -> tuple[int, str]:
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             command,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            timeout=timeout,
-            check=False,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            output, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            kill_process_tree(proc)
+            try:
+                output, _ = proc.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                output = ""
+            return 1, f"Command timed out after {timeout}s: {shlex.join(command)}\n{(output or '').strip()}"
+    except OSError as exc:
         return 1, str(exc)
-    return result.returncode, result.stdout.strip()
+    return proc.returncode or 0, (output or "").strip()
 
 
 def current_platform() -> str:
@@ -235,7 +278,32 @@ def ps_quote(value: str) -> str:
 
 
 def run_powershell(script: str, *, timeout: int = 10) -> tuple[int, str]:
-    return run_text(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], timeout=timeout)
+    utf8_prefix = (
+        "$utf8 = [System.Text.UTF8Encoding]::new($false); "
+        "[Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; "
+    )
+    return run_text(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", utf8_prefix + script],
+        timeout=timeout,
+    )
+
+
+def run_powershell_file(script: str, *, timeout: int = 120) -> tuple[int, str]:
+    utf8_prefix = (
+        "$utf8 = [System.Text.UTF8Encoding]::new($false); "
+        "[Console]::OutputEncoding = $utf8; $OutputEncoding = $utf8; "
+    )
+    handle, raw_path = tempfile.mkstemp(prefix="cudy-route-batch-", suffix=".ps1")
+    path = Path(raw_path)
+    try:
+        os.close(handle)
+        path.write_text(utf8_prefix + script, encoding="utf-8-sig")
+        return run_text(
+            ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)],
+            timeout=timeout,
+        )
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def powershell_json(script: str) -> Any:
@@ -526,6 +594,29 @@ def http_probe_reachable(http_code: int) -> bool:
     return 200 <= http_code < 500
 
 
+def body_geo_block_evidence(body_text: str) -> str:
+    normalized = body_text.lower().replace("\u2019", "'")
+    for pattern in GEO_BLOCK_PATTERNS:
+        normalized_pattern = pattern.lower().replace("\u2019", "'")
+        index = normalized.find(normalized_pattern)
+        if index < 0:
+            continue
+        start = max(0, index - 80)
+        end = min(len(body_text), index + len(pattern) + 120)
+        return " ".join(body_text[start:end].split())[:260]
+    return ""
+
+
+def apply_semantic_probe_check(parsed: dict[str, Any], *, url: str, body_text: str) -> None:
+    evidence = body_geo_block_evidence(body_text)
+    if evidence:
+        parsed["semantic_status"] = "geo_blocked"
+        parsed["semantic_evidence"] = evidence
+        parsed["ok"] = False
+    else:
+        parsed["semantic_status"] = "ok"
+
+
 def curl_probe(
     *,
     url: str,
@@ -534,13 +625,16 @@ def curl_probe(
     max_time: int,
 ) -> dict[str, Any]:
     bind_value = probe_bind_value(interface_name)
+    body_file = tempfile.NamedTemporaryFile(prefix="cudy-probe-", suffix=".body", delete=False)
+    body_path = Path(body_file.name)
+    body_file.close()
     command = [
         "curl",
         "-4",
         "-L",
         "-sS",
         "-o",
-        os.devnull,
+        str(body_path),
         "--connect-timeout",
         str(connect_timeout),
         "--max-time",
@@ -558,7 +652,14 @@ def curl_probe(
     if bind_value:
         command[6:6] = ["--interface", bind_value]
     started = time.time()
-    rc, output = run_text(command, timeout=max_time + 5)
+    try:
+        rc, output = run_text(command, timeout=max_time + 5)
+        body_bytes = body_path.read_bytes()[:PROBE_BODY_LIMIT_BYTES] if body_path.exists() else b""
+    finally:
+        try:
+            body_path.unlink()
+        except OSError:
+            pass
     elapsed_ms = int((time.time() - started) * 1000)
     parsed: dict[str, Any] = {
         "rc": rc,
@@ -585,6 +686,8 @@ def curl_probe(
     except ValueError:
         parsed["speed_mbps"] = None
     parsed["ok"] = http_probe_reachable(int(parsed["http_code_int"]))
+    body_text = body_bytes.decode("utf-8", errors="replace")
+    apply_semantic_probe_check(parsed, url=url, body_text=body_text)
     return parsed
 
 
@@ -689,7 +792,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             max_time=args.max_time,
         )
         check.update(probe)
-        check["status"] = "ok" if probe.get("ok") else "failed"
+        check["status"] = "ok" if probe.get("ok") else str(probe.get("semantic_status") or "failed")
         checks.append(check)
         if check["ok"] and (winner is None or (check.get("time_total_ms") or 10**9) < (winner.get("time_total_ms") or 10**9)):
             winner = check
@@ -842,19 +945,25 @@ def windows_route_command_for_ip(
     return "tunnel", f"# map server '{server_id}' to a local VPN interface with --interface-map {server_id}=IFACE_OR_INDEX"
 
 
-def build_plan(config: dict[str, Any], *, interface_map: dict[str, str]) -> dict[str, Any]:
+def build_plan(
+    config: dict[str, Any],
+    *,
+    interface_map: dict[str, str],
+    inspect_routes: bool = True,
+) -> dict[str, Any]:
     if is_linux():
         default_route = default_linux_route()
         route_table = linux_route_table()
     elif is_windows():
         default_route = default_windows_route()
-        route_table = windows_route_table()
+        route_table = windows_route_table() if inspect_routes else None
     else:
         default_route = {"dev": None, "via": None, "raw": None}
         route_table = None
     domains: list[dict[str, Any]] = []
     ip_routes: list[dict[str, Any]] = []
     cleanup_ip_routes: list[dict[str, Any]] = []
+    warnings: list[str] = list(config.get("warnings") or [])
     local_candidates = local_vpn_candidates()
 
     for route in config.get("domain_routes", []):
@@ -863,7 +972,9 @@ def build_plan(config: dict[str, Any], *, interface_map: dict[str, str]) -> dict
         ips = resolve_ipv4(domain)
         planned_ips: list[dict[str, Any]] = []
         for ip in ips:
-            if is_linux():
+            if not inspect_routes:
+                current = LocalRoute(ip, None, None)
+            elif is_linux():
                 current = linux_route_get(ip)
             elif is_windows():
                 current = windows_route_get(ip)
@@ -890,6 +1001,7 @@ def build_plan(config: dict[str, Any], *, interface_map: dict[str, str]) -> dict
                 "source": route.get("source"),
                 "requested_server_id": route.get("requested_server_id"),
                 "server_id": server_id,
+                "resolved_server_id": route.get("resolved_server_id"),
                 "server_label": (route.get("server") or {}).get("label"),
                 "remote_interface": (route.get("server") or {}).get("interface"),
                 "ips": planned_ips,
@@ -977,7 +1089,7 @@ def build_plan(config: dict[str, Any], *, interface_map: dict[str, str]) -> dict
         "ip_routes": ip_routes,
         "cleanup_ip_routes": cleanup_ip_routes,
         "cleanup_commands": cleanup_commands,
-        "warnings": config.get("warnings") or [],
+        "warnings": warnings,
     }
 
 
@@ -1209,6 +1321,50 @@ def run_route_command(command: str) -> tuple[bool, str]:
     return rc == 0, output
 
 
+def run_windows_route_batch(commands: list[str]) -> list[dict[str, Any]]:
+    entries: list[tuple[str, bool, str]] = []
+    script_parts = ["$results = [System.Collections.Generic.List[object]]::new()"]
+    for index, original in enumerate(commands):
+        optional = original.startswith("optional:")
+        normalized = original.removeprefix("optional:")
+        if not normalized.startswith("powershell:"):
+            raise RuntimeError(f"non-PowerShell command in Windows route batch: {original}")
+        powershell_script = normalized.removeprefix("powershell:")
+        entries.append((original, optional, powershell_script))
+        script_parts.append(
+            "$captured = ''; "
+            "try { "
+            f"$captured = (& {{ {powershell_script} }} 2>&1 | Out-String -Width 4096).Trim(); "
+            f"$results.Add([pscustomobject]@{{Index={index};Ok=$true;Output=$captured}}) | Out-Null "
+            "} catch { "
+            "$captured = ($_ | Out-String -Width 4096).Trim(); "
+            f"$results.Add([pscustomobject]@{{Index={index};Ok=$false;Output=$captured}}) | Out-Null "
+            "}"
+        )
+    script_parts.append("$results | ConvertTo-Json -Compress -Depth 5")
+    rc, output = run_powershell_file("; ".join(script_parts), timeout=120)
+    if rc != 0:
+        raise RuntimeError(output or f"PowerShell route batch failed rc={rc}")
+    try:
+        raw_results = listify(json.loads(output)) if output else []
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"PowerShell route batch returned invalid JSON: {exc}: {output[-1000:]}") from exc
+    result_by_index = {int(item.get("Index", -1)): item for item in raw_results if isinstance(item, dict)}
+    applied: list[dict[str, Any]] = []
+    for index, (original, optional, _script) in enumerate(entries):
+        item = result_by_index.get(index)
+        if item is None:
+            applied.append({"command": original, "ok": optional, "output": "missing result from PowerShell route batch"})
+            continue
+        ok = bool(item.get("Ok"))
+        output_text = str(item.get("Output") or "")
+        if optional and not ok:
+            ok = True
+            output_text = f"ignored cleanup failure: {output_text}"
+        applied.append({"command": original, "ok": ok, "output": output_text})
+    return applied
+
+
 def apply_plan(plan: dict[str, Any], *, yes: bool, direct_baseline: bool) -> dict[str, Any]:
     if not (is_linux() or is_windows()):
         raise RuntimeError("apply mode is currently Linux/Windows-only")
@@ -1222,13 +1378,14 @@ def apply_plan(plan: dict[str, Any], *, yes: bool, direct_baseline: bool) -> dic
     blockers = [blocker for blocker in blockers if str(blocker).strip()]
     if blockers:
         raise RuntimeError("cannot apply until all targets are mapped:\n" + "\n".join(blockers))
-    applied: list[dict[str, Any]] = []
-    errors: list[str] = []
-    for command in commands:
-        ok, output = run_route_command(command)
-        applied.append({"command": command, "ok": ok, "output": output})
-        if not ok:
-            errors.append(f"{command}: {output}")
+    if commands and is_windows() and all(command.removeprefix("optional:").startswith("powershell:") for command in commands):
+        applied = run_windows_route_batch(commands)
+    else:
+        applied = []
+        for command in commands:
+            ok, output = run_route_command(command)
+            applied.append({"command": command, "ok": ok, "output": output})
+    errors = [f"{item['command']}: {item['output']}" for item in applied if not item["ok"]]
     plan["applied_commands"] = applied
     plan["apply_errors"] = errors
     plan["direct_baseline"] = bool(direct_baseline)
@@ -1321,7 +1478,7 @@ def main() -> int:
         if args.command == "apply":
             interface_map = parse_interface_map(args.interface_map)
             config = load_cached_config(args.cache) if args.cached else fetch_config(args)
-            plan = build_plan(config, interface_map=interface_map)
+            plan = build_plan(config, interface_map=interface_map, inspect_routes=False)
             plan = apply_plan(plan, yes=args.yes, direct_baseline=args.direct_baseline)
             if args.post_status:
                 args.status_mode = "apply"

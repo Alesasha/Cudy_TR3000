@@ -8,7 +8,13 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from vpn_control_app import PROBE_FAILED_WARN_SECONDS, build_readiness_status, build_system_status, init_db
+from vpn_control_app import (
+    PROBE_FAILED_WARN_SECONDS,
+    build_readiness_status,
+    build_system_status,
+    init_db,
+    save_transport_config,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +64,55 @@ def main() -> int:
         probe_check = next((item for item in readiness["checks"] if item.get("name") == "probe_jobs"), {})
         if probe_check.get("state") != "warn" or probe_check.get("ok") is not True:
             raise AssertionError(f"probe readiness check should be warning-only: {probe_check!r}")
+
+        save_transport_config(
+            db_path,
+            INVENTORY,
+            server_id="proxyde",
+            transport_type="http-proxy-tun",
+            interface_name="proxyde",
+            config={"server": "127.0.0.1", "server_port": 8080},
+            enabled=True,
+            source="test",
+        )
+        stale_time = (datetime.now(timezone.utc) - timedelta(days=2)).replace(microsecond=0).isoformat()
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE transport_configs SET updated_at = ? WHERE server_id = 'proxyde'", (stale_time,))
+            conn.execute("UPDATE servers SET enabled = 0 WHERE id = 'proxyde'")
+            conn.commit()
+        disabled_status = build_system_status(db_path, INVENTORY)
+        if disabled_status["transports"]["stale_enabled_count"] != 0:
+            raise AssertionError(f"disabled server transport must not be stale-active: {disabled_status['transports']!r}")
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE servers SET enabled = 1 WHERE id = 'proxyde'")
+            conn.commit()
+        enabled_status = build_system_status(db_path, INVENTORY)
+        if enabled_status["transports"]["stale_enabled_count"] != 1:
+            raise AssertionError(f"enabled server transport must be stale-active: {enabled_status['transports']!r}")
+        if build_readiness_status(db_path, INVENTORY)["ok"] is not False:
+            raise AssertionError("stale active transport must fail readiness")
+
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE servers SET enabled = 0 WHERE id = 'proxyde'")
+            conn.commit()
+        save_transport_config(
+            db_path,
+            INVENTORY,
+            server_id="aktau",
+            transport_type="amneziawg-conf",
+            interface_name="AmneziaVPN",
+            config={"endpoint": "198.51.100.10:51820"},
+            enabled=True,
+            source="test-static",
+        )
+        with sqlite3.connect(db_path) as conn:
+            conn.execute("UPDATE transport_configs SET updated_at = ? WHERE server_id = 'aktau'", (stale_time,))
+            conn.commit()
+        static_status = build_system_status(db_path, INVENTORY)
+        if static_status["transports"]["stale_enabled_count"] != 0:
+            raise AssertionError(f"static own AWG transport must not expire: {static_status['transports']!r}")
+        if build_readiness_status(db_path, INVENTORY)["ok"] is not True:
+            raise AssertionError("static own AWG transport age must not fail readiness")
     print("System status probe warning smoke passed.")
     return 0
 

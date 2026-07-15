@@ -164,7 +164,7 @@ def run_auto_winners_cache_fallback_check(db_path: Path) -> None:
     assert_equal(winners[0]["source"], "auto_cache", "cache fallback source")
 
 
-def run_unresolved_auto_domain_falls_back_to_direct_check(db_path: Path) -> None:
+def run_uncached_auto_domain_uses_first_available_candidate_check(db_path: Path) -> None:
     save_policy(db_path, user_id=TEST_USER_ID, domain="uncached.example", servers=["proxyde"])
     timestamp = app.now()
     with closing(app.connect(db_path)) as conn:
@@ -183,8 +183,55 @@ def run_unresolved_auto_domain_falls_back_to_direct_check(db_path: Path) -> None
     routes = [route for route in config["domain_routes"] if route["domain"] == "uncached.example"]
     assert_equal(len(routes), 1, "uncached auto domain route should be present")
     assert_equal(routes[0]["requested_server_id"], "auto", "uncached auto requested server")
-    assert_equal(routes[0]["server_id"], "direct", "uncached auto domain should fall back to direct")
-    assert_true(config["warnings"], "uncached auto domain should emit warning")
+    assert_equal(routes[0]["server_id"], "proxyde", "uncached auto domain should use first available candidate")
+    assert_true(config["warnings"], "uncached auto domain should report provisional selection")
+
+
+def run_cached_winner_respects_effective_policy_check() -> None:
+    servers = {
+        "aktau": {
+            "enabled": True,
+            "user_visible": True,
+            "candidate_available": True,
+        },
+        "proxyde": {
+            "enabled": True,
+            "user_visible": True,
+            "candidate_available": True,
+        },
+    }
+    policy = {
+        "scope": "user_domain",
+        "candidate_server_ids": ["aktau"],
+        "expanded_candidate_server_ids": ["aktau"],
+    }
+
+    warnings: list[str] = []
+    selected, cached = app.resolve_route_server(
+        domain="restricted.example",
+        requested_server_id="auto",
+        servers=servers,
+        auto_cache={"restricted.example": {"selected_server_id": "proxyde"}},
+        auto_policy=policy,
+        context="test route",
+        warnings=warnings,
+    )
+    assert_equal(selected, "aktau", "cached winner outside effective policy should fall back")
+    assert_equal(cached["selected_server_id"], "proxyde", "cache metadata should be preserved")
+    assert_true(any("outside the effective user_domain" in item for item in warnings), "policy rejection warning")
+
+    warnings = []
+    selected, _ = app.resolve_route_server(
+        domain="restricted.example",
+        requested_server_id="auto",
+        servers=servers,
+        auto_cache={"restricted.example": {"selected_server_id": "aktau"}},
+        auto_policy=policy,
+        context="test route",
+        warnings=warnings,
+    )
+    assert_equal(selected, "aktau", "cached winner inside effective policy should remain selected")
+    assert_equal(warnings, [], "valid cached winner should not warn")
 
 
 def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
@@ -216,6 +263,7 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
         status="auto",
         metadata={"user_id": TEST_USER_ID},
     )
+    save_policy(db_path, user_id=TEST_USER_ID, domain="cached-route.example", servers=["proxyde"])
     timestamp = app.now()
     with app.connect(db_path) as conn:
         conn.execute(
@@ -353,6 +401,7 @@ def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     target_cidr = "203.0.113.0/24"
     cache_key = app.auto_cache_key_for_ip_route(target_cidr)
+    save_policy(db_path, user_id=TEST_USER_ID, domain=cache_key, servers=["proxyde"])
     app.save_auto_cache_entry(
         db_path,
         INVENTORY,
@@ -391,7 +440,8 @@ def main() -> int:
         run_all_rest_check(db_path)
         run_stale_provider_transports_are_not_default_candidates_check(db_path)
         run_auto_winners_cache_fallback_check(db_path)
-        run_unresolved_auto_domain_falls_back_to_direct_check(db_path)
+        run_uncached_auto_domain_uses_first_available_candidate_check(db_path)
+        run_cached_winner_respects_effective_policy_check()
         run_agent_transport_plan_is_minimal_check(db_path)
         run_auto_worker_prefers_domain_agent_check(db_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
