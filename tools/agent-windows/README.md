@@ -38,8 +38,17 @@ Amnezia can still install full-tunnel routes and block normal internet.
 If internet is lost after enabling a test profile, disconnect Amnezia or run:
 
 ```powershell
-.\Restore-Direct.ps1
+.\Emergency-Stop-Agent.ps1
 ```
+
+For an emergency double-click `Emergency-Stop-Agent.cmd`. It requests
+Administrator permission, stops and disables the scheduled agent task, stops
+the control tunnel and all managed transports, removes their active routes,
+and restores the physical default route and DNS. The agent stays disabled
+until it is deliberately enabled or reinstalled.
+
+`Restore-Direct.ps1` remains available for a narrower route reset that does not
+disable the scheduled task.
 
 ## Managed Transport PoC
 
@@ -288,6 +297,31 @@ managed sing-box transports, and restores direct routes:
 ```powershell
 .\Uninstall-ManagedAgentTask.ps1 -FullRollback
 ```
+
+Install the independent safety watchdog from an elevated PowerShell window:
+
+```powershell
+.\Install-AgentWatchdogTask.ps1 -RunNow `
+  -CriticalService "Codex API=https://chatgpt.com/backend-api/codex/responses"
+```
+
+The watchdog runs as a separate `SYSTEM` task once per minute. It combines the
+agent heartbeat with general HTTPS connectivity and the locally configured
+critical-service list in `watchdog-services.json`. Three consecutive failures
+create a diagnostic report, try to post it to the control-server, and run
+`Emergency-Stop-Agent.ps1`. The agent task is then left disabled. A report that
+cannot be posted immediately is queued under `run/` and retried after recovery.
+
+Before a deliberately risky development command, create a one-cycle lease:
+
+```powershell
+New-Item .\run\watchdog.keepalive -ItemType File -Force
+```
+
+The watchdog consumes and deletes this file, resets its failure counter, and
+skips emergency action for that cycle. `watchdog.armed` enables protection;
+`watchdog.tripped.json`, `watchdog-state.json`, and `logs/watchdog.log` record
+its current state and last action.
 
 Terminal 1:
 

@@ -2,7 +2,7 @@ param(
     [string]$TaskName = "Cudy Managed Route Agent",
     [string]$ServerId = "",
     [string]$InterfaceAlias = "",
-    [string[]]$DirectTransport = @("aktau=AmneziaVPN=aktau-awg.conf"),
+    [string[]]$DirectTransport = @(),
     [string[]]$VpnTypeTransport = @(),
     [string[]]$LokVpnTransport = @(),
     [string[]]$SingBoxTransport = @(),

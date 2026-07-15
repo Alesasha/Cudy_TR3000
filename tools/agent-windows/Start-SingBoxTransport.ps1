@@ -5,7 +5,8 @@ param(
     [string]$ConfigPath,
     [string]$SingBoxExe = "",
     [int]$StartupSeconds = 6,
-    [switch]$Restart
+    [switch]$Restart,
+    [switch]$QuietIfRunning
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,7 +86,9 @@ if ($transportPid) {
         } elseif ([string]$adapter.InterfaceDescription -ne "sing-tun Tunnel" -and [string]$adapter.ComponentID -ne "Wintun") {
             throw "Adapter '$Name' already exists and is not a sing-box adapter ($($adapter.InterfaceDescription))."
         } else {
-            Write-Host "sing-box transport already running: $Name pid=$transportPid"
+            if (-not $QuietIfRunning) {
+                Write-Host "sing-box transport already running: $Name pid=$transportPid"
+            }
             return
         }
     }
@@ -93,7 +96,9 @@ if ($transportPid) {
         $proc = $null
     }
     if ($proc -and -not $Restart) {
-        Write-Host "sing-box transport already running: $Name pid=$transportPid"
+        if (-not $QuietIfRunning) {
+            Write-Host "sing-box transport already running: $Name pid=$transportPid"
+        }
         return
     }
     if ($proc) {
@@ -111,7 +116,9 @@ if ($transportPid) {
     $existingAdapter = Get-NetAdapter -Name $Name -ErrorAction SilentlyContinue
     if ($existingAdapter -and -not $Restart) {
         if ([string]$existingAdapter.InterfaceDescription -eq "sing-tun Tunnel" -or [string]$existingAdapter.ComponentID -eq "Wintun") {
-            Write-Host "sing-box transport adapter already present: $Name"
+            if (-not $QuietIfRunning) {
+                Write-Host "sing-box transport adapter already present: $Name"
+            }
             return
         }
         throw "Adapter '$Name' already exists and is not a sing-box adapter ($($existingAdapter.InterfaceDescription))."

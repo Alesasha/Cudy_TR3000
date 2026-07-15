@@ -46,8 +46,11 @@ $sourceFiles = @(
     "Apply-Routes.ps1",
     "Apply-Test-Routes.ps1",
     "Check-Net.ps1",
+    "Emergency-Stop-Agent.cmd",
+    "Emergency-Stop-Agent.ps1",
     "Find-SingBox.ps1",
     "Get-ManagedAgentStatus.ps1",
+    "Install-AgentWatchdogTask.ps1",
     "Install-ManagedAgentTask.ps1",
     "Install-SingBoxRuntime.ps1",
     "New-LokVpnConfig.ps1",
@@ -68,8 +71,12 @@ $sourceFiles = @(
     "Test-ManagedRouting.ps1",
     "Test-ProdAgent.ps1",
     "Uninstall-ManagedAgentTask.ps1",
+    "Uninstall-AgentWatchdogTask.ps1",
+    "Update-AgentPackage.ps1",
     "Update-LokVpnConfig.ps1",
-    "Update-VpnTypeProxyConfig.ps1"
+    "Update-VpnTypeProxyConfig.ps1",
+    "Watch-AgentConnectivity.ps1",
+    "watchdog-services.json.example"
 )
 
 foreach ($file in $sourceFiles) {
@@ -84,6 +91,13 @@ Copy-Item -LiteralPath (Join-Path $root "tools\route_agent.py") -Destination (Jo
 Copy-Item -LiteralPath (Join-Path $agentDir "agent.env.ps1") -Destination (Join-Path $stageDir "agent.env.ps1") -Force
 Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519") -Destination (Join-Path $stageDir "uswest_control_tunnel_ed25519") -Force
 Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519.pub") -Destination (Join-Path $stageDir "uswest_control_tunnel_ed25519.pub") -Force
+
+$versionJson = @{
+    platform = "windows"
+    version_name = "1.0"
+    version_code = 1
+} | ConvertTo-Json -Depth 5
+[System.IO.File]::WriteAllText((Join-Path $stageDir "agent.version.json"), $versionJson, [System.Text.UTF8Encoding]::new($false))
 
 foreach ($optionalFile in @("aktau-awg.conf", "uswest-awg.conf", "client-awg.conf")) {
     $path = Join-Path $agentDir $optionalFile

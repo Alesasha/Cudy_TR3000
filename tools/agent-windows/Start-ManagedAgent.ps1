@@ -1,7 +1,7 @@
 param(
     [string]$ServerId = "",
     [string]$InterfaceAlias = "",
-    [string[]]$DirectTransport = @("aktau=AmneziaVPN=aktau-awg.conf"),
+    [string[]]$DirectTransport = @(),
     [string[]]$VpnTypeTransport = @(),
     [string[]]$LokVpnTransport = @(),
     [string[]]$SingBoxTransport = @(),
@@ -10,6 +10,7 @@ param(
     [string]$ControlSshUser = "cudy-tunnel-windows",
     [string]$ControlKeyPath = "$PSScriptRoot\uswest_control_tunnel_ed25519",
     [string]$ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS,
+    [string]$TaskName = "Cudy Managed Route Agent",
     [int]$PollSeconds = 60,
     [int]$LocalPort = 18765,
     [string]$LogPath = "$PSScriptRoot\managed-agent.log",
@@ -20,6 +21,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:LastSharedAwgSelections = @{}
 . "$PSScriptRoot\agent.env.ps1"
 if (-not $ControlEndpointManifestUrls -and $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS) {
     $ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS
@@ -71,6 +73,29 @@ function Write-AgentLine {
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $LogPath) | Out-Null
     Add-Content -LiteralPath $LogPath -Value $line
+}
+
+function Write-AgentHeartbeat {
+    param(
+        [Parameter(Mandatory = $true)]
+        $RouteResult,
+        [bool]$ControlOnline
+    )
+    $runDir = Join-Path $PSScriptRoot "run"
+    $path = Join-Path $runDir "agent-heartbeat.json"
+    $tempPath = "$path.tmp"
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+    $payload = [ordered]@{
+        ok = $true
+        updated_at = (Get-Date).ToUniversalTime().ToString("o")
+        process_id = $PID
+        control_online = $ControlOnline
+        ip_routes = [int]$RouteResult.IpRoutes
+        domain_routes = [int]$RouteResult.DomainRoutes
+        commands = [int]$RouteResult.Commands
+    } | ConvertTo-Json -Depth 5
+    [System.IO.File]::WriteAllText($tempPath, $payload, [System.Text.UTF8Encoding]::new($false))
+    Move-Item -LiteralPath $tempPath -Destination $path -Force
 }
 
 function Assert-Admin {
@@ -138,6 +163,9 @@ function Get-ControlTunnelHostFromManifest {
 }
 
 function Ensure-ControlTunnel {
+    if (Test-Path -LiteralPath (Join-Path $PSScriptRoot ".force-control-offline")) {
+        throw "Control access disabled by local offline-test marker."
+    }
     if (Test-ControlServer) {
         return
     }
@@ -311,15 +339,127 @@ function Write-Utf8NoBom {
     [System.IO.File]::WriteAllText($Path, $Value, $encoding)
 }
 
+function Quote-NativeArg {
+    param([AllowEmptyString()][string]$Value)
+    if ($null -eq $Value) {
+        return '""'
+    }
+    if ($Value -notmatch '[\s"]') {
+        return $Value
+    }
+    return '"' + $Value.Replace('"', '\"') + '"'
+}
+
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+    & taskkill.exe /PID $ProcessId /T /F 2>$null | Out-Null
+}
+
+function Invoke-ExternalCommand {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$FilePath,
+        [string[]]$Arguments = @(),
+        [int]$TimeoutSeconds = 120
+    )
+    $argumentString = (($Arguments | ForEach-Object { Quote-NativeArg $_ }) -join " ")
+    $cmd = "$FilePath $argumentString"
+    $tmpBase = Join-Path $env:TEMP ("cudy-agent-" + [guid]::NewGuid().ToString("N"))
+    $stdoutPath = "$tmpBase.out"
+    $stderrPath = "$tmpBase.err"
+    $proc = $null
+
+    try {
+        $proc = Start-Process `
+            -FilePath $FilePath `
+            -ArgumentList $argumentString `
+            -WorkingDirectory $PSScriptRoot `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $stdoutPath `
+            -RedirectStandardError $stderrPath `
+            -PassThru
+
+        # Force Process to retain its native handle so ExitCode is available
+        # in Windows PowerShell 5 after the child exits.
+        $null = $proc.Handle
+
+        if (-not $proc.WaitForExit($TimeoutSeconds * 1000)) {
+            Stop-ProcessTree -ProcessId $proc.Id
+            Start-Sleep -Milliseconds 500
+            $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $stdoutPath -ErrorAction SilentlyContinue } else { "" }
+            $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $stderrPath -ErrorAction SilentlyContinue } else { "" }
+            return [pscustomobject]@{
+                ExitCode = 124
+                Output = (($stdout, $stderr) -join "`n").Trim()
+                TimedOut = $true
+                Command = $cmd
+            }
+        }
+
+        $proc.WaitForExit()
+        $proc.Refresh()
+
+        $stdout = if (Test-Path -LiteralPath $stdoutPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $stdoutPath -ErrorAction SilentlyContinue } else { "" }
+        $stderr = if (Test-Path -LiteralPath $stderrPath) { Get-Content -Raw -Encoding UTF8 -LiteralPath $stderrPath -ErrorAction SilentlyContinue } else { "" }
+        return [pscustomobject]@{
+            ExitCode = $proc.ExitCode
+            Output = (($stdout, $stderr) -join "`n").Trim()
+            TimedOut = $false
+            Command = $cmd
+        }
+    } finally {
+        if ($proc) { $proc.Dispose() }
+        Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Get-AgentConfig {
+    param([switch]$Cached)
     $env:VPN_CONTROL_URL = "http://127.0.0.1:$LocalPort"
-    $output = & python "$PSScriptRoot\route_agent.py" config --json 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = ($output | Out-String).Trim()
-    if ($exitCode -ne 0) {
-        throw "route_agent.py config failed with exit code $exitCode. $text"
+    $args = @("$PSScriptRoot\route_agent.py", "config", "--json")
+    if ($Cached) {
+        $args += "--cached"
+    }
+    $result = Invoke-ExternalCommand -FilePath "python" -Arguments $args -TimeoutSeconds 90
+    $text = $result.Output
+    if ($result.ExitCode -ne 0) {
+        $mode = if ($Cached) { "cached config" } else { "config" }
+        throw "route_agent.py $mode failed with exit code $($result.ExitCode). $text"
     }
     return $text | ConvertFrom-Json
+}
+
+function Invoke-AgentSelfUpdate {
+    if ($env:AGENT_AUTO_UPDATE -in @("0", "false", "False", "FALSE", "no", "NO")) {
+        return $false
+    }
+    $script = Join-Path $PSScriptRoot "Update-AgentPackage.ps1"
+    if (-not (Test-Path -LiteralPath $script)) {
+        return $false
+    }
+    $env:VPN_CONTROL_URL = "http://127.0.0.1:$LocalPort"
+    $result = Invoke-ExternalCommand -FilePath "powershell.exe" -Arguments @(
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-File", $script,
+        "-ControlUrl", "http://127.0.0.1:$LocalPort",
+        "-Platform", "windows",
+        "-TaskName", $TaskName,
+        "-FromAgent"
+    ) -TimeoutSeconds 300
+    $exitCode = $result.ExitCode
+    $text = $result.Output
+    if ($text) {
+        Write-AgentLine "self-update: $text"
+    }
+    if ($exitCode -eq 10) {
+        Write-AgentLine "self-update started; exiting current agent process."
+        return $true
+    }
+    if ($exitCode -ne 0) {
+        Write-AgentLine "self-update check failed exit=$exitCode $text" -Level WARN
+    }
+    return $false
 }
 
 function Get-DeterministicTunAddress {
@@ -400,6 +540,28 @@ function Write-ControlTransportConfig {
 function Ensure-ControlTransport {
     param($Transport)
     $iface = [string]$Transport.interface_name
+    $type = [string]$Transport.transport_type
+    if ($type -eq "amneziawg-conf") {
+        $config = $Transport.config
+        $configPath = ""
+        if ($config.config_text) {
+            $configPath = Join-Path $PSScriptRoot "transports\$iface.conf"
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $configPath) | Out-Null
+            Write-Utf8NoBom -Path $configPath -Value ([string]$config.config_text)
+        } elseif ($config.config_file) {
+            $configFile = [string]$config.config_file
+            $configPath = if ([System.IO.Path]::IsPathRooted($configFile)) {
+                $configFile
+            } else {
+                Join-Path $PSScriptRoot $configFile
+            }
+        } else {
+            throw "amneziawg-conf transport for $($Transport.server_id) must include config_file or config_text."
+        }
+        Ensure-AwgTransport -TunnelName $iface -ConfigPath $configPath
+        return
+    }
+
     $configPath = Join-Path $PSScriptRoot "transports\$iface.json"
     $oldConfig = if (Test-Path -LiteralPath $configPath) { Get-Content -Raw -LiteralPath $configPath } else { "" }
     Write-ControlTransportConfig -Transport $Transport -ConfigPath $configPath
@@ -408,7 +570,7 @@ function Ensure-ControlTransport {
     if ($restart) {
         Write-AgentLine "Transport config changed for $iface; restarting managed transport."
     }
-    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $iface -ConfigPath $configPath -Restart:$restart
+    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $iface -ConfigPath $configPath -Restart:$restart -QuietIfRunning
 }
 
 function Ensure-AwgTransport {
@@ -431,7 +593,7 @@ function Ensure-SingBoxTransport {
         [string]$Name,
         [string]$ConfigPath
     )
-    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $Name -ConfigPath $ConfigPath
+    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $Name -ConfigPath $ConfigPath -QuietIfRunning
 }
 
 function Ensure-VpnTypeTransport {
@@ -441,7 +603,7 @@ function Ensure-VpnTypeTransport {
         [string]$ConfigPath
     )
     & "$PSScriptRoot\Update-VpnTypeProxyConfig.ps1" -Provider $Provider -Name $Name -OutputPath $ConfigPath -RestartIfChanged | Out-Null
-    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $Name -ConfigPath $ConfigPath
+    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $Name -ConfigPath $ConfigPath -QuietIfRunning
 }
 
 function Ensure-LokVpnTransport {
@@ -451,28 +613,38 @@ function Ensure-LokVpnTransport {
         [string]$ConfigPath
     )
     & "$PSScriptRoot\Update-LokVpnConfig.ps1" -Profile $Profile -Name $Name -OutputPath $ConfigPath -RestartIfChanged | Out-Null
-    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $Name -ConfigPath $ConfigPath
+    & "$PSScriptRoot\Start-SingBoxTransport.ps1" -Name $Name -ConfigPath $ConfigPath -QuietIfRunning
 }
 
 function Apply-PolicyRoutes {
-    param([string[]]$InterfaceMaps)
+    param(
+        [string[]]$InterfaceMaps,
+        [switch]$Cached,
+        [switch]$PostStatus
+    )
     $env:VPN_CONTROL_URL = "http://127.0.0.1:$LocalPort"
     $args = @(
         "$PSScriptRoot\route_agent.py",
         "apply",
         "--direct-baseline"
     )
+    if ($Cached) {
+        $args += "--cached"
+    }
     foreach ($map in $InterfaceMaps) {
         $args += @("--interface-map", $map)
     }
-    $args += @("--yes", "--post-status")
+    $args += "--yes"
+    if ($PostStatus) {
+        $args += "--post-status"
+    }
     if (-not $VerboseRoutes) {
         $args += "--json"
     }
 
-    $output = & python @args 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = ($output | Out-String).Trim()
+    $result = Invoke-ExternalCommand -FilePath "python" -Arguments $args -TimeoutSeconds 180
+    $exitCode = $result.ExitCode
+    $text = $result.Output
 
     if ($VerboseRoutes -and $text) {
         Write-Host $text
@@ -480,7 +652,7 @@ function Apply-PolicyRoutes {
 
     if ($exitCode -ne 0) {
         if ($text) {
-            Add-Content -LiteralPath $LogPath -Value "[$((Get-Date).ToString('s'))] route_agent failed exit=$exitCode`n$text"
+            Add-Content -LiteralPath $LogPath -Value "[$((Get-Date).ToString('s'))] route_agent failed exit=$exitCode command=$($result.Command)`n$text"
         }
         throw "route_agent.py failed with exit code $exitCode."
     }
@@ -528,13 +700,13 @@ function Run-ProbeJobs {
         $args += @("--interface-map", $map)
     }
 
-    $output = & python @args 2>&1
-    $exitCode = $LASTEXITCODE
-    $text = ($output | Out-String).Trim()
+    $result = Invoke-ExternalCommand -FilePath "python" -Arguments $args -TimeoutSeconds 180
+    $exitCode = $result.ExitCode
+    $text = $result.Output
 
     if ($exitCode -ne 0) {
         if ($text) {
-            Add-Content -LiteralPath $LogPath -Value "[$((Get-Date).ToString('s'))] route_agent probe-jobs failed exit=$exitCode`n$text"
+            Add-Content -LiteralPath $LogPath -Value "[$((Get-Date).ToString('s'))] route_agent probe-jobs failed exit=$exitCode command=$($result.Command)`n$text"
         }
         throw "route_agent.py probe-jobs failed with exit code $exitCode."
     }
@@ -588,14 +760,32 @@ function Stop-UnusedSingBoxTransports {
     }
 }
 
+function Stop-UnusedAwgTransports {
+    param([string[]]$DesiredTunnelNames)
+    $desired = @{}
+    foreach ($name in $DesiredTunnelNames) {
+        if ($name) {
+            $desired["AmneziaWGTunnel`$$name"] = $true
+        }
+    }
+    $services = Get-CimInstance Win32_Service -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like "AmneziaWGTunnel$*" }
+    foreach ($service in $services) {
+        if ($desired.ContainsKey([string]$service.Name)) {
+            continue
+        }
+        Write-AgentLine "Stopping unused AWG transport service: $($service.Name)"
+        Stop-Service -Name $service.Name -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 500
+        sc.exe delete $service.Name | Out-Null
+    }
+}
+
 Assert-Admin
 Rotate-AgentLog
 Write-AgentLine "Managed agent process starting. pid=$PID script=$PSCommandPath"
 
 $directSpecs = if ($NoDirectTransports) { @() } else { Parse-DirectTransport $DirectTransport }
-if ($directSpecs.Count -gt 1) {
-    throw "The installed AmneziaVPN Windows tunnel service supports only one active AWG tunnel. Pass exactly one -DirectTransport, for example aktau=AmneziaVPN=aktau-awg.conf."
-}
 $vpnTypeSpecs = Parse-VpnTypeTransport $VpnTypeTransport
 $lokVpnSpecs = Parse-LokVpnTransport $LokVpnTransport
 $singBoxSpecs = Parse-SingBoxTransport $SingBoxTransport
@@ -631,15 +821,82 @@ Write-AgentLine "Managed agent started: maps=$($interfaceMaps -join ',') control
 do {
     $startedAt = Get-Date
     try {
-        Ensure-ControlTunnel
+        $controlOnline = $false
+        $agentConfig = $null
+        try {
+            Ensure-ControlTunnel
+            $controlOnline = $true
+        } catch {
+            Write-AgentLine "control unavailable; trying cached policy: $($_.Exception.Message)" -Level WARN
+        }
+        if ($controlOnline) {
+            if (Invoke-AgentSelfUpdate) {
+                break
+            }
+        } else {
+            Write-AgentLine "self-update skipped because control is unavailable" -Level WARN
+        }
         $cycleInterfaceMaps = New-Object System.Collections.Generic.List[string]
         foreach ($map in $baseInterfaceMaps) {
             $cycleInterfaceMaps.Add($map) | Out-Null
         }
+        $controlServerIds = @{}
+        $transportStartPlan = @()
         if (-not $NoControlTransportPlan) {
-            $agentConfig = Get-AgentConfig
-            $desiredControlTransports = New-Object System.Collections.Generic.List[string]
+            if ($controlOnline) {
+                $agentConfig = Get-AgentConfig
+            } else {
+                $agentConfig = Get-AgentConfig -Cached
+                Write-AgentLine "using cached policy while control is unavailable" -Level WARN
+            }
             foreach ($transport in @($agentConfig.transport_plan)) {
+                $controlServerIds[[string]$transport.server_id] = $true
+            }
+            if ($controlServerIds.Count -gt 0) {
+                $filteredMaps = New-Object System.Collections.Generic.List[string]
+                foreach ($map in $cycleInterfaceMaps) {
+                    $parts = ([string]$map) -split "=", 2
+                    if ($parts.Count -eq 2 -and $controlServerIds.ContainsKey($parts[0])) {
+                        continue
+                    }
+                    $filteredMaps.Add([string]$map) | Out-Null
+                }
+                $cycleInterfaceMaps = $filteredMaps
+            }
+
+            $usageCounts = @{}
+            foreach ($route in @($agentConfig.domain_routes) + @($agentConfig.ip_routes)) {
+                $serverId = [string]$route.server_id
+                if (-not $serverId) { continue }
+                if (-not $usageCounts.ContainsKey($serverId)) { $usageCounts[$serverId] = 0 }
+                $usageCounts[$serverId] = [int]$usageCounts[$serverId] + 1
+            }
+            $selectedTransports = New-Object System.Collections.Generic.List[object]
+            foreach ($group in @($agentConfig.transport_plan | Group-Object interface_name)) {
+                $items = @($group.Group)
+                $awgItems = @($items | Where-Object { [string]$_.transport_type -eq "amneziawg-conf" })
+                if ($items.Count -gt 1 -and $awgItems.Count -eq $items.Count) {
+                    $selected = $items | Sort-Object `
+                        @{ Expression = { [int]$usageCounts[[string]$_.server_id] }; Descending = $true }, `
+                        @{ Expression = { [string]$_.server_id }; Descending = $false } | Select-Object -First 1
+                    $skipped = @($items | Where-Object { [string]$_.server_id -ne [string]$selected.server_id } | ForEach-Object { [string]$_.server_id })
+                    $selectionKey = "$($selected.server_id)|$($skipped -join ',')"
+                    if ($script:LastSharedAwgSelections[[string]$group.Name] -ne $selectionKey) {
+                        Write-AgentLine "AWG backend shares interface '$($group.Name)'; selected $($selected.server_id) by policy usage, aliases=$($skipped -join ',')" -Level WARN
+                        $script:LastSharedAwgSelections[[string]$group.Name] = $selectionKey
+                    }
+                    $selectedTransports.Add($selected) | Out-Null
+                } else {
+                    foreach ($item in $items) { $selectedTransports.Add($item) | Out-Null }
+                }
+            }
+            $transportStartPlan = $selectedTransports.ToArray()
+
+            foreach ($transport in @($agentConfig.transport_plan)) {
+                $cycleInterfaceMaps.Add("$($transport.server_id)=$($transport.interface_name)") | Out-Null
+            }
+            $desiredControlTransports = New-Object System.Collections.Generic.List[string]
+            foreach ($transport in @($transportStartPlan)) {
                 $desiredControlTransports.Add([string]$transport.interface_name) | Out-Null
             }
             foreach ($spec in $vpnTypeSpecs) {
@@ -651,12 +908,21 @@ do {
             foreach ($spec in $singBoxSpecs) {
                 $desiredControlTransports.Add($spec.InterfaceName) | Out-Null
             }
-            foreach ($transport in @($agentConfig.transport_plan)) {
+            $desiredAwgTransports = New-Object System.Collections.Generic.List[string]
+            foreach ($transport in @($transportStartPlan)) {
+                if ([string]$transport.transport_type -eq "amneziawg-conf") {
+                    $desiredAwgTransports.Add([string]$transport.interface_name) | Out-Null
+                }
+            }
+            Stop-UnusedAwgTransports -DesiredTunnelNames $desiredAwgTransports.ToArray()
+            foreach ($transport in @($transportStartPlan)) {
                 Ensure-ControlTransport -Transport $transport
-                $cycleInterfaceMaps.Add("$($transport.server_id)=$($transport.interface_name)") | Out-Null
             }
         }
         foreach ($spec in $directSpecs) {
+            if ($controlServerIds.ContainsKey([string]$spec.ServerId)) {
+                continue
+            }
             Ensure-AwgTransport -TunnelName $spec.TunnelName -ConfigPath $spec.ConfigPath
         }
         foreach ($spec in $vpnTypeSpecs) {
@@ -671,11 +937,18 @@ do {
         if ($cycleInterfaceMaps.Count -eq 0) {
             throw "No server-to-interface mappings configured."
         }
-        $result = Apply-PolicyRoutes -InterfaceMaps $cycleInterfaceMaps.ToArray()
+        # Get-AgentConfig already refreshed the local cache for an online cycle.
+        # Apply that exact snapshot instead of fetching policy a second time.
+        $result = Apply-PolicyRoutes -InterfaceMaps $cycleInterfaceMaps.ToArray() -Cached -PostStatus:$controlOnline
         Write-AgentLine "routes applied: ip_routes=$($result.IpRoutes) domain_routes=$($result.DomainRoutes) commands=$($result.Commands) status_posted=$($result.StatusPosted)"
-        $probeResult = Run-ProbeJobs -InterfaceMaps $cycleInterfaceMaps.ToArray()
-        if ($probeResult.Jobs -gt 0) {
-            Write-AgentLine "probe jobs processed: jobs=$($probeResult.Jobs) completed=$($probeResult.Completed) failed=$($probeResult.Failed)"
+        Write-AgentHeartbeat -RouteResult $result -ControlOnline:$controlOnline
+        if ($controlOnline) {
+            $probeResult = Run-ProbeJobs -InterfaceMaps $cycleInterfaceMaps.ToArray()
+            if ($probeResult.Jobs -gt 0) {
+                Write-AgentLine "probe jobs processed: jobs=$($probeResult.Jobs) completed=$($probeResult.Completed) failed=$($probeResult.Failed)"
+            }
+        } else {
+            Write-AgentLine "probe jobs skipped because control is unavailable" -Level WARN
         }
         if (-not $NoControlTransportPlan) {
             Stop-UnusedSingBoxTransports -DesiredNames $desiredControlTransports.ToArray()
