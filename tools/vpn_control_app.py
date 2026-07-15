@@ -712,8 +712,8 @@ USER_HTML = r"""<!doctype html>
     </section>
     <section>
       <h2>Lookup Aliases</h2>
-      <p class="muted">Aliases are shortcuts for Route Lookup only. They do not create tunnel rules by themselves. Actual tunnel policy is configured in Domain Routes.</p>
-      <form id="aliasForm" class="row">
+      <p id="aliasHelp" class="muted">Aliases are shared lookup shortcuts. They do not create tunnel rules by themselves.</p>
+      <form id="aliasForm" class="row" hidden>
         <input id="aliasInput" type="text" placeholder="alias, e.g. телеграм" autocomplete="off">
         <input id="aliasLabel" type="text" placeholder="label" autocomplete="off">
         <input id="aliasTargets" type="text" placeholder="lookup targets: domain, IP/CIDR, ..." autocomplete="off">
@@ -811,11 +811,11 @@ USER_HTML = r"""<!doctype html>
       const body = document.getElementById("aliasesBody");
       body.innerHTML = state.aliases.length ? state.aliases.map(item => `
         <tr>
-          <td data-label="Alias">${item.alias}</td>
-          <td data-label="Label">${item.label}</td>
-          <td data-label="Lookup Targets">${(item.targets || []).join(", ")}</td>
+          <td data-label="Alias">${escapeHtml(item.alias)}</td>
+          <td data-label="Label">${escapeHtml(item.label)}</td>
+          <td data-label="Lookup Targets">${(item.targets || []).map(escapeHtml).join(", ")}</td>
           <td data-label="Routing Effect" class="muted">none; use Route Lookup or Domain Routes</td>
-          <td><button class="danger" data-delete-alias="${item.alias}">Delete</button></td>
+          <td>${state.user?.role === "admin" ? `<button class="danger" data-delete-alias="${escapeHtml(item.alias)}">Delete</button>` : ""}</td>
         </tr>
       `).join("") : '<tr><td data-label="Alias" colspan="5" class="muted">No aliases.</td></tr>';
       body.querySelectorAll("[data-delete-alias]").forEach(button => {
@@ -858,6 +858,11 @@ USER_HTML = r"""<!doctype html>
       state.user = data.user;
       state.aliases = data.aliases || [];
       state.criticalServices = data.critical_services || { global: [], local: [], effective: [] };
+      const canManageAliases = state.user?.role === "admin";
+      document.getElementById("aliasForm").hidden = !canManageAliases;
+      document.getElementById("aliasHelp").textContent = canManageAliases
+        ? "Aliases are shared lookup shortcuts. They do not create tunnel rules by themselves."
+        : "Global lookup aliases are managed by the administrator. They are available here for Route Lookup only.";
       state.default_auto_candidate_policy = data.default_auto_candidate_policy || null;
       fillServerSelect(document.getElementById("defaultServer"), state.user.default_server_id);
       fillServerSelect(document.getElementById("routeServer"), "auto");
@@ -1073,6 +1078,14 @@ ADMIN_HTML = r"""<!doctype html>
     .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 2px 8px; font-size: 12px; border: 1px solid var(--line); color: var(--muted); }
     .badge.ok { color: var(--ok); border-color: #b9dfc8; background: #f0fbf4; }
     .badge.error { color: var(--danger); border-color: #efc0ba; background: #fff6f4; }
+    .admin-tabs { max-width: 1280px; margin: 0 auto; padding: 14px 24px 0; display: flex; gap: 6px; overflow-x: auto; }
+    .admin-tab { white-space: nowrap; background: #fff; color: var(--muted); border-color: var(--line); }
+    .admin-tab[aria-selected="true"] { color: #fff; background: var(--accent); border-color: var(--accent); }
+    section[data-admin-section][hidden] { display: none; }
+    @media (max-width: 720px) {
+      .admin-tabs { padding: 10px 14px 0; }
+      main { padding: 14px; }
+    }
   </style>
 </head>
 <body>
@@ -1083,8 +1096,9 @@ ADMIN_HTML = r"""<!doctype html>
       <button id="logoutButton" type="button">Logout</button>
     </div>
   </header>
+  <nav id="adminTabs" class="admin-tabs" aria-label="Admin sections"></nav>
   <main>
-    <section>
+    <section id="admin-status" data-admin-section="status" data-admin-label="Status">
       <div class="inline">
         <h2>System Status</h2>
         <button id="refreshSystemStatus" class="secondary" type="button">Refresh</button>
@@ -1096,7 +1110,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="systemStatusBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-servers" data-admin-section="servers" data-admin-label="Servers">
       <h2>Servers</h2>
       <p id="serverStatus" class="status"></p>
       <table>
@@ -1106,7 +1120,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="serversBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-users" data-admin-section="users" data-admin-label="Users">
       <h2>Users</h2>
       <form id="newUserForm" class="toolbar">
         <div class="field"><label>ID</label><input id="newUserId" type="text" autocomplete="off"></div>
@@ -1130,7 +1144,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="usersBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-lookup" data-admin-section="lookup" data-admin-label="Lookup">
       <h2>Route Lookup</h2>
       <form id="adminLookupForm" class="toolbar">
         <div class="field"><label>User</label><select id="lookupUser"></select></div>
@@ -1173,7 +1187,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="adminCriticalServicesBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-discovery" data-admin-section="discovery" data-admin-label="Discovery">
       <h2>Domain Discovery</h2>
       <div class="toolbar">
         <button id="refreshDomainDiscovery" class="secondary" type="button">Refresh</button>
@@ -1185,7 +1199,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="domainDiscoveryBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-global-routes" data-admin-section="global-routes" data-admin-label="Global Routes">
       <h2>Global Domain Routes</h2>
       <p class="muted">This is the global tunnel list. Server Auto means the domain is tunneled through the current Auto winner or the first available candidate until probes pick a better winner.</p>
       <form id="globalDefaultPriorityForm" class="toolbar">
@@ -1214,7 +1228,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="globalRoutesBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-user-routes" data-admin-section="user-routes" data-admin-label="User Routes">
       <h2>Domain Routes</h2>
       <p class="muted">These per-user routes override global domain routes. Use Auto with an ordered priority list for user-specific candidate preference.</p>
       <form id="userDefaultPriorityForm" class="toolbar">
@@ -1245,7 +1259,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="routesBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-auto-cache" data-admin-section="auto-cache" data-admin-label="Auto Cache">
       <h2>Auto Cache</h2>
       <form id="autoCacheForm" class="toolbar">
         <div class="field"><label>Domain</label><input id="autoCacheDomain" type="text" placeholder="example.com" autocomplete="off"></div>
@@ -1270,7 +1284,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="autoCacheBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-agents" data-admin-section="agents" data-admin-label="Agents">
       <h2>Auto Probe Jobs</h2>
       <div class="toolbar">
         <button id="runAutoWorker" type="button">Run Worker Once</button>
@@ -1314,7 +1328,7 @@ ADMIN_HTML = r"""<!doctype html>
       </table>
       <pre id="agentDiagnosticReport" class="muted"></pre>
     </section>
-    <section>
+    <section id="admin-transports" data-admin-section="transports" data-admin-label="Transports">
       <h2>Provider Transports</h2>
       <div class="toolbar">
         <div class="field"><label>Provider</label><select id="providerRefreshProvider"><option value="all">All</option><option value="vpntype">VPNtype</option><option value="lokvpn">LokVPN</option></select></div>
@@ -1329,7 +1343,7 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="providerTransportsBody"></tbody>
       </table>
     </section>
-    <section>
+    <section id="admin-deploy" data-admin-section="deploy" data-admin-label="Deploy">
       <h2>Deploy Preview</h2>
       <div class="toolbar">
         <button id="refreshPlan" type="button">Refresh Route Plan</button>
@@ -1346,6 +1360,27 @@ ADMIN_HTML = r"""<!doctype html>
     const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
+    const adminSections = Array.from(document.querySelectorAll("[data-admin-section]"));
+    function activateAdminSection(name, updateHash = true) {
+      const selected = adminSections.some(section => section.dataset.adminSection === name) ? name : "status";
+      adminSections.forEach(section => { section.hidden = section.dataset.adminSection !== selected; });
+      document.querySelectorAll(".admin-tab").forEach(button => {
+        button.setAttribute("aria-selected", button.dataset.adminTab === selected ? "true" : "false");
+      });
+      if (updateHash && location.hash !== `#${selected}`) history.replaceState(null, "", `#${selected}`);
+    }
+    function initializeAdminTabs() {
+      const tabs = document.getElementById("adminTabs");
+      tabs.innerHTML = adminSections.map(section => `
+        <button class="admin-tab" type="button" data-admin-tab="${section.dataset.adminSection}" aria-controls="${section.id}" aria-selected="false">${section.dataset.adminLabel}</button>
+      `).join("");
+      tabs.querySelectorAll("[data-admin-tab]").forEach(button => {
+        button.addEventListener("click", () => activateAdminSection(button.dataset.adminTab));
+      });
+      activateAdminSection(location.hash.replace(/^#/, "") || "status", false);
+    }
+    initializeAdminTabs();
+    window.addEventListener("hashchange", () => activateAdminSection(location.hash.replace(/^#/, ""), false));
     const serverLabel = id => (id === ALL_REST || id === "all-rest" ? "All rest" : (state.servers.find(s => s.id === id) || { label: id }).label);
     const serverOptionLabel = s => `${s.label}${s.candidate_available === false ? " (stale)" : ""}`;
     async function api(path, options) {
@@ -9482,7 +9517,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.require_user()
                 self.send_json(self.api_save_domain_route(data))
             elif parsed.path == "/api/service-aliases":
-                self.require_user()
+                self.require_admin()
                 self.send_json(
                     save_service_alias(
                         self.app.db_path,
@@ -9723,7 +9758,7 @@ class Handler(BaseHTTPRequestHandler):
                         )
                     )
             elif parsed.path == "/api/service-aliases":
-                self.require_user()
+                self.require_admin()
                 query = parse_qs(parsed.query)
                 self.send_json(delete_service_alias(self.app.db_path, self.app.inventory_path, alias=query.get("alias", [""])[0]))
             elif parsed.path == "/api/critical-services":

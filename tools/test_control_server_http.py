@@ -91,6 +91,16 @@ def post_json_public(url: str, payload: dict, *, timeout: int = 5) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
+def expect_http_error(callable_request, expected_status: int) -> None:
+    try:
+        callable_request()
+    except urllib.error.HTTPError as exc:
+        if exc.code != expected_status:
+            raise AssertionError(f"expected HTTP {expected_status}, got HTTP {exc.code}") from exc
+        return
+    raise AssertionError(f"expected HTTP {expected_status}, request succeeded")
+
+
 def wait_for_healthz(base_url: str, *, timeout_seconds: int = 20) -> None:
     deadline = time.time() + timeout_seconds
     last_error: Exception | None = None
@@ -243,6 +253,9 @@ def main() -> int:
                 raise AssertionError(f"login failed: {login!r}")
             admin_page = fetch_text(opener, f"{base_url}/admin")
             for snippet in (
+                'id="adminTabs"',
+                'data-admin-section="status"',
+                'data-admin-section="agents"',
                 "globalDefaultPriorityForm",
                 "globalRouteAutoText",
                 "adminRouteAutoText",
@@ -267,6 +280,42 @@ def main() -> int:
                     raise AssertionError(f"/api/admin is missing {key!r}")
             if "agent_enrollment_codes" not in admin_payload:
                 raise AssertionError("/api/admin is missing 'agent_enrollment_codes'")
+            saved_alias = post_json(
+                opener,
+                f"{base_url}/api/service-aliases",
+                {"alias": "smoke-alias", "label": "Smoke", "targets": "example.com"},
+            )
+            if saved_alias.get("ok") is not True:
+                raise AssertionError(f"admin alias save failed: {saved_alias!r}")
+
+            user_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+            user_login = post_json(
+                user_opener,
+                f"{base_url}/api/login",
+                {"username": "phone-user", "password": "phone-password"},
+            )
+            if user_login.get("ok") is not True:
+                raise AssertionError(f"user login failed: {user_login!r}")
+            user_page = fetch_text(user_opener, f"{base_url}/")
+            for snippet in ('id="aliasForm" class="row" hidden', "Global lookup aliases are managed by the administrator"):
+                if snippet not in user_page:
+                    raise AssertionError(f"user page is missing read-only alias UI: {snippet!r}")
+            expect_http_error(
+                lambda: post_json(
+                    user_opener,
+                    f"{base_url}/api/service-aliases",
+                    {"alias": "forbidden", "label": "Forbidden", "targets": "example.org"},
+                ),
+                403,
+            )
+            expect_http_error(
+                lambda: fetch_json_with_opener(
+                    user_opener,
+                    f"{base_url}/api/service-aliases?alias=smoke-alias",
+                    method="DELETE",
+                ),
+                403,
+            )
             admin_code = post_json(
                 opener,
                 f"{base_url}/api/admin/enrollment-codes",
