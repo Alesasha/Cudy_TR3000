@@ -130,6 +130,7 @@ the per-device control-tunnel key from ignored local secrets.
 Start here:
 
 - [Architecture](docs/architecture.md)
+- [Current status](docs/current-status.md)
 - [Roadmap](docs/roadmap.md)
 - [Control server](docs/control-server.md)
 - [Control app](docs/control-app.md)

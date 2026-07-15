@@ -197,6 +197,7 @@ telegram, tg, телеграм
 youtube, yt, ютуб
 gemini, google-ai, гемини, джемини
 mailru, mail.ru, mail, майл, мэйл
+gosuslugi, gosuslugi.ru, esia
 speedtest, спидтест
 linux-mirrors, linuxmint-mirrors, ubuntu-mirrors, зеркала
 ```

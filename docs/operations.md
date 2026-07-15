@@ -240,28 +240,58 @@ Remove-Item Env:USWEST_SSH_PASSWORD
 ```
 
 The tool writes `/etc/ssh/sshd_config.d/99-cudy-anti-bruteforce.conf`, reloads
-`sshd`, installs or updates the `sshd` fail2ban jail, installs
-`cudy-sshd-watchdog.timer`, and prints the top SSH source IPs from the last six
-hours. The watchdog runs every minute and kills only stale pre-auth/banner SSH
-children older than the configured threshold; it does not match active
-`user@pts/...` sessions. Current defaults:
+`sshd`, installs or updates the `cudy-sshd-safe` fail2ban filter/jail, installs
+`cudy-sshd-watchdog.timer`, installs `cudy-ssh-firewall-guard.service`, and
+prints the top SSH source IPs from the last six hours. The fail2ban filter is intentionally conservative: it bans obvious
+brute-force lines such as invalid users and failed passwords, but ignores likely
+agent reconnect noise for `cudy-tunnel-windows` and `cudy-tunnel-linux`, plus
+banner/timeout/reset lines. The watchdog runs every minute and kills only stale
+pre-auth/banner SSH children older than the configured threshold; it does not
+match active `user@pts/...` sessions. The firewall guard is intentionally
+lighter than a ban: it limits excessive new SSH connections per source before
+they create more `sshd` pre-auth children, while allowing normal roaming agent
+reconnects. Current defaults:
 
 ```text
 LoginGraceTime 60
 PerSourceMaxStartups 20
 MaxStartups 100:30:300
 UseDNS no
-fail2ban: maxretry=5, findtime=10m, bantime=1h
+fail2ban: filter=cudy-sshd-safe, banaction=iptables-multiport, maxretry=5, findtime=10m, bantime=1h
 cudy-sshd-watchdog: stale=120s, interval=60s
+cudy-ssh-firewall-guard: connlimit=32, recent=64 new connections / 60s / source IP
 ```
+
+Do not run many direct root SSH checks or deploys in parallel. The control
+server accepts multiple sessions from the same source IP (`MaxSessions=100`,
+`PerSourceMaxStartups=20`), but repeated failed banner/auth attempts can still
+leave pre-auth children until `LoginGraceTime` expires. Local scheduled jobs
+should use low retry counts and prefer the existing control tunnel or the Cudy
+fallback state where possible.
 
 Useful checks after deployment:
 
 ```bash
 systemctl status cudy-sshd-watchdog.timer cudy-sshd-watchdog.service
+systemctl status cudy-ssh-firewall-guard.service
 journalctl -t cudy-sshd-watchdog -S '1 hour ago' --no-pager
+iptables -S CUDY-SSH-GUARD
 ss -Htn sport = :22 | wc -l
 ```
+
+If public SSH is reachable at TCP level but new sessions fail before the SSH
+banner while an existing control tunnel still works, use the uswest AWG private
+management path from an elevated PowerShell window:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\recover_uswest_ssh_via_awg.ps1
+```
+
+The script starts a temporary `UswestAdmin` AWG tunnel from
+`secrets\agents\isasha_R7_Cudy-windows\uswest-awg.conf`, connects to SSH on
+`10.8.1.1`, installs the same hardening/watchdog profile, and then rechecks
+public SSH. This bypasses public-IP fail2ban mistakes and gives us a way to
+recover before resorting to a provider reboot.
 
 ## Autostart
 
@@ -326,3 +356,15 @@ python tools\test_linux_agent_packaging.py
 ## OpenWrt Deployment Artifacts
 
 OpenWrt/Cudy scripts live in `openwrt/`. They are source artifacts, not an automatic deployment system yet. Treat changes to PBR, firewall, and live route switching as operational changes requiring a backup and a rollback plan.
+
+The Go router-agent is the exception to the old script-only model, but its
+deployed service remains read-only:
+
+```powershell
+python tools\check_cudy_go_fallback.py --strict
+python tools\check_cudy_router_agent.py --strict
+```
+
+Both checks must pass before any router apply test. A router-agent warning about
+a missing interface is acceptable only when `desired.json` contains a matching
+validated `prepare-and-start` transport action and has no blockers.

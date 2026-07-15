@@ -10,6 +10,8 @@ data/*.db
 data/*.db-*
 data/*.sqlite
 data/*.sqlite-*
+data/*.sqlite3
+data/*.sqlite3-*
 data/*.pid
 data/route_agent_cache.json
 build/

@@ -2,123 +2,160 @@
 
 ## Goal
 
-The project turns a Cudy TR3000/OpenWrt router into a managed VPN/proxy routing hub.
+The project provides centrally managed selective routing for individual devices
+and whole LANs. An administrator defines global policy, users may add local
+overrides, and each agent applies the resulting policy as close to the client as
+its platform allows.
 
-Users should eventually be able to open a simple local web UI, choose a routing exit from the available servers, or use `Auto`. Administrators should be able to inspect and edit all servers, provider profiles, users, and per-user domain routing rules.
+The design keeps the control plane separate from the traffic path. Losing the
+primary control-server must not immediately break already applied routing.
 
-AmneziaVPN/AmneziaWG remains the user transport. The control app does not replace the VPN client; it binds a web user to the VPN client IP and decides how Cudy should route that user's traffic.
-
-The next control-plane step is to run the same control app on a public host,
-starting with `uswest`. Client agents will authenticate with per-device tokens,
-pull desired routing state over HTTPS, and apply local split-routing decisions.
-Cudy remains one possible exit and deployment target, but it is no longer the
-only place where routing decisions can be executed.
-
-## Current Routing Layers
-
-1. Cudy is the central router.
-2. PBR decides which outbound interface receives selected traffic.
-3. Own AmneziaWG exits are native interfaces:
-   - `awg1`: Megahost Aktau.
-   - `awg2`: HostVDS US West.
-4. VPNtype HTTP proxy exits are represented as sing-box TUN interfaces:
-   - `proxygb`, `proxyca`, `proxyfr`, `proxyby`, `proxyae`, `proxyhk`, `proxykz`, `proxytr`, `proxyil`, `proxycz`, `proxypl`, `proxyfi`, `proxynl`, `proxyal`, `proxyru`, `proxyus`, `proxyde`.
-5. LokVPN started as one sing-box selector interface, but the target model is dynamic slots:
-   - `lokvpn` with profiles `smart1`, `de1`, `ru1`, `nl1`, `fr1`, `se1`, `smart2`, `de2`, `ru2`, `nl2`, `fr2`, `se2`.
-   - Runtime slots such as `lok1`, `lok2`, ... can be created on demand for individual profiles.
-   - User/admin rules keep logical ids such as `lokvpn-de1`; the runtime layer maps them to active slot interfaces.
-   - Unused slots are removed by garbage collection instead of staying resident.
-
-## Public Control Server And Agents
-
-The public control server owns desired state:
-
-- users and devices;
-- global and per-user domain rules;
-- per-user IP/CIDR rules;
-- Auto cache and priority policies;
-- last reported agent status.
-
-Client agents pull this state from `GET /api/agent/config` using a device token
-and report health through `POST /api/agent/status`.
-
-Initial agents can run beside AmneziaVPN on Linux and Windows by managing local
-routes around the VPN interface. Android likely needs a first-party VPN client
-based on `VpnService` because Android does not let one ordinary app reliably
-modify another VPN app's routes.
-
-## Stage 1
-
-Stage 1 creates a trustworthy local inventory:
-
-- static server catalog in `config/vpn_inventory.json`;
-- read-only runtime snapshot from Cudy in `config/cudy-runtime.json`;
-- CLI access through `tools/vpn_inventory.py`;
-- no routing changes and no user-facing web UI yet.
-
-This gives the next stages a clean source of truth instead of embedding provider knowledge into unrelated scripts.
-
-## Next Stages
-
-Stage 2 adds the local database and admin/user model. SQLite is enough at this scale:
-
-- `servers`;
-- `provider_profiles`;
-- `users`;
-- `user_domain_routes`;
-- `domain_auto_cache`;
-- `health_checks`.
-
-The first implementation is `tools/vpn_control_app.py`. It stores local choices and provides a simple user/admin UI without changing live Cudy routing.
-
-Stage 3 should connect saved choices to live Cudy routing generation and deployment.
-
-Effective routing is built per user from two layers:
-
-- global admin `domain -> server` routes;
-- user-specific `domain -> server` routes.
-
-If both layers contain the same domain, the user-specific route wins.
-
-The first deploy artifact is intentionally narrower: global admin routes can be exported as `/etc/pbr-overrides/force-<interface>.domains` files because they map cleanly to existing destination-IP PBR sets. User-specific routes need source-IP matching and should not be collapsed into global destination sets.
-
-The local deploy command is conservative: it previews by default, backs up `/etc/pbr-overrides` and the PBR user script before apply, and uploads only non-empty generated domain files unless `--prune-empty` is specified.
-
-User-specific routes are deployed through a separate nft table, `inet cudy_user_routes`. Its prerouting chain runs after the normal PBR mangle chain and sets the PBR mark for packets matching both source client IP and resolved destination IP. This keeps per-user overrides out of the global destination-only PBR sets.
-
-Provider endpoint refresh stays on Cudy during this stage. LokVPN and VPNtype keep using their existing router-side scripts and cron jobs, while the local project inventories them and can trigger them over SSH through `tools/vpn_inventory.py refresh-provider --apply`.
-
-## Dynamic LokVPN Slot Model
-
-The slot manager is intentionally runtime-only. It should not make users choose
-`lok1` or `lok2`; those names are implementation details.
+## Topology
 
 ```text
-user route: DC_via_Cudy / example.com -> lokvpn-de1
-runtime:    lokvpn-de1 -> lok1
-Cudy:       nft/PBR mark sends matching packets to interface lok1
+                         desired state and updates
+                 +------------------------------------+
+                 | uswest primary control-server      |
+                 | Python app, SQLite, workers, UI    |
+                 +------------------+-----------------+
+                                    |
+                         per-device authenticated API
+                                    |
+              +---------------------+---------------------+
+              |                     |                     |
+       Windows/Linux agent    Android VpnService     Cudy/OpenWrt
+       local routes + exits   local TUN + exits      LAN PBR + exits
+              |                     |                     |
+              +---------------------+---------------------+
+                                    |
+                 own AWG, VPNtype and LokVPN exits
+
+ Cudy also keeps a restricted tunnel, endpoint manifest, control-state backup,
+ and compact Go fallback service for primary discovery and recovery.
 ```
 
-Slot lifecycle:
+## Control Plane
 
-1. A slot is created when a rule, Auto winner, or probe needs a LokVPN profile.
-2. Existing slots are reused when their profile is requested again.
-3. A slot with no logical rules and no active probe is removed by GC.
-4. There is no fixed pool size; operational limits should be enforced as soft
-   warnings before hard caps.
+The primary control-server on `uswest` owns desired state:
 
-Current prototype commands live in `tools/lokvpn_slots.py` and install
-`/usr/bin/lokvpn-slot` plus the updated `/usr/bin/lokvpn-refresh` on Cudy.
+- users and devices;
+- global and per-user domain and IP/CIDR rules;
+- ordered Auto candidate policies and winner cache;
+- provider transport plans;
+- probe jobs and results;
+- agent health, diagnostics, enrollment and update manifests;
+- administrator and user web interfaces.
 
-Stage 4 starts by making `Auto` resolvable through `domain_auto_cache`: a route can keep `server_id = auto`, while export/deploy expands it to the cached concrete server for that domain. The first implementation allows an administrator to edit this cache manually from the UI or CLI.
+Agents fetch policy through the authenticated agent API and post status and
+probe results. Provider credentials remain on the control-server; agents
+normally receive ready transport configurations rather than calling provider
+APIs themselves.
 
-`Auto` is not currently a wildcard for every domain with no rule. The deploy model only emits rules for known global or per-user domains. Unknown domains follow the normal Cudy/PBR routing path until they are added to a route, cache, or future domain-discovery flow.
+SQLite is sufficient for the current scale. Backups and endpoint manifests are
+periodically copied to Cudy so a replacement VPS can be bootstrapped without
+recreating users and policy manually.
 
-Auto priority policies define which servers a benchmark should try and in what priority order. Resolution order is:
+## Effective Policy
 
-1. user + domain;
+Auto candidate lists are resolved in this order:
+
+1. user domain override;
 2. user default;
-3. global + domain;
+3. global domain policy;
 4. global default.
 
-The remaining work is to benchmark exits per domain, keep roughly 300 active domains, refresh cached leaders in the background, and optionally discover new domains from DNS/PBR logs before creating `Auto` routes.
+A route target can be:
+
+- `direct`, which explicitly bypasses managed exits;
+- a concrete server id;
+- `auto`, which resolves through the current winner cache and ordered candidate
+  policy.
+
+Domains and IP ranges present in the maintained tunnelling lists are managed as
+Auto unless a more specific rule selects `direct` or a concrete server. Targets
+outside all maintained and explicit rules remain direct and may be recorded in
+the domain-discovery review queue.
+
+The Auto worker prefers a capable agent that recently used the target. If no
+such agent is online, the control-server performs the probe. Candidate windows
+are bounded so agents do not start every provider transport at once. Success
+semantics may include HTTP status, latency, throughput and content validation;
+a fast HTTP 200 containing a geographic-block page is a failure, not a winner.
+
+## Transport Layer
+
+Logical server ids are stable policy names. Runtime interface names are an
+implementation detail.
+
+- Own exits: `aktau` and `uswest`, currently AmneziaWG interfaces on Cudy.
+- VPNtype: sing-box TUN transports such as `proxyde`, `proxynl` and `proxyus`.
+- LokVPN: logical profiles such as `lokvpn-de1`; runtime transports are created
+  only while a route or probe needs them and should be removed when unused.
+
+The current Windows AWG wrapper exposes one shared `AmneziaVPN` interface, so it
+cannot use `aktau` and `uswest` concurrently. A native multi-interface AWG
+backend is deliberately deferred until the rest of the system is stable.
+
+## Platform Agents
+
+### Windows
+
+The managed agent applies routes in one bounded PowerShell batch, starts only
+required transports, caches the last known good policy and maintains the
+control tunnel. An independent watchdog can restore direct routing and stop all
+managed components when critical connectivity repeatedly fails.
+
+### Linux
+
+The Linux package installs a systemd service, sing-box runtime, desktop UI,
+diagnostics, update helpers and an independent watchdog. It must coexist with
+NetworkManager, systemd-resolved, UFW and optional Zapret without requiring
+manual routes.
+
+### Android
+
+The Android application owns an Android `VpnService` and libbox engine. It can
+enroll with a one-time code, fetch policy, start provider transports, run probe
+jobs and report status. Explicit IP routes work. Full domain/SNI equivalence
+still requires a protected loop-free direct outbound before the app can safely
+capture a default route.
+
+### Cudy/OpenWrt
+
+Cudy has two independent roles:
+
+1. LAN-wide data-plane agent using PBR and provider interfaces;
+2. emergency fallback control path.
+
+The Go `cudy-fallback` process is read-mostly and serves endpoint/state status
+and cached policy preview. The separate Go `cudy-router-agent` renders desired
+OpenWrt artifacts. Its rollout states are `disabled`, `observe` and `apply`;
+apply is not enabled until repeated observe diffs and connectivity gates pass.
+
+PBR uses a delayed serialized boot wrapper and a fail-open watchdog. Validation
+failure stops PBR while keeping IPv4 forwarding and direct WAN available.
+
+## Failure Behaviour
+
+- Primary API unavailable: agents use cached policy; Cudy publishes fallback
+  endpoint metadata.
+- Primary VPS moved: update the manifest on Cudy, then agents discover the new
+  endpoint.
+- Provider exit unavailable: Auto selects the next healthy candidate.
+- Agent apply failure: platform watchdog restores a known direct baseline.
+- PBR rebuild failure: Cudy fails open instead of disabling LAN forwarding.
+- Cudy unavailable: device agents continue routing independently.
+
+## Source Of Truth
+
+- `tools/vpn_control_app.py`: current control-server and UI behaviour.
+- `tools/route_agent.py`: shared desktop policy planner/applicator.
+- `apps/CudyAndroidAgent/`: Android implementation.
+- `cmd/cudy-fallback/` and `cmd/cudy-router-agent/`: Go OpenWrt services.
+- `openwrt/`: deployed router scripts and init files.
+- `config/vpn_inventory.json`: static server catalog.
+- `docs/verification.md`: verified capabilities and remaining work.
+- `docs/current-status.md`: latest dated operational snapshot.
+
+Historical `MAIN.md` and `BRANCH-*.md` files are context only and must not be
+used as current operating instructions.

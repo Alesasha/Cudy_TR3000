@@ -25,20 +25,24 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest verified smoke status:
+Latest verified smoke status for release `1.19 (20)`:
 
 ```text
-ok ip=8 cleanup=0 transports=2 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 probe_jobs jobs=0 completed=0 failed=0
+ok ip=8 cleanup=0 transports=7 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 probe_jobs jobs=2 completed=2 failed=0
 ```
 
 Latest Release APK smoke on the physical phone:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.0-20260625.apk`;
-- SHA256: `731E5F334BBA359C4BC51A188A9341BB15B0EB2F03EBBB2B0B2F0DDBAF352271`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.19-20260713.apk`;
+- SHA256: `07227e1fc9173c1ac977b85392dced3ac8c9f645e0ec984d2fd61146ab50c789`;
 - foreground service stayed running;
 - Android VPN was established on `tun2`;
 - control-server reported `isasha_X7Pro_Cudy-android` online and healthy;
 - debug probe for `ifconfig.me` over `proxyde,proxynl` selected `proxynl`.
+- production `tcp://91.108.16.2:443` probing succeeded through four candidate
+  exits and selected `proxyfr` at 7 ms;
+- Android kept one default-network callback after repeated policy/probe reloads
+  and logged zero interface lookup errors;
 - boot/reconnect receiver is registered for `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED`;
 - receiver start path was verified through the explicit test broadcast
@@ -93,7 +97,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.0-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.19-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
