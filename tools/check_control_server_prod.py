@@ -251,7 +251,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--ssh-password")
-    parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=60,
+        help="SSH and remote audit timeout; system-status may include slow fallback reachability checks.",
+    )
     parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--http-fallback-url", default=os.environ.get("CONTROL_HTTP_FALLBACK_URL", DEFAULT_HTTP_FALLBACK_URL))
     parser.add_argument("--no-http-fallback", action="store_true", help="Do not use local HTTP tunnel fallback when SSH audit is unavailable.")

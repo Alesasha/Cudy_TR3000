@@ -17,15 +17,21 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   policy blockers without changing the workstation egress.
 - Provider refresh cron entries exist for VPNtype and LokVPN.
 - A live Auto probe rejected `proxyde` for `example.com` and selected `uswest`.
+- The production `uswest` audit passes over direct SSH. Ten consecutive login
+  and command sessions completed, `sshd` reported no `MaxStartups` drops or
+  restarts, and the control service, readiness checks and background workers
+  were healthy.
+- The SSH watchdog, firewall guard and `fail2ban` are active. Public scans are
+  being rejected without restricting roaming agents to fixed source IPs.
 - Control backup and Cudy fallback sync tasks are installed on Windows.
 - Targeted control, Auto, packaging, watchdog, PBR and Go regression tests pass.
 - No file under `secrets/` is tracked by Git.
 
 ## Incomplete Or Degraded
 
-- Direct SSH to `uswest` remains intermittently slow or unavailable during the
-  SSH banner stage. The control API is reachable through the restricted Cudy
-  tunnel, but direct production SSH checks are not reliable yet.
+- Historical SSH banner failures remain a condition to monitor, but they are
+  not currently reproducible. The production audit needed a 60-second timeout
+  because its complete remote status check can legitimately exceed 30 seconds.
 - `cudy-router-agent` apply remains blocked by its critical-service preflight:
   production policy currently sends ChatGPT and Gemini through `proxyde`, while
   that transport times out from Cudy. The observer is stable, but strict health
@@ -37,19 +43,17 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   known gap.
 - The Linux agent needs a longer real-world soak test covering suspend/resume,
   Wi-Fi changes, Zapret and UFW.
-- The working tree contains a large uncommitted implementation set and must be
-  split into reviewed thematic commits before further risky deployment.
+- Production reports four enabled agents as offline or stale and has 21 pending
+  probe jobs. This is advisory rather than a control-server readiness failure,
+  but it must be reconciled during platform acceptance.
 
 ## Next Order Of Work
 
-1. Review and commit the current control, agent, Cudy and documentation blocks.
-2. Restore `cudy-router-agent` in `observe` and verify repeated stable diffs.
-3. Diagnose and harden direct SSH access to `uswest`.
-4. Exercise primary-down and primary-recovery through Cudy fallback discovery.
-5. Finish dynamic provider lifecycle and content-aware Auto checks.
-6. Complete Windows, Android and Linux production acceptance separately.
-7. Audit admin/user UI against the current policy model.
-8. Prepare a staged, reversible migration from AirTies to Cudy as main router.
+1. Exercise primary-down and primary-recovery through Cudy fallback discovery.
+2. Finish dynamic provider lifecycle and content-aware Auto checks.
+3. Complete Windows, Android and Linux production acceptance separately.
+4. Audit admin/user UI against the current policy model.
+5. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
 Do not enable router-agent apply mode or move DHCP/WAN ownership to Cudy until
-steps 1-4 have passed.
+fallback recovery and critical-service transport checks have passed.
