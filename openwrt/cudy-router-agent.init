@@ -20,6 +20,9 @@ start_service() {
     procd_set_param command /usr/bin/cudy-router-agent \
         -mode "$mode" $apply_gate \
         -preview-url http://127.0.0.1:8765/api/cudy/agent-preview \
+        -control-url http://127.0.0.1:18765 \
+        -token-file /etc/cudy-fallback/agent.token \
+        -probe-limit 2 \
         -state-dir /var/lib/cudy-router-agent \
         -override-dir /etc/pbr-overrides \
         -bootstrap-command /usr/bin/cudy-pbr-safe-restart \

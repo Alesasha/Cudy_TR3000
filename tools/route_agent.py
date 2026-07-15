@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import platform
+import re
 import shlex
 import socket
 import subprocess
@@ -607,11 +608,24 @@ def body_geo_block_evidence(body_text: str) -> str:
     return ""
 
 
-def apply_semantic_probe_check(parsed: dict[str, Any], *, url: str, body_text: str) -> None:
+def apply_semantic_probe_check(
+    parsed: dict[str, Any],
+    *,
+    url: str,
+    body_text: str,
+    success_pattern: str = "",
+    failure_pattern: str = "",
+) -> None:
     evidence = body_geo_block_evidence(body_text)
     if evidence:
         parsed["semantic_status"] = "geo_blocked"
         parsed["semantic_evidence"] = evidence
+        parsed["ok"] = False
+    elif failure_pattern and re.search(failure_pattern, body_text, re.IGNORECASE | re.MULTILINE):
+        parsed["semantic_status"] = "failure_pattern"
+        parsed["ok"] = False
+    elif success_pattern and not re.search(success_pattern, body_text, re.IGNORECASE | re.MULTILINE):
+        parsed["semantic_status"] = "success_pattern_missing"
         parsed["ok"] = False
     else:
         parsed["semantic_status"] = "ok"
@@ -623,6 +637,8 @@ def curl_probe(
     interface_name: str,
     connect_timeout: int,
     max_time: int,
+    success_pattern: str = "",
+    failure_pattern: str = "",
 ) -> dict[str, Any]:
     bind_value = probe_bind_value(interface_name)
     body_file = tempfile.NamedTemporaryFile(prefix="cudy-probe-", suffix=".body", delete=False)
@@ -687,7 +703,13 @@ def curl_probe(
         parsed["speed_mbps"] = None
     parsed["ok"] = http_probe_reachable(int(parsed["http_code_int"]))
     body_text = body_bytes.decode("utf-8", errors="replace")
-    apply_semantic_probe_check(parsed, url=url, body_text=body_text)
+    apply_semantic_probe_check(
+        parsed,
+        url=url,
+        body_text=body_text,
+        success_pattern=success_pattern,
+        failure_pattern=failure_pattern,
+    )
     return parsed
 
 
@@ -737,6 +759,8 @@ def run_single_probe(
     interface_name: str,
     connect_timeout: int,
     max_time: int,
+    success_pattern: str = "",
+    failure_pattern: str = "",
 ) -> dict[str, Any]:
     prefixes = probe_route_prefixes(url) if is_windows() else []
     routes_added = False
@@ -756,6 +780,8 @@ def run_single_probe(
             interface_name=interface_name,
             connect_timeout=connect_timeout,
             max_time=max_time,
+            success_pattern=success_pattern,
+            failure_pattern=failure_pattern,
         )
     finally:
         if routes_added:
@@ -790,6 +816,8 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             interface_name=iface,
             connect_timeout=args.connect_timeout,
             max_time=args.max_time,
+            success_pattern=str(getattr(args, "success_pattern", "") or ""),
+            failure_pattern=str(getattr(args, "failure_pattern", "") or ""),
         )
         check.update(probe)
         check["status"] = "ok" if probe.get("ok") else str(probe.get("semantic_status") or "failed")
@@ -824,6 +852,8 @@ def run_probe_jobs(args: argparse.Namespace) -> dict[str, Any]:
                 interface_map=args.interface_map,
                 connect_timeout=int(job.get("connect_timeout") or args.connect_timeout),
                 max_time=int(job.get("max_time") or args.max_time),
+                success_pattern=str(job.get("success_pattern") or ""),
+                failure_pattern=str(job.get("failure_pattern") or ""),
             )
             result = run_probe(probe_args)
             posted = post_probe_job_result(args, job_id=job_id, result=result)
@@ -1429,6 +1459,8 @@ def build_parser() -> argparse.ArgumentParser:
     probe.add_argument("--interface-map", action="append", default=[], help="Map server id to local interface, e.g. proxyde=proxyde.")
     probe.add_argument("--connect-timeout", type=int, default=5)
     probe.add_argument("--max-time", type=int, default=12)
+    probe.add_argument("--success-pattern", default="", help="Optional response-body regex required for success.")
+    probe.add_argument("--failure-pattern", default="", help="Optional response-body regex that rejects the candidate.")
     probe.add_argument("--json", action="store_true")
 
     probe_jobs = sub.add_parser("probe-jobs", help="Fetch and execute pending control-server probe jobs.")

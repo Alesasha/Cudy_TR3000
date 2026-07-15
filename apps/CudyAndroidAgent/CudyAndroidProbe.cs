@@ -13,6 +13,16 @@ public sealed class CudyAndroidProbeRunner
 {
     private const string LogTag = "CudyAgent";
     private static readonly Regex IpBodyPattern = new(@"^\s*([0-9a-fA-F:.]+)\s*$", RegexOptions.Compiled);
+    private static readonly string[] GeoBlockPatterns =
+    {
+        "gemini isn't currently supported in your country",
+        "isn't currently supported in your country",
+        "not currently supported in your country",
+        "not available in your country",
+        "services are not available in your country",
+        "country is not supported",
+        "unsupported country",
+    };
 
     private readonly CudyVpnService service;
     private readonly CudyAndroidLibboxEngine engine;
@@ -130,6 +140,8 @@ public sealed class CudyAndroidProbeRunner
         var candidates = CandidateIds(job);
         var connectTimeout = PositiveInt(job, "connect_timeout", 5);
         var maxTime = PositiveInt(job, "max_time", 12);
+        var successPattern = GetString(job, "success_pattern") ?? "";
+        var failurePattern = GetString(job, "failure_pattern") ?? "";
         var probeCidrs = ResolveProbeCidrs(url, domain);
         var checks = new List<Dictionary<string, object?>>();
         Dictionary<string, object?>? winner = null;
@@ -180,7 +192,14 @@ public sealed class CudyAndroidProbeRunner
                 var probe = Uri.TryCreate(url, UriKind.Absolute, out var probeUri)
                     && string.Equals(probeUri.Scheme, "tcp", StringComparison.OrdinalIgnoreCase)
                     ? await TcpProbeAsync(probeUri, connectTimeout, maxTime, proxyPort, cancellationToken)
-                    : await HttpProbeAsync(url, connectTimeout, maxTime, proxyPort, cancellationToken);
+                    : await HttpProbeAsync(
+                        url,
+                        connectTimeout,
+                        maxTime,
+                        proxyPort,
+                        successPattern,
+                        failurePattern,
+                        cancellationToken);
                 foreach (var pair in probe)
                 {
                     check[pair.Key] = pair.Value;
@@ -223,6 +242,8 @@ public sealed class CudyAndroidProbeRunner
         int connectTimeout,
         int maxTime,
         int proxyPort,
+        string successPattern,
+        string failurePattern,
         CancellationToken cancellationToken)
     {
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -248,7 +269,9 @@ public sealed class CudyAndroidProbeRunner
             await using var stream = await reply.Content.ReadAsStreamAsync(cts.Token);
             var buffer = new byte[16384];
             var prefixBytes = new List<byte>();
+            var semanticBytes = new List<byte>();
             const int maxProbeBytes = 1024 * 1024;
+            const int maxSemanticBytes = 512 * 1024;
             while (bytes < maxProbeBytes)
             {
                 var read = await stream.ReadAsync(buffer.AsMemory(0, Math.Min(buffer.Length, maxProbeBytes - bytes)), cts.Token);
@@ -259,6 +282,10 @@ public sealed class CudyAndroidProbeRunner
                 if (prefixBytes.Count < 256)
                 {
                     prefixBytes.AddRange(buffer.Take(Math.Min(read, 256 - prefixBytes.Count)));
+                }
+                if (semanticBytes.Count < maxSemanticBytes)
+                {
+                    semanticBytes.AddRange(buffer.Take(Math.Min(read, maxSemanticBytes - semanticBytes.Count)));
                 }
                 bytes += read;
             }
@@ -274,9 +301,27 @@ public sealed class CudyAndroidProbeRunner
             stopwatch.Stop();
             var elapsedSeconds = Math.Max(0.001, stopwatch.Elapsed.TotalSeconds);
             var speedMbps = Math.Round(bytes * 8.0 / elapsedSeconds / 1_000_000, 2);
+            var semanticBody = Encoding.UTF8.GetString(semanticBytes.ToArray());
+            var normalizedBody = semanticBody.Replace("\u2019", "'", StringComparison.Ordinal).ToLowerInvariant();
+            var geoBlocked = GeoBlockPatterns.Any(pattern => normalizedBody.Contains(pattern, StringComparison.Ordinal));
+            var failureMatched = !string.IsNullOrWhiteSpace(failurePattern)
+                && Regex.IsMatch(semanticBody, failurePattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            var successMatched = string.IsNullOrWhiteSpace(successPattern)
+                || Regex.IsMatch(semanticBody, successPattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            var semanticStatus = geoBlocked
+                ? "geo_blocked"
+                : failureMatched
+                    ? "failure_pattern"
+                    : !successMatched
+                        ? "success_pattern_missing"
+                        : "ok";
             return new Dictionary<string, object?>
             {
-                ["ok"] = ((int)reply.StatusCode) >= 200 && ((int)reply.StatusCode) < 400,
+                ["ok"] = ((int)reply.StatusCode) >= 200
+                    && ((int)reply.StatusCode) < 500
+                    && !geoBlocked
+                    && !failureMatched
+                    && successMatched,
                 ["probe_type"] = "local_mixed_proxy",
                 ["local_proxy_port"] = proxyPort,
                 ["http_code"] = (int)reply.StatusCode,
@@ -284,6 +329,7 @@ public sealed class CudyAndroidProbeRunner
                 ["bytes"] = bytes,
                 ["speed_mbps"] = speedMbps,
                 ["egress_ip"] = egressIp,
+                ["semantic_status"] = semanticStatus,
             };
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)

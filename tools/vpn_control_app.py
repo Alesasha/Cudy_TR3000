@@ -5129,7 +5129,16 @@ def claim_agent_probe_jobs(
             if cursor.rowcount == 1:
                 saved = row(conn, "SELECT * FROM agent_probe_jobs WHERE id = ?", (item["id"],))
                 if saved:
-                    claimed.append(probe_job_row_to_dict(saved))
+                    claimed_job = probe_job_row_to_dict(saved)
+                    claimed_job.update(
+                        critical_probe_patterns(
+                            conn,
+                            user_id=str(device.get("user_id") or claimed_job.get("user_id") or ""),
+                            domain=str(claimed_job.get("domain") or ""),
+                            url=str(claimed_job.get("url") or ""),
+                        )
+                    )
+                    claimed.append(claimed_job)
     return claimed
 
 
@@ -6577,7 +6586,12 @@ def grouped_counts(conn: sqlite3.Connection, sql: str, params: Iterable[Any] = (
     return result
 
 
-def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
+def build_system_status(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    include_external: bool = True,
+) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     reference = datetime.now(timezone.utc)
     with connect(db_path) as conn:
@@ -6677,10 +6691,19 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
                     "age_seconds": age,
                 }
             )
-        fallback = cudy_fallback_state_status()
+        fallback = (
+            cudy_fallback_state_status()
+            if include_external
+            else {
+                "url": CUDY_FALLBACK_STATE_URL,
+                "reachable": None,
+                "ok": None,
+                "skipped": True,
+            }
+        )
         warnings: list[str] = []
         advisories: list[str] = []
-        if CUDY_FALLBACK_STATUS_WARN and not fallback.get("ok"):
+        if include_external and CUDY_FALLBACK_STATUS_WARN and not fallback.get("ok"):
             warnings.append("Cudy fallback state is stale or unreachable from this process")
         pending_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'pending'")
         failed_probe_jobs = count_value(conn, "SELECT COUNT(*) AS count FROM agent_probe_jobs WHERE status = 'failed'")
@@ -6815,7 +6838,9 @@ def build_system_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
 
 
 def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any]:
-    status = build_system_status(db_path, inventory_path)
+    # Readiness must only describe the local control process. A slow or offline
+    # Cudy fallback is operational status, not a reason to block this endpoint.
+    status = build_system_status(db_path, inventory_path, include_external=False)
     probe_jobs = status.get("probe_jobs") or {}
     transports = status.get("transports") or {}
     failed_recent = int(probe_jobs.get("failed_recent") or 0)
@@ -8368,6 +8393,43 @@ def effective_critical_services(conn: sqlite3.Connection, *, user_id: str) -> li
     return sorted(effective.values(), key=lambda item: (str(item.get("label") or "").lower(), item["service_key"]))
 
 
+def critical_probe_patterns(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    domain: str,
+    url: str = "",
+) -> dict[str, str]:
+    empty = {"success_pattern": "", "failure_pattern": ""}
+    try:
+        host = normalize_domain(domain)
+    except ValueError:
+        # Synthetic cache keys used for CIDR probes are not public domains and
+        # cannot have meaningful HTTP content rules.
+        return empty
+    if url:
+        parsed = urlparse(url)
+        if parsed.scheme and parsed.scheme.lower() not in {"http", "https"}:
+            return empty
+        if parsed.hostname:
+            try:
+                host = normalize_domain(parsed.hostname)
+            except ValueError:
+                return empty
+    for service in effective_critical_services(conn, user_id=user_id):
+        for target in service.get("targets") or []:
+            parsed = urlparse(str(target))
+            target_host = normalize_domain(parsed.hostname or "")
+            if not target_host:
+                continue
+            if host == target_host or host.endswith("." + target_host) or target_host.endswith("." + host):
+                return {
+                    "success_pattern": str(service.get("success_pattern") or ""),
+                    "failure_pattern": str(service.get("failure_pattern") or ""),
+                }
+    return empty
+
+
 def save_critical_service(
     db_path: Path,
     inventory_path: Path,
@@ -9398,6 +9460,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(readiness, status)
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except PermissionError as exc:
             self.auth_error(exc)
         except Exception as exc:
@@ -9570,6 +9634,8 @@ class Handler(BaseHTTPRequestHandler):
                 )
             else:
                 self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+        except (BrokenPipeError, ConnectionResetError):
+            return
         except PermissionError as exc:
             self.auth_error(exc)
         except Exception as exc:

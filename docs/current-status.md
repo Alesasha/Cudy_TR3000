@@ -12,11 +12,17 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   firewall validation are deployed.
 - `cudy-fallback` and the restricted Cudy control tunnel are running. A strict
   check observed live policy with 22 routes and 9 transports.
-- `cudy-router-agent` is running in `observe`. Three consecutive samples kept
-  the same 22 routes, 11 pending file changes, 2 transport actions and zero
-  policy blockers without changing the workstation egress.
+- `cudy-router-agent` is running in `observe`. It receives live policy, reports
+  agent heartbeat, processes Auto probe jobs and passes its strict check with
+  22 routes and five healthy critical services. It still does not modify PBR.
 - Provider refresh cron entries exist for VPNtype and LokVPN.
-- A live Auto probe rejected `proxyde` for `example.com` and selected `uswest`.
+- Content-aware Auto probes now run on the requesting agent. From Cudy,
+  `gemini.google.com` selected `proxyde` at 1394 ms, while `chatgpt.com`
+  rejected four timing-out provider exits and selected `uswest` at 1050 ms.
+  A matching ChatGPT domain candidate policy now permits that measured winner.
+- Primary control loss and recovery were exercised: Cudy served cached policy
+  while its control tunnel was stopped, then returned to live policy after the
+  tunnel restarted without changing the WAN/default route.
 - The production `uswest` audit passes over direct SSH. Ten consecutive login
   and command sessions completed, `sshd` reported no `MaxStartups` drops or
   restarts, and the control service, readiness checks and background workers
@@ -32,10 +38,9 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 - Historical SSH banner failures remain a condition to monitor, but they are
   not currently reproducible. The production audit needed a 60-second timeout
   because its complete remote status check can legitimately exceed 30 seconds.
-- `cudy-router-agent` apply remains blocked by its critical-service preflight:
-  production policy currently sends ChatGPT and Gemini through `proxyde`, while
-  that transport times out from Cudy. The observer is stable, but strict health
-  must pass before apply can be considered.
+- `cudy-router-agent` apply remains intentionally disabled. Strict preflight is
+  now green, but the current preview still contains seven PBR file changes and
+  needs a controlled reversible acceptance window before any apply trial.
 - The Windows managed-agent task is disabled on the development workstation;
   current traffic is intentionally handled by Cudy instead.
 - Android release `1.19 (20)` is installed on the physical phone, but its VPN
@@ -43,16 +48,17 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   known gap.
 - The Linux agent needs a longer real-world soak test covering suspend/resume,
   Wi-Fi changes, Zapret and UFW.
-- Production reports four enabled agents as offline or stale and has 21 pending
-  probe jobs. This is advisory rather than a control-server readiness failure,
-  but it must be reconciled during platform acceptance.
+- Production currently reports one of four enabled agents online. The old Auto
+  backlog is being drained by Cudy; recent failed probes are warnings rather
+  than a control-server readiness failure and must be reconciled during
+  platform acceptance.
 
 ## Next Order Of Work
 
-1. Exercise primary-down and primary-recovery through Cudy fallback discovery.
-2. Finish dynamic provider lifecycle and content-aware Auto checks.
-3. Complete Windows, Android and Linux production acceptance separately.
-4. Audit admin/user UI against the current policy model.
+1. Soak the Cudy observer and reconcile the remaining Auto probe backlog.
+2. Complete Windows, Android and Linux production acceptance separately.
+3. Audit admin/user UI against the current policy model.
+4. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
 5. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
 Do not enable router-agent apply mode or move DHCP/WAN ownership to Cudy until

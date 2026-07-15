@@ -8,6 +8,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import vpn_control_app
 from vpn_control_app import (
     PROBE_FAILED_WARN_SECONDS,
     build_readiness_status,
@@ -64,6 +65,15 @@ def main() -> int:
         probe_check = next((item for item in readiness["checks"] if item.get("name") == "probe_jobs"), {})
         if probe_check.get("state") != "warn" or probe_check.get("ok") is not True:
             raise AssertionError(f"probe readiness check should be warning-only: {probe_check!r}")
+
+        original_fallback_status = vpn_control_app.cudy_fallback_state_status
+        try:
+            vpn_control_app.cudy_fallback_state_status = lambda: (_ for _ in ()).throw(
+                AssertionError("readiness must not perform external fallback I/O")
+            )
+            build_readiness_status(db_path, INVENTORY)
+        finally:
+            vpn_control_app.cudy_fallback_state_status = original_fallback_status
 
         save_transport_config(
             db_path,

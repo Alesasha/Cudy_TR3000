@@ -71,8 +71,23 @@ def main() -> int:
                 user_id=USER_ID,
                 device={"id": "critical-test-device", "display_name": "Test", "platform": "windows"},
             )
+            patterns = app.critical_probe_patterns(
+                conn,
+                user_id=USER_ID,
+                domain="example.com",
+                url="https://example.com/health",
+            )
         assert [item["service_key"] for item in effective] == ["work"]
         assert config["critical_services"][0]["success_pattern"] == r"status\s*:\s*ok"
+        assert patterns == {"success_pattern": r"status\s*:\s*ok", "failure_pattern": ""}
+        with app.connect(db_path) as conn:
+            cidr_patterns = app.critical_probe_patterns(
+                conn,
+                user_id=USER_ID,
+                domain="ip-149-154-160-0-20.iproute.local",
+                url="tcp://149.154.167.51:443",
+            )
+        assert cidr_patterns == {"success_pattern": "", "failure_pattern": ""}
 
         try:
             app.save_critical_service(

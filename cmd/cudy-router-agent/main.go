@@ -30,6 +30,8 @@ const (
 type previewResponse struct {
 	OK               bool               `json:"ok"`
 	Configured       bool               `json:"configured"`
+	DeviceID         string             `json:"device_id"`
+	UserID           string             `json:"user_id"`
 	Source           string             `json:"source"`
 	ControlError     string             `json:"control_error"`
 	CacheAge         int64              `json:"cache_age_seconds"`
@@ -70,6 +72,7 @@ type desiredState struct {
 	PolicySource     string              `json:"policy_source"`
 	CacheAge         int64               `json:"cache_age_seconds"`
 	Groups           map[string]routeSet `json:"groups"`
+	ServerIDs        map[string]string   `json:"server_ids_by_interface,omitempty"`
 	CriticalServices []criticalService   `json:"critical_services,omitempty"`
 	Warnings         []string            `json:"warnings,omitempty"`
 	Blockers         []string            `json:"blockers,omitempty"`
@@ -123,6 +126,9 @@ type statusFile struct {
 	CriticalServiceFailures []string    `json:"critical_service_failures,omitempty"`
 	Applied                 bool        `json:"applied"`
 	RolledBack              bool        `json:"rolled_back"`
+	ProbeJobsClaimed        int         `json:"probe_jobs_claimed"`
+	ProbeJobsCompleted      int         `json:"probe_jobs_completed"`
+	ProbeJobsFailed         int         `json:"probe_jobs_failed"`
 	Error                   string      `json:"error,omitempty"`
 	Warnings                []string    `json:"warnings,omitempty"`
 	Diff                    []diffEntry `json:"diff,omitempty"`
@@ -138,6 +144,9 @@ type options struct {
 	HealthURL        string
 	PolicyCache      string
 	SingBoxDir       string
+	ControlURL       string
+	TokenFile        string
+	ProbeLimit       int
 	AllowApply       bool
 	Once             bool
 	PollInterval     time.Duration
@@ -148,6 +157,37 @@ type agent struct {
 	httpClient *http.Client
 	runCommand func(context.Context, string) error
 	now        func() time.Time
+}
+
+type probeJob struct {
+	ID                 string   `json:"id"`
+	Domain             string   `json:"domain"`
+	URL                string   `json:"url"`
+	CandidateServerIDs []string `json:"candidate_server_ids"`
+	ConnectTimeout     int      `json:"connect_timeout"`
+	MaxTime            int      `json:"max_time"`
+	SuccessPattern     string   `json:"success_pattern,omitempty"`
+	FailurePattern     string   `json:"failure_pattern,omitempty"`
+}
+
+type probeJobsResponse struct {
+	Jobs []probeJob `json:"jobs"`
+}
+
+type probeSummary struct {
+	Claimed   int
+	Completed int
+	Failed    int
+}
+
+var geoBlockPatterns = []string{
+	"gemini isn't currently supported in your country",
+	"isn't currently supported in your country",
+	"not currently supported in your country",
+	"not available in your country",
+	"services are not available in your country",
+	"country is not supported",
+	"unsupported country",
 }
 
 func main() {
@@ -161,6 +201,9 @@ func main() {
 	flag.StringVar(&opts.HealthURL, "health-url", "http://127.0.0.1:8765/healthz", "post-apply health URL")
 	flag.StringVar(&opts.PolicyCache, "policy-cache", "/var/lib/cudy-fallback/agent-config-cache.json", "root-only full policy cache used to prepare missing transports")
 	flag.StringVar(&opts.SingBoxDir, "sing-box-dir", "/etc/sing-box", "managed sing-box config directory")
+	flag.StringVar(&opts.ControlURL, "control-url", "http://127.0.0.1:18765", "primary control API used for status and probe jobs")
+	flag.StringVar(&opts.TokenFile, "token-file", "/etc/cudy-fallback/agent.token", "root-only agent token file")
+	flag.IntVar(&opts.ProbeLimit, "probe-limit", 2, "maximum probe jobs claimed per cycle; zero disables probing")
 	flag.BoolVar(&opts.AllowApply, "allow-apply", false, "required safety gate for apply mode")
 	flag.BoolVar(&opts.Once, "once", false, "run one cycle and exit")
 	flag.DurationVar(&opts.PollInterval, "poll-interval", time.Minute, "policy poll interval")
@@ -201,6 +244,9 @@ func (a *agent) validate() error {
 	}
 	if a.opts.PollInterval <= 0 {
 		return errors.New("poll interval must be positive")
+	}
+	if a.opts.ProbeLimit < 0 || a.opts.ProbeLimit > 10 {
+		return errors.New("probe limit must be between zero and ten")
 	}
 	return nil
 }
@@ -243,6 +289,15 @@ func (a *agent) cycle(ctx context.Context) error {
 	status.Warnings = desired.Warnings
 	status.RouteCount = desiredRouteCount(desired)
 	status.CriticalServiceCount = len(desired.CriticalServices)
+	if preview.Source == "live" && a.opts.ProbeLimit > 0 {
+		probeResult, probeErr := a.processProbeJobs(ctx, preview)
+		status.ProbeJobsClaimed = probeResult.Claimed
+		status.ProbeJobsCompleted = probeResult.Completed
+		status.ProbeJobsFailed = probeResult.Failed
+		if probeErr != nil {
+			status.Warnings = append(status.Warnings, "probe jobs: "+probeErr.Error())
+		}
+	}
 	if err := writeJSONAtomic(filepath.Join(a.opts.StateDir, "desired.json"), desired, 0o600); err != nil {
 		return err
 	}
@@ -274,23 +329,23 @@ func (a *agent) cycle(ctx context.Context) error {
 		} else if len(status.CriticalServiceFailures) > 0 {
 			status.Warnings = append(status.Warnings, "critical service preflight failed: "+strings.Join(status.CriticalServiceFailures, "; "))
 		}
-		return writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
+		return a.persistStatus(ctx, status, desired)
 	}
 	if len(desired.Blockers) > 0 {
 		err := errors.New("refusing apply while policy has blockers: " + strings.Join(desired.Blockers, "; "))
 		status.Error = err.Error()
-		_ = writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
+		_ = a.persistStatus(ctx, status, desired)
 		return err
 	}
 	if len(updates) == 0 {
 		if err := a.healthCheck(ctx, desired.CriticalServices, desired.Groups); err != nil {
 			status.Error = err.Error()
-			_ = writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
+			_ = a.persistStatus(ctx, status, desired)
 			return err
 		}
 		status.CriticalServicesOK = true
 		status.OK = true
-		return writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
+		return a.persistStatus(ctx, status, desired)
 	}
 
 	rolledBack, err := a.applyTransaction(ctx, updates, desired.Transports, desired.CriticalServices, desired.Groups)
@@ -301,8 +356,15 @@ func (a *agent) cycle(ctx context.Context) error {
 	if err != nil {
 		status.Error = err.Error()
 	}
-	_ = writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
+	_ = a.persistStatus(ctx, status, desired)
 	return err
+}
+
+func (a *agent) persistStatus(ctx context.Context, status statusFile, desired desiredState) error {
+	if err := a.postAgentStatus(ctx, status, desired); err != nil {
+		status.Warnings = append(status.Warnings, "status post: "+err.Error())
+	}
+	return writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
 }
 
 func (a *agent) fetchPreview(ctx context.Context) (previewResponse, error) {
@@ -326,6 +388,337 @@ func (a *agent) fetchPreview(ctx context.Context) (previewResponse, error) {
 		return result, fmt.Errorf("preview is not usable: ok=%t configured=%t source=%q", result.OK, result.Configured, result.Source)
 	}
 	return result, nil
+}
+
+func (a *agent) controlJSON(ctx context.Context, method, path string, requestBody any, responseBody any) error {
+	tokenRaw, err := os.ReadFile(a.opts.TokenFile)
+	if err != nil {
+		return fmt.Errorf("read agent token: %w", err)
+	}
+	token := strings.TrimSpace(string(tokenRaw))
+	if token == "" {
+		return errors.New("agent token is empty")
+	}
+	var body io.Reader
+	if requestBody != nil {
+		raw, marshalErr := json.Marshal(requestBody)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		body = bytes.NewReader(raw)
+	}
+	endpoint := strings.TrimRight(a.opts.ControlURL, "/") + "/" + strings.TrimLeft(path, "/")
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", "cudy-router-agent/0.2")
+	if requestBody != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return fmt.Errorf("control %s returned HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	if responseBody == nil {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		return nil
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 4<<20)).Decode(responseBody)
+}
+
+func (a *agent) processProbeJobs(ctx context.Context, preview previewResponse) (probeSummary, error) {
+	result := probeSummary{}
+	var response probeJobsResponse
+	path := fmt.Sprintf("/api/agent/probe-jobs?limit=%d", a.opts.ProbeLimit)
+	requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	err := a.controlJSON(requestCtx, http.MethodGet, path, nil, &response)
+	cancel()
+	if err != nil {
+		return result, err
+	}
+	result.Claimed = len(response.Jobs)
+	for _, job := range response.Jobs {
+		probeResult := a.runProbeJob(ctx, job, preview)
+		winner, _ := probeResult["winner"].(map[string]any)
+		if winner == nil {
+			result.Failed++
+		}
+		payload := map[string]any{"job_id": job.ID, "result": probeResult}
+		postCtx, postCancel := context.WithTimeout(ctx, 20*time.Second)
+		postErr := a.controlJSON(postCtx, http.MethodPost, "/api/agent/probe-jobs/result", payload, &map[string]any{})
+		postCancel()
+		if postErr != nil {
+			result.Failed++
+			return result, fmt.Errorf("post probe %s: %w", job.ID, postErr)
+		}
+		result.Completed++
+	}
+	return result, nil
+}
+
+func (a *agent) runProbeJob(ctx context.Context, job probeJob, preview previewResponse) map[string]any {
+	domain := strings.ToLower(strings.TrimSpace(job.Domain))
+	probeURL := strings.TrimSpace(job.URL)
+	if probeURL == "" && domain != "" {
+		probeURL = "https://" + domain + "/"
+	}
+	connectTimeout := boundedSeconds(job.ConnectTimeout, 5, 1, 30)
+	maxTime := boundedSeconds(job.MaxTime, 12, 1, 60)
+	successPattern, failurePattern := probePatterns(job, preview.CriticalServices, probeURL, domain)
+	transports := map[string]transportPreview{}
+	for _, transport := range preview.TransportPlan {
+		transports[transport.ServerID] = transport
+	}
+	checks := []map[string]any{}
+	var winner map[string]any
+	for index, serverID := range job.CandidateServerIDs {
+		transport, exists := transports[serverID]
+		check := map[string]any{
+			"server_id": serverID,
+			"index":     index + 1,
+			"interface": transport.Interface,
+			"ok":        false,
+		}
+		if !exists || !transport.InterfacePresent {
+			check["status"] = "no_interface"
+			checks = append(checks, check)
+			continue
+		}
+		probe := a.probeTarget(ctx, probeURL, transport.Interface, connectTimeout, maxTime, successPattern, failurePattern)
+		for key, value := range probe {
+			check[key] = value
+		}
+		if check["ok"] == true {
+			check["status"] = "ok"
+			if winner == nil || intValue(check["time_total_ms"], 1<<30) < intValue(winner["time_total_ms"], 1<<30) {
+				winner = check
+			}
+		} else if check["status"] == nil {
+			check["status"] = firstNonEmpty(anyString(check["semantic_status"]), "failed")
+		}
+		checks = append(checks, check)
+	}
+	return map[string]any{
+		"schema_version":       1,
+		"agent_version":        "0.2",
+		"platform":             "openwrt",
+		"device_id":            preview.DeviceID,
+		"domain":               domain,
+		"url":                  probeURL,
+		"candidate_server_ids": job.CandidateServerIDs,
+		"winner":               winner,
+		"checks":               checks,
+		"ok":                   winner != nil,
+	}
+}
+
+func (a *agent) probeTarget(ctx context.Context, target, iface string, connectTimeout, maxTime time.Duration, successPattern, failurePattern string) map[string]any {
+	parsed, err := url.Parse(target)
+	if err != nil || parsed.Host == "" {
+		return map[string]any{"error": "invalid probe URL", "time_total_ms": 0}
+	}
+	dialer := &net.Dialer{Timeout: connectTimeout}
+	if err := bindDialerToInterface(dialer, iface); err != nil {
+		return map[string]any{"error": err.Error(), "time_total_ms": 0}
+	}
+	started := time.Now()
+	requestCtx, cancel := context.WithTimeout(ctx, maxTime)
+	defer cancel()
+	if parsed.Scheme == "tcp" {
+		connection, dialErr := dialer.DialContext(requestCtx, "tcp", parsed.Host)
+		elapsed := time.Since(started)
+		if dialErr != nil {
+			return map[string]any{"probe_type": "tcp", "error": dialErr.Error(), "time_total_ms": elapsed.Milliseconds()}
+		}
+		_ = connection.Close()
+		return map[string]any{"probe_type": "tcp", "ok": true, "time_total_ms": elapsed.Milliseconds()}
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return map[string]any{"error": "unsupported probe scheme", "time_total_ms": 0}
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = dialer.DialContext
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: maxTime}
+	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, target, nil)
+	if err != nil {
+		return map[string]any{"error": err.Error(), "time_total_ms": 0}
+	}
+	req.Header.Set("Range", "bytes=0-1048575")
+	req.Header.Set("User-Agent", "cudy-router-agent/0.2")
+	resp, err := client.Do(req)
+	if err != nil {
+		return map[string]any{"probe_type": "http", "error": err.Error(), "time_total_ms": time.Since(started).Milliseconds()}
+	}
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	resp.Body.Close()
+	elapsed := time.Since(started)
+	result := map[string]any{
+		"probe_type":      "http_interface",
+		"http_code":       resp.StatusCode,
+		"time_total_ms":   elapsed.Milliseconds(),
+		"bytes":           len(body),
+		"speed_mbps":      float64(len(body)*8) / maxFloat(elapsed.Seconds(), 0.001) / 1_000_000,
+		"semantic_status": "ok",
+	}
+	if readErr != nil {
+		result["error"] = readErr.Error()
+		return result
+	}
+	text := string(body)
+	success, patternErr := patternMatches(successPattern, text, true)
+	if patternErr != nil {
+		result["semantic_status"] = "invalid_success_pattern"
+		result["error"] = patternErr.Error()
+		return result
+	}
+	failure, patternErr := patternMatches(failurePattern, text, false)
+	if patternErr != nil {
+		result["semantic_status"] = "invalid_failure_pattern"
+		result["error"] = patternErr.Error()
+		return result
+	}
+	geoBlocked := bodyHasGeoBlock(text)
+	result["ok"] = resp.StatusCode >= 200 && resp.StatusCode < 500 && success && !failure && !geoBlocked
+	if geoBlocked {
+		result["semantic_status"] = "geo_blocked"
+	} else if failure {
+		result["semantic_status"] = "failure_pattern"
+	} else if !success {
+		result["semantic_status"] = "success_pattern_missing"
+	}
+	return result
+}
+
+func (a *agent) postAgentStatus(ctx context.Context, status statusFile, desired desiredState) error {
+	domains := []map[string]any{}
+	ipRoutes := []map[string]any{}
+	interfaces := []string{}
+	for iface, routes := range desired.Groups {
+		interfaces = append(interfaces, iface)
+		serverID := firstNonEmpty(desired.ServerIDs[iface], iface)
+		for _, domain := range routes.Domains {
+			domains = append(domains, map[string]any{"domain": domain, "server_id": serverID, "ok": status.OK})
+		}
+		for _, target := range routes.IPs {
+			ipRoutes = append(ipRoutes, map[string]any{"target_cidr": target, "server_id": serverID, "ok": status.OK})
+		}
+	}
+	sort.Strings(interfaces)
+	payload := map[string]any{
+		"schema_version": 1,
+		"platform":       "openwrt",
+		"agent_version":  "0.2",
+		"vpn_interfaces": interfaces,
+		"routes": map[string]any{
+			"domain_count":   len(domains),
+			"ip_route_count": len(ipRoutes),
+		},
+		"domain_routes": domains,
+		"ip_routes":     ipRoutes,
+		"health": map[string]any{
+			"ok":      status.OK,
+			"mode":    status.Mode,
+			"applied": status.Applied,
+		},
+		"capabilities": map[string]any{
+			"can_probe":             a.opts.ProbeLimit > 0,
+			"can_route":             a.opts.Mode == "apply",
+			"can_manage_transports": true,
+		},
+		"errors": []string{},
+	}
+	if status.Error != "" {
+		payload["errors"] = []string{status.Error}
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	return a.controlJSON(requestCtx, http.MethodPost, "/api/agent/status", payload, &map[string]any{})
+}
+
+func probePatterns(job probeJob, services []criticalService, target, domain string) (string, string) {
+	if job.SuccessPattern != "" || job.FailurePattern != "" {
+		return job.SuccessPattern, job.FailurePattern
+	}
+	host := strings.ToLower(strings.TrimSuffix(domain, "."))
+	if parsed, err := url.Parse(target); err == nil && parsed.Hostname() != "" {
+		host = strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	}
+	for _, service := range services {
+		for _, serviceTarget := range service.Targets {
+			parsed, err := url.Parse(serviceTarget)
+			if err != nil {
+				continue
+			}
+			serviceHost := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+			if serviceHost != "" && (host == serviceHost || strings.HasSuffix(host, "."+serviceHost) || strings.HasSuffix(serviceHost, "."+host)) {
+				return service.SuccessPattern, service.FailurePattern
+			}
+		}
+	}
+	return "", ""
+}
+
+func bodyHasGeoBlock(body string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(body, "’", "'"))
+	for _, pattern := range geoBlockPatterns {
+		if strings.Contains(normalized, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+func patternMatches(pattern, body string, emptyValue bool) (bool, error) {
+	if pattern == "" {
+		return emptyValue, nil
+	}
+	compiled, err := regexp.Compile("(?im)" + pattern)
+	if err != nil {
+		return false, err
+	}
+	return compiled.MatchString(body), nil
+}
+
+func boundedSeconds(value, fallback, minimum, maximum int) time.Duration {
+	if value == 0 {
+		value = fallback
+	}
+	if value < minimum {
+		value = minimum
+	}
+	if value > maximum {
+		value = maximum
+	}
+	return time.Duration(value) * time.Second
+}
+
+func intValue(value any, fallback int) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return fallback
+	}
+}
+
+func maxFloat(left, right float64) float64 {
+	if left > right {
+		return left
+	}
+	return right
 }
 
 func (a *agent) planTransports(preview previewResponse) ([]transportAction, map[string][]byte, map[string]bool, error) {
@@ -571,6 +964,7 @@ func buildDesired(preview previewResponse, preparable map[string]bool, now time.
 		PolicySource:     preview.Source,
 		CacheAge:         preview.CacheAge,
 		Groups:           map[string]routeSet{},
+		ServerIDs:        map[string]string{},
 		CriticalServices: append([]criticalService{}, preview.CriticalServices...),
 		Warnings:         append([]string{}, preview.Warnings...),
 	}
@@ -616,6 +1010,13 @@ func buildDesired(preview previewResponse, preparable map[string]bool, now time.
 			return desired, fmt.Errorf("unsupported route kind %q", route.Kind)
 		}
 		desired.Groups[iface] = set
+		if current := desired.ServerIDs[iface]; current == "" || current == route.ServerID {
+			desired.ServerIDs[iface] = route.ServerID
+		} else {
+			// A shared interface cannot be attributed to a single backend in the
+			// status report. Keep the interface name instead of reporting a lie.
+			desired.ServerIDs[iface] = iface
+		}
 	}
 	for iface, set := range desired.Groups {
 		set.Domains = uniqueSorted(set.Domains)

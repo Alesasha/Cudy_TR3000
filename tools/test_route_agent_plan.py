@@ -109,6 +109,27 @@ def main() -> int:
         route_agent.run_text = original_run_text  # type: ignore[assignment]
         route_agent.probe_bind_value = original_probe_bind_value  # type: ignore[assignment]
 
+    semantic = {"ok": True}
+    route_agent.apply_semantic_probe_check(
+        semantic,
+        url="https://example.com/",
+        body_text="Access denied for this region",
+        success_pattern=r"access|ready",
+        failure_pattern=r"denied\s+for\s+this\s+region",
+    )
+    if semantic.get("ok") or semantic.get("semantic_status") != "failure_pattern":
+        raise AssertionError(f"failure regex must reject a nominal HTTP response: {semantic!r}")
+
+    semantic = {"ok": True}
+    route_agent.apply_semantic_probe_check(
+        semantic,
+        url="https://example.com/",
+        body_text="Service is warming up",
+        success_pattern=r"service\s+ready",
+    )
+    if semantic.get("ok") or semantic.get("semantic_status") != "success_pattern_missing":
+        raise AssertionError(f"missing success regex must reject a nominal HTTP response: {semantic!r}")
+
     print("Route agent plan regression passed.")
     return 0
 

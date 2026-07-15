@@ -29,6 +29,9 @@ func TestBuildDesiredMapsDirectAndRejectsUnavailable(t *testing.T) {
 	if got := desired.Groups["wan"].IPs; len(got) != 1 || got[0] != "203.0.113.0/24" {
 		t.Fatalf("ips=%v", got)
 	}
+	if desired.ServerIDs["proxyde"] != "proxyde" || desired.ServerIDs["wan"] != "direct" {
+		t.Fatalf("server ids=%v", desired.ServerIDs)
+	}
 
 	preview.Routes = append(preview.Routes, routePreview{Kind: "ip", Target: "198.51.100.1/32", ServerID: "missing", Interface: "missing", Applicable: false})
 	desired, err = buildDesired(preview, map[string]bool{}, time.Now())
@@ -307,5 +310,77 @@ func TestManagedTransportConfigsArePrivate(t *testing.T) {
 	}
 	if got := managedFileMode("/etc/init.d/sing-box-lokvpn-de1"); got != 0o755 {
 		t.Fatalf("init mode=%#o", got)
+	}
+}
+
+func TestProbeJobRoundTripUsesSemanticPatterns(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("service ready"))
+	}))
+	defer target.Close()
+
+	tokenPath := filepath.Join(t.TempDir(), "agent.token")
+	if err := os.WriteFile(tokenPath, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	posted := make(chan map[string]any, 1)
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/agent/probe-jobs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jobs": []map[string]any{{
+				"id": "probe-test", "domain": "example.com", "url": target.URL,
+				"candidate_server_ids": []string{"proxyde"}, "connect_timeout": 2, "max_time": 4,
+				"success_pattern": "service\\s+ready", "failure_pattern": "blocked",
+			}}})
+		case "/api/agent/probe-jobs/result":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			posted <- payload
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer control.Close()
+
+	a := &agent{
+		opts:       options{ControlURL: control.URL, TokenFile: tokenPath, ProbeLimit: 2},
+		httpClient: control.Client(),
+	}
+	preview := previewResponse{
+		DeviceID: "cudy-home", Source: "live",
+		TransportPlan: []transportPreview{{ServerID: "proxyde", InterfacePresent: true}},
+	}
+	summary, err := a.processProbeJobs(context.Background(), preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Claimed != 1 || summary.Completed != 1 || summary.Failed != 0 {
+		t.Fatalf("summary=%+v", summary)
+	}
+	payload := <-posted
+	result, _ := payload["result"].(map[string]any)
+	winner, _ := result["winner"].(map[string]any)
+	if winner == nil || winner["server_id"] != "proxyde" || winner["semantic_status"] != "ok" {
+		t.Fatalf("payload=%+v", payload)
+	}
+}
+
+func TestProbeRejectsGeoBlockAndFailurePattern(t *testing.T) {
+	if !bodyHasGeoBlock("Service is NOT AVAILABLE IN YOUR COUNTRY") {
+		t.Fatal("geo block evidence was missed")
+	}
+	matched, err := patternMatches("access\\s+denied", "Access denied", false)
+	if err != nil || !matched {
+		t.Fatalf("matched=%t err=%v", matched, err)
+	}
+	if _, err := patternMatches("(", "body", false); err == nil {
+		t.Fatal("invalid regex was accepted")
 	}
 }

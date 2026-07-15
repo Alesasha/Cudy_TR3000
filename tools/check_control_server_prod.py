@@ -208,7 +208,7 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
             args.timeout,
         )
         health = read_remote_json(client, "curl -fsS --max-time 5 http://127.0.0.1:8765/healthz", args.timeout)
-        ready = read_remote_json(client, "curl -sS --max-time 5 http://127.0.0.1:8765/readyz", args.timeout)
+        ready = read_remote_json(client, "curl -sS --max-time 15 http://127.0.0.1:8765/readyz", args.timeout)
         status = read_remote_json(
             client,
             (
