@@ -93,8 +93,10 @@ implementation detail.
   only while a route or probe needs them and should be removed when unused.
 
 The current Windows AWG wrapper exposes one shared `AmneziaVPN` interface, so it
-cannot use `aktau` and `uswest` concurrently. A native multi-interface AWG
-backend is deliberately deferred until the rest of the system is stable.
+cannot use `aktau` and `uswest` concurrently. The final platform phase replaces
+all AWG wrappers with one versioned native multi-instance backend contract and
+implementations for Windows, Linux, Android and OpenWrt/Cudy. Logical server ids
+and control-server policy do not change during that migration.
 
 ## Platform Agents
 

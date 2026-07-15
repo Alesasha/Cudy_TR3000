@@ -164,8 +164,30 @@ tests as the LAN gateway without one-to-two-minute traffic stalls.
 Exit criteria: a clean replacement server can restore control, UI, policy,
 providers and agent updates within one planned maintenance window.
 
-## Deferred: Native Multi-AWG Backend
+## Phase 8: Native Multi-AWG On Every Agent
 
-`cudy-awg-native` remains deferred until all higher-level policy and recovery
-work is stable. It should replace the shared Amnezia service wrapper behind the
-existing transport abstraction without changing control-server semantics.
+Prerequisite: routing policy, recovery, platform lifecycle and Cudy main-router
+operation are stable. This is intentionally the final platform phase so a new
+transport engine cannot obscure higher-level routing defects.
+
+1. Define one versioned AWG backend contract for create, start, stop, refresh,
+   health, counters and cleanup; keep logical server ids and control-server
+   policy semantics unchanged.
+2. Implement independent native AWG instances for Windows, Linux, Android and
+   OpenWrt/Cudy behind each platform's existing transport abstraction.
+3. Remove the shared Windows `AmneziaVPN` interface limitation and all reliance
+   on a separately installed AmneziaVPN application or UI.
+4. Let every agent start only the AWG exits required by active routes or a
+   bounded probe window, and stop unused instances without affecting other
+   transports.
+5. Preserve last-known-good configuration and per-instance recovery across
+   agent restart, device reboot and temporary control-server loss.
+6. Add safe migration and rollback from existing AWG wrappers/configs on every
+   platform, including key and endpoint rotation without exposing secrets.
+7. Test concurrent `aktau`, `uswest` and an additional AWG exit while Direct,
+   sing-box provider routes, Auto probes and control traffic remain isolated.
+
+Exit criteria: all four agent platforms can run at least three independent AWG
+instances concurrently, recover them after reboot/control loss, update one
+instance without interrupting the others, and roll back to the previous backend
+without losing Direct or control connectivity.
