@@ -29,7 +29,8 @@ DEFAULT_USER = "root"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control"
 
-UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools", "build/agent-updates"]
+UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
+AGENT_UPDATE_DIR = "build/agent-updates"
 UPLOAD_FILES = ["requirements.txt"]
 EXCLUDE_NAMES = {
     ".git",
@@ -153,8 +154,15 @@ def upload_tree(sftp: paramiko.SFTPClient, local_dir: Path, remote_dir: str) -> 
     return count
 
 
-def archive_paths() -> Iterable[Path]:
-    for dirname in UPLOAD_DIRS:
+def selected_upload_dirs(*, include_agent_updates: bool) -> list[str]:
+    result = list(UPLOAD_DIRS)
+    if include_agent_updates:
+        result.append(AGENT_UPDATE_DIR)
+    return result
+
+
+def archive_paths(*, include_agent_updates: bool) -> Iterable[Path]:
+    for dirname in selected_upload_dirs(include_agent_updates=include_agent_updates):
         path = ROOT / dirname
         if path.exists():
             yield path
@@ -164,10 +172,10 @@ def archive_paths() -> Iterable[Path]:
             yield path
 
 
-def build_archive(output: Path) -> int:
+def build_archive(output: Path, *, include_agent_updates: bool = True) -> int:
     count = 0
     with tarfile.open(output, "w") as tar:
-        for base in archive_paths():
+        for base in archive_paths(include_agent_updates=include_agent_updates):
             if base.is_file():
                 tar.add(base, arcname=base.relative_to(ROOT).as_posix())
                 count += 1
@@ -226,7 +234,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             if args.archive_upload:
                 with tempfile.TemporaryDirectory(prefix="cudy-control-deploy-") as temp_dir:
                     archive = Path(temp_dir) / "cudy-control-deploy.tar"
-                    uploaded = build_archive(archive)
+                    uploaded = build_archive(archive, include_agent_updates=not args.skip_agent_updates)
                     remote_archive = f"/tmp/cudy-control-deploy-{int(time.time())}.tar"
                     print(f"Uploading archive ({archive.stat().st_size} bytes, {uploaded} files)...", flush=True)
                     sftp.put(str(archive), remote_archive)
@@ -239,7 +247,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
                         args.timeout * 2,
                     )
             else:
-                for dirname in UPLOAD_DIRS:
+                for dirname in selected_upload_dirs(include_agent_updates=not args.skip_agent_updates):
                     local_dir = ROOT / dirname
                     if local_dir.exists():
                         print(f"Uploading {dirname}/...", flush=True)
@@ -309,6 +317,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--db", type=Path, default=ROOT / "data" / "vpn_control.db")
     parser.add_argument("--skip-package-install", action="store_true", help="Skip apt/package checks on an already prepared VPS.")
     parser.add_argument("--no-archive-upload", dest="archive_upload", action="store_false", help="Upload files one-by-one instead of a single tar archive.")
+    parser.add_argument("--skip-agent-updates", action="store_true", help="Deploy code without re-uploading large agent update artifacts.")
     parser.add_argument("--upload-db", dest="upload_db", action="store_true", help="Explicitly upload the local SQLite DB to the server. Dangerous for production deploys.")
     parser.add_argument("--no-upload-db", dest="upload_db", action="store_false", help="Do not upload the local SQLite DB. This is the default.")
     parser.set_defaults(upload_db=False, archive_upload=True)
