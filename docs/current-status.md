@@ -12,6 +12,9 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   firewall validation are deployed.
 - `cudy-fallback` and the restricted Cudy control tunnel are running. A strict
   check observed live policy with 22 routes and 9 transports.
+- `cudy-router-agent` is running in `observe`. Three consecutive samples kept
+  the same 22 routes, 11 pending file changes, 2 transport actions and zero
+  policy blockers without changing the workstation egress.
 - Provider refresh cron entries exist for VPNtype and LokVPN.
 - A live Auto probe rejected `proxyde` for `example.com` and selected `uswest`.
 - Control backup and Cudy fallback sync tasks are installed on Windows.
@@ -23,9 +26,10 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 - Direct SSH to `uswest` remains intermittently slow or unavailable during the
   SSH banner stage. The control API is reachable through the restricted Cudy
   tunnel, but direct production SSH checks are not reliable yet.
-- `cudy-router-agent` code passes tests, but its live OpenWrt service is
-  currently inactive and has no current status file. It must return only in
-  `observe` mode first.
+- `cudy-router-agent` apply remains blocked by its critical-service preflight:
+  production policy currently sends ChatGPT and Gemini through `proxyde`, while
+  that transport times out from Cudy. The observer is stable, but strict health
+  must pass before apply can be considered.
 - The Windows managed-agent task is disabled on the development workstation;
   current traffic is intentionally handled by Cudy instead.
 - Android release `1.19 (20)` is installed on the physical phone, but its VPN
