@@ -41,7 +41,8 @@ cp -f "$archive" "$tmp_dir/package.zip"
 
 echo "== stop previous service if present =="
 if command -v systemctl >/dev/null 2>&1; then
-  sudo systemctl stop cudy-managed-agent.service 2>/dev/null || true
+  sudo systemctl disable --now cudy-managed-agent.service 2>/dev/null || true
+  sudo systemctl reset-failed cudy-managed-agent.service 2>/dev/null || true
 fi
 
 echo "== remove subdirectories in $work_dir =="

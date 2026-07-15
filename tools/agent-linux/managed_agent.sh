@@ -19,6 +19,7 @@ EXTRA_INTERFACE_MAPS="$(strip_cr "${EXTRA_INTERFACE_MAPS:-}")"
 LOG_PATH="$(strip_cr "${LOG_PATH:-./managed-agent.log}")"
 VPN_AGENT_TOKEN="$(strip_cr "${VPN_AGENT_TOKEN:-}")"
 VPN_AGENT_DEVICE_ID="$(strip_cr "${VPN_AGENT_DEVICE_ID:-}")"
+AGENT_AUTO_UPDATE="$(strip_cr "${AGENT_AUTO_UPDATE:-1}")"
 export VPN_AGENT_TOKEN VPN_AGENT_DEVICE_ID
 export VPN_CONTROL_URL="http://127.0.0.1:${CONTROL_LOCAL_PORT}"
 
@@ -100,6 +101,49 @@ PY
   done
 }
 
+apply_config() {
+  local config_file="$1"
+  local control_online="$2"
+  local map_file="run/interface-maps.txt"
+  build_interface_args "$config_file" > "$map_file"
+  start_transports
+  restore_direct_dns_baseline
+  python3 - run/transport-plan.json <<'PY' > run/desired-transports.txt
+import json
+import sys
+for row in json.load(open(sys.argv[1], encoding="utf-8")):
+    name = row.get("interface_name") or ""
+    if name:
+        print(name)
+PY
+  args=()
+  while IFS= read -r map; do
+    [ -n "$map" ] && args+=(--interface-map "$map")
+  done < "$map_file"
+  baseline_args=()
+  [ "$DIRECT_BASELINE" = "1" ] && baseline_args+=(--direct-baseline)
+  cached_args=()
+  status_args=()
+  if [ "$control_online" = "0" ]; then
+    cached_args+=(--cached)
+  else
+    status_args+=(--post-status)
+  fi
+  if [ "$(id -u)" -eq 0 ]; then
+    python3 ./route_agent.py apply "${cached_args[@]}" "${baseline_args[@]}" "${args[@]}" --yes "${status_args[@]}"
+  else
+    sudo env VPN_CONTROL_URL="$VPN_CONTROL_URL" VPN_AGENT_TOKEN="$VPN_AGENT_TOKEN" VPN_AGENT_DEVICE_ID="$VPN_AGENT_DEVICE_ID" \
+      python3 ./route_agent.py apply "${cached_args[@]}" "${baseline_args[@]}" "${args[@]}" --yes "${status_args[@]}"
+  fi
+  if [ "$control_online" = "1" ]; then
+    python3 ./route_agent.py probe-jobs "${args[@]}" --limit 2 || true
+  else
+    log "probe jobs skipped because control is unavailable"
+  fi
+  stop_unused_transports run/desired-transports.txt
+  log "cycle applied: maps=$(tr '\n' ',' < "$map_file" | sed 's/,$//')"
+}
+
 restore_direct_dns_baseline() {
   if [ -x ./restore_direct.sh ]; then
     ./restore_direct.sh --keep-transports || true
@@ -127,42 +171,37 @@ log "managed linux agent starting pid=$$ control=${VPN_CONTROL_URL}"
 while true; do
   mkdir -p run logs transports
   cycle_ok=0
+  control_online=0
   if ensure_tunnel; then
+    control_online=1
+    if [ "$AGENT_AUTO_UPDATE" = "1" ] && [ -x ./update_agent.sh ]; then
+      set +e
+      ./update_agent.sh --from-agent
+      update_rc=$?
+      set -e
+      if [ "$update_rc" -eq 10 ]; then
+        log "self-update started; exiting current agent process"
+        exit 0
+      elif [ "$update_rc" -ne 0 ]; then
+        log "self-update check failed rc=$update_rc"
+      fi
+    fi
     if python3 ./route_agent.py config --json > run/fresh-config.json.tmp; then
       mv run/fresh-config.json.tmp run/fresh-config.json
-      map_file="run/interface-maps.txt"
-      build_interface_args run/fresh-config.json > "$map_file"
-      start_transports
-      restore_direct_dns_baseline
-      python3 - run/transport-plan.json <<'PY' > run/desired-transports.txt
-import json
-import sys
-for row in json.load(open(sys.argv[1], encoding="utf-8")):
-    name = row.get("interface_name") or ""
-    if name:
-        print(name)
-PY
-      args=()
-      while IFS= read -r map; do
-        [ -n "$map" ] && args+=(--interface-map "$map")
-      done < "$map_file"
-      baseline_args=()
-      [ "$DIRECT_BASELINE" = "1" ] && baseline_args+=(--direct-baseline)
-      if [ "$(id -u)" -eq 0 ]; then
-        python3 ./route_agent.py apply "${baseline_args[@]}" "${args[@]}" --yes --post-status
-      else
-        sudo env VPN_CONTROL_URL="$VPN_CONTROL_URL" VPN_AGENT_TOKEN="$VPN_AGENT_TOKEN" VPN_AGENT_DEVICE_ID="$VPN_AGENT_DEVICE_ID" \
-          python3 ./route_agent.py apply "${baseline_args[@]}" "${args[@]}" --yes --post-status
-      fi
-      python3 ./route_agent.py probe-jobs "${args[@]}" --limit 2 || true
-      stop_unused_transports run/desired-transports.txt
-      log "cycle applied: maps=$(tr '\n' ',' < "$map_file" | sed 's/,$//')"
+      apply_config run/fresh-config.json "$control_online"
       cycle_ok=1
     else
       log "config fetch failed"
     fi
   else
-    log "control tunnel failed"
+    log "control tunnel failed; trying cached policy"
+    if python3 ./route_agent.py config --cached --json > run/fresh-config.json.tmp; then
+      mv run/fresh-config.json.tmp run/fresh-config.json
+      apply_config run/fresh-config.json "$control_online"
+      cycle_ok=1
+    else
+      log "cached config unavailable"
+    fi
   fi
   [ "${RUN_ONCE:-0}" = "1" ] && exit $((1 - cycle_ok))
   sleep "$POLL_SECONDS"

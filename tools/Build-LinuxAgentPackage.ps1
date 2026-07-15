@@ -3,6 +3,8 @@ param(
     [string]$AgentSecretsDir = "$PSScriptRoot\..\secrets\agents",
     [string]$SourceDir = "$PSScriptRoot\agent-linux",
     [string]$OutputDir = "$PSScriptRoot\..\secrets\agents",
+    [string]$VersionName = "1.0",
+    [int]$VersionCode = 1,
     [switch]$IncludeRuntime,
     [switch]$SkipZip
 )
@@ -85,19 +87,29 @@ New-Item -ItemType Directory -Force -Path $stageDir | Out-Null
 $sourceFiles = @(
     "QUICKSTART-RU.md",
     "README.md",
+    "agent_off.sh",
+    "agent_on.sh",
     "agent.env.example",
+    "cudy_agent_ui.sh",
+    "cudy_agent_ui.py",
     "fresh_install_from_zip.sh",
     "install_singbox_runtime.sh",
+    "install_desktop_shortcuts.sh",
     "install_systemd.sh",
     "managed_agent.sh",
     "one_click_install.sh",
+    "open_user_ui.sh",
     "restore_direct.sh",
+    "run_diagnostics.sh",
+    "run_speed_tests.sh",
     "start_singbox_transport.sh",
     "start_tunnel.sh",
     "status.sh",
     "stop_singbox_transport.sh",
     "test_prod_agent.sh",
     "uninstall_systemd.sh",
+    "update_agent.sh",
+    "watch_agent_connectivity.py",
     "write_transport_plan.py"
 )
 
@@ -113,6 +125,13 @@ Copy-TextFileLf -SourcePath (Join-Path $root "tools\route_agent.py") -Destinatio
 Copy-TextFileLf -SourcePath (Join-Path $agentDir "agent.env") -DestinationPath (Join-Path $stageDir "agent.env")
 Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519") -Destination (Join-Path $stageDir "uswest_control_tunnel_ed25519") -Force
 Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519.pub") -Destination (Join-Path $stageDir "uswest_control_tunnel_ed25519.pub") -Force
+
+$versionJson = @{
+    platform = "linux"
+    version_name = $VersionName
+    version_code = $VersionCode
+} | ConvertTo-Json -Depth 5
+[System.IO.File]::WriteAllText((Join-Path $stageDir "agent.version.json"), $versionJson, [System.Text.UTF8Encoding]::new($false))
 
 if ($IncludeRuntime) {
     $runtime = Join-Path $agentDir "runtime"
@@ -180,7 +199,8 @@ echo "== stop previous service if present =="
 if [ -x "$work_dir/uninstall_systemd.sh" ]; then
   (cd "$work_dir" && sudo ./uninstall_systemd.sh cudy-managed-agent.service) || true
 elif command -v systemctl >/dev/null 2>&1; then
-  sudo systemctl stop cudy-managed-agent.service 2>/dev/null || true
+  sudo systemctl disable --now cudy-managed-agent.service 2>/dev/null || true
+  sudo systemctl reset-failed cudy-managed-agent.service 2>/dev/null || true
 fi
 
 echo "== remove old files and directories in $work_dir =="
@@ -219,16 +239,9 @@ if [ -f "$work_dir/runtime/sing-box" ]; then
   chmod +x "$work_dir/runtime/sing-box"
 fi
 
-echo "== install and start agent =="
+echo "== install agent in OFF state =="
 cd "$work_dir"
 sudo ./one_click_install.sh
-
-echo
-echo "== production smoke test =="
-if ! ./test_prod_agent.sh; then
-  echo "WARNING: production smoke test failed. The installed service will keep retrying in the background." >&2
-  ./status.sh || true
-fi
 
 echo
 echo "== final status =="

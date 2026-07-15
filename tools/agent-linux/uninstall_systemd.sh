@@ -8,10 +8,17 @@ fi
 
 [ -f ./agent.env ] && . ./agent.env
 service_name="${1:-${SERVICE_NAME:-cudy-managed-agent.service}}"
+service_base="${service_name%.service}"
+watchdog_service="${service_base}-watchdog.service"
+watchdog_timer="${service_base}-watchdog.timer"
 
 if command -v systemctl >/dev/null 2>&1; then
+  systemctl disable --now "$watchdog_timer" 2>/dev/null || true
+  systemctl stop "$watchdog_service" 2>/dev/null || true
   systemctl disable --now "$service_name" || true
+  systemctl reset-failed "$service_name" 2>/dev/null || true
   rm -f "/etc/systemd/system/${service_name}"
+  rm -f "/etc/systemd/system/${watchdog_service}" "/etc/systemd/system/${watchdog_timer}"
   systemctl daemon-reload || true
 fi
 

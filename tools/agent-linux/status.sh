@@ -16,7 +16,13 @@ VPN_CONTROL_URL="$(strip_cr "${VPN_CONTROL_URL:-http://127.0.0.1:${CONTROL_LOCAL
 
 echo "== service =="
 if command -v systemctl >/dev/null 2>&1; then
-  systemctl --no-pager --full status "$SERVICE_NAME" || true
+  enabled="$(systemctl is-enabled "$SERVICE_NAME" 2>/dev/null || true)"
+  active="$(systemctl is-active "$SERVICE_NAME" 2>/dev/null || true)"
+  echo "enabled=${enabled:-unknown}"
+  echo "active=${active:-unknown}"
+  systemctl show "$SERVICE_NAME" \
+    -p LoadState -p ActiveState -p SubState -p UnitFileState -p Result -p ExecMainStatus -p NRestarts \
+    --no-pager 2>/dev/null || true
 else
   echo "systemctl is not available"
 fi
@@ -85,7 +91,13 @@ fi
 echo
 echo "== firewall hints =="
 if command -v ufw >/dev/null 2>&1; then
-  ufw status verbose || true
+  if [ "$(id -u)" -eq 0 ]; then
+    ufw status verbose || true
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    sudo ufw status verbose || true
+  else
+    echo "ufw status requires root; skipped"
+  fi
 else
   echo "ufw is not available"
 fi
@@ -105,7 +117,7 @@ for pid_file in run/*.pid; do
   found=1
   name="$(basename "$pid_file" .pid)"
   pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+  if [ -n "${pid:-}" ] && { kill -0 "$pid" 2>/dev/null || ps -p "$pid" >/dev/null 2>&1; }; then
     echo "$name pid=$pid running"
   else
     echo "$name pid=${pid:-?} stopped"

@@ -17,6 +17,9 @@ posts status/probe results back to the control server.
   runtime into `./runtime/sing-box` when it is not already bundled.
 - `restore_direct.sh`: restores direct half-default routes and stops managed
   provider TUN exits.
+- `run_diagnostics.sh`: collects route, DNS, service, transport, firewall, and
+  recent journal hints, posts the report to the control server, falls back to
+  email when possible, and shows the report locally for copy/paste.
 - `write_transport_plan.py`: converts control-server `transport_plan` into local `sing-box` configs.
 - `install_systemd.sh`: installs a systemd service.
 - `one_click_install.sh`: restores direct baseline, runs a one-shot smoke, and
@@ -25,6 +28,9 @@ posts status/probe results back to the control server.
   firewall/VPN conflict hints, transport, and log status.
 - `uninstall_systemd.sh`: disables the service, stops managed processes, and
   restores direct routing.
+- `watch_agent_connectivity.py`: independent critical-service watchdog. The
+  systemd timer runs it every minute; after three consecutive failures it posts
+  diagnostics, disables the managed agent, and restores direct routing.
 - `test_prod_agent.sh`: smoke test.
 
 ## Requirements
@@ -71,6 +77,38 @@ Check status:
 ./status.sh
 ```
 
+Open the desktop UI:
+
+```bash
+./cudy_agent_ui.sh
+```
+
+The preferred UI uses Python/Tk and stays open after ON/OFF/Status/Diagnostics
+actions. `one_click_install.sh` checks this dependency and, on apt-based
+systems such as Ubuntu/Linux Mint, tries to install `python3-tk` automatically.
+Set `CUDY_SKIP_UI_DEPS=1` before running the installer to skip this optional
+step. If the automatic install is skipped or fails, install Tk support
+explicitly:
+
+```bash
+python3 - <<'PY'
+import tkinter
+print("tk ok")
+PY
+sudo apt update && sudo apt install -y python3-tk
+```
+
+Run diagnostics from the desktop shortcut menu or directly:
+
+```bash
+./run_diagnostics.sh
+```
+
+The diagnostics report is saved under `logs/`, sent to the control server when
+the control tunnel is reachable, copied to the clipboard when `wl-copy`, `xclip`,
+or `xsel` is available, and displayed locally so the user can copy it manually
+if automatic delivery fails.
+
 When debugging a remote machine, ask the user to run only this command and send
 the full output. It is read-only and includes the checks that usually explain
 "VPN is connected, but internet is gone": broken DNS, dead public IP
@@ -101,6 +139,11 @@ exits, and resets `systemd-resolved` DNS on that physical interface when
 ```bash
 sudo ./install_systemd.sh
 ```
+
+The installer enables both `cudy-managed-agent.service` and
+`cudy-managed-agent-watchdog.timer`. A transient watchdog failure is recorded
+without marking the timer unit failed; only `--probe-only` returns a failing
+exit code for diagnostics.
 
 Check logs:
 

@@ -10,6 +10,10 @@ keep_transports=0
 if [ "${1:-}" = "--keep-transports" ]; then
   keep_transports=1
 fi
+force_half_routes=0
+if [ "${RESTORE_FORCE_HALF_ROUTES:-0}" = "1" ]; then
+  force_half_routes=1
+fi
 
 default_line="$(ip -4 route show default | awk '
   $1 == "default" {
@@ -35,13 +39,24 @@ if [ -z "${dev:-}" ]; then
   exit 1
 fi
 
+cleanup_half_route() {
+  local prefix="$1"
+  while ip -4 route show "$prefix" 2>/dev/null | grep -q .; do
+    ip route del "$prefix" 2>/dev/null || break
+  done
+}
+
 replace_direct_half() {
   local prefix="$1"
-  if [ -n "${gw:-}" ]; then
-    ip route replace "$prefix" via "$gw" dev "$dev"
-  else
-    ip route replace "$prefix" dev "$dev"
+  if [ "$force_half_routes" = "1" ]; then
+    if [ -n "${gw:-}" ]; then
+      ip route replace "$prefix" via "$gw" dev "$dev"
+    else
+      ip route replace "$prefix" dev "$dev"
+    fi
+    return
   fi
+  cleanup_half_route "$prefix"
 }
 
 replace_direct_half "0.0.0.0/1"
