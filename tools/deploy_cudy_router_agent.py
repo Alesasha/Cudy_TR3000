@@ -97,7 +97,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="192.168.8.1")
     parser.add_argument("--user", default="root")
     parser.add_argument("--ssh-password")
-    parser.add_argument("--timeout", type=int, default=45)
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=180,
+        help="SSH command timeout; the first observe cycle may include several 12s health probes.",
+    )
     parser.add_argument("--binary", default=str(DEFAULT_BINARY))
     parser.add_argument("--init", default=str(DEFAULT_INIT))
     parser.add_argument("--fast-apply", default=str(DEFAULT_FAST_APPLY))
