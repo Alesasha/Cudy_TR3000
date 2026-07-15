@@ -47,6 +47,11 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   job is scheduled and when an agent claims it. The Cudy observer no longer
   advertises transport management while in `observe`; stale assignments were
   reconciled and no active probe job remains assigned to `cudy-home`.
+- Important Services can now optionally act as dependency groups. Every target
+  hostname in one enabled group shares a single Auto cache key, candidate list
+  and winner. Global and per-user groups are isolated, explicit user-domain
+  routes stay highest priority, and all existing services migrate as
+  `health only` until routing is enabled explicitly.
 
 ## Incomplete Or Degraded
 
@@ -67,8 +72,8 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   still reports Gemini
   `location_rejected` even when a temporary Android-only experiment routed the
   full Google dependency set through one French exit; those broad temporary
-  rules were removed. Service dependency groups and browser-rendered probes
-  remain open design work.
+  rules were removed. The dependency-group routing foundation is complete, but
+  browser-rendered probes for JavaScript-only geo decisions remain open work.
 - The Linux agent needs a longer real-world soak test covering suspend/resume,
   Wi-Fi changes, Zapret and UFW.
 - Production currently reports one of four enabled agents online. Historical
@@ -81,10 +86,12 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 
 1. Unlock the physical phone, install Android `1.21 (22)`, and pass locked
    reboot plus post-unlock recovery before publishing it.
-2. Add service dependency groups whose domains share one Auto winner.
+2. Deploy the dependency-group foundation and exercise one explicitly enabled
+   staging group without changing current production services.
 3. Complete Windows and Linux production acceptance separately.
-4. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
-5. Prepare a staged, reversible migration from AirTies to Cudy as main router.
+4. Add browser-rendered probes for JavaScript-only geo decisions.
+5. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
+6. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
 Do not enable router-agent apply mode or move DHCP/WAN ownership to Cudy until
 fallback recovery and critical-service transport checks have passed.

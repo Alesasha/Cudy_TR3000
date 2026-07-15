@@ -568,6 +568,94 @@ def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     assert_equal(route["auto_status"], "ok", "cached auto IP route status")
 
 
+def run_service_group_shares_auto_winner_check(db_path: Path) -> None:
+    app.save_critical_service(
+        db_path,
+        INVENTORY,
+        user_id="",
+        service_key="smoke-suite",
+        label="Smoke Suite",
+        targets=["https://one.smoke.example/", "https://two.smoke.example/path"],
+        routing_enabled=True,
+        candidate_server_ids=["proxyde", "proxynl"],
+        enabled=True,
+    )
+    global_key = app.service_auto_cache_key("", "smoke-suite")
+    app.save_auto_cache_entry(
+        db_path,
+        INVENTORY,
+        domain=global_key,
+        selected_server_id="proxynl",
+        score_ms=88,
+        status="ok",
+        metadata={"service_key": "smoke-suite"},
+    )
+    with closing(app.connect(db_path)) as conn:
+        config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={"id": "service-group-device", "display_name": "Service Group", "platform": "windows"},
+        )
+        specs = app.auto_probe_domain_rows(conn)
+    grouped = {
+        route["domain"]: route
+        for route in config["domain_routes"]
+        if route.get("service_key") == "smoke-suite"
+    }
+    assert_equal(sorted(grouped), ["one.smoke.example", "two.smoke.example"], "service group domains")
+    assert_true(all(route["server_id"] == "proxynl" for route in grouped.values()), "service group should share one winner")
+    assert_true(all(route["auto_cache_key"] == global_key for route in grouped.values()), "service group should share one cache key")
+    matching_specs = [item for item in specs if item.get("domain") == global_key]
+    assert_equal(len(matching_specs), 1, "service group should schedule one probe specification")
+    assert_equal(matching_specs[0]["candidate_server_ids"], ["proxyde", "proxynl"], "service group probe candidates")
+
+    lookup = app.route_lookup(db_path, INVENTORY, user_id=TEST_USER_ID, target="two.smoke.example")
+    result = lookup["results"][0]
+    assert_equal(result["server_id"], "proxynl", "service group route lookup winner")
+    assert_equal(result["matched_rule"]["source"], "global_service_group", "service group route lookup source")
+
+    app.save_critical_service(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        service_key="smoke-suite",
+        label="Local Smoke Suite",
+        targets=["https://one.smoke.example/", "https://two.smoke.example/path"],
+        routing_enabled=True,
+        candidate_server_ids=["proxyde"],
+        enabled=True,
+    )
+    local_key = app.service_auto_cache_key(TEST_USER_ID, "smoke-suite")
+    app.save_auto_cache_entry(
+        db_path,
+        INVENTORY,
+        domain=local_key,
+        selected_server_id="proxyde",
+        score_ms=77,
+        status="ok",
+        metadata={"service_key": "smoke-suite", "user_id": TEST_USER_ID},
+    )
+    timestamp = app.now()
+    with closing(app.connect(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, 'one.smoke.example', 'direct', 1, ?, ?)
+            ON CONFLICT(user_id, domain) DO UPDATE SET server_id = 'direct', enabled = 1, updated_at = excluded.updated_at
+            """,
+            (TEST_USER_ID, timestamp, timestamp),
+        )
+        config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={"id": "service-group-device", "display_name": "Service Group", "platform": "windows"},
+        )
+    routes = {route["domain"]: route for route in config["domain_routes"]}
+    assert_equal(routes["one.smoke.example"]["server_id"], "direct", "explicit user route should override local service group")
+    assert_equal(routes["two.smoke.example"]["server_id"], "proxyde", "local service group should override global group")
+    assert_equal(routes["two.smoke.example"]["auto_cache_key"], local_key, "local service group cache isolation")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cudy-auto-policy-", ignore_cleanup_errors=True) as tmp:
         db_path = Path(tmp) / "vpn_control.db"
@@ -584,6 +672,7 @@ def main() -> int:
         run_probe_claim_requires_transport_capability_check(db_path)
         run_auto_worker_skips_without_capable_agent_check(tmp_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
+        run_service_group_shares_auto_winner_check(db_path)
         gc.collect()
 
     print("Auto priority policy regression passed.")

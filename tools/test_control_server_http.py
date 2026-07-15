@@ -284,6 +284,8 @@ def main() -> int:
                 "agentUpdatesBody",
                 "autoProbeJobsBody",
                 "providerTransportsBody",
+                "adminCriticalServiceRouting",
+                "adminCriticalServiceCandidates",
                 "data-save-agent",
                 "data-delete-agent",
             ):
@@ -315,7 +317,12 @@ def main() -> int:
             if user_login.get("ok") is not True:
                 raise AssertionError(f"user login failed: {user_login!r}")
             user_page = fetch_text(user_opener, f"{base_url}/")
-            for snippet in ('id="aliasForm" class="row"', "A local alias replaces the global alias with the same name"):
+            for snippet in (
+                'id="aliasForm" class="row"',
+                "A local alias replaces the global alias with the same name",
+                'id="criticalServiceRouting"',
+                'id="criticalServiceCandidates"',
+            ):
                 if snippet not in user_page:
                     raise AssertionError(f"user page is missing local alias UI: {snippet!r}")
             expect_http_error(
@@ -364,6 +371,25 @@ def main() -> int:
             restored_lookup = fetch_json_with_opener(user_opener, f"{base_url}/api/route-lookup?target=smoke-alias")
             if restored_lookup.get("alias", {}).get("scope") != "global" or [item.get("target") for item in restored_lookup.get("results") or []] != ["example.com"]:
                 raise AssertionError(f"global alias was not restored after deleting local override: {restored_lookup!r}")
+            routed_service = post_json(
+                user_opener,
+                f"{base_url}/api/critical-services",
+                {
+                    "service_key": "smoke-suite",
+                    "label": "Smoke Suite",
+                    "targets": "https://one.smoke.example/, https://two.smoke.example/",
+                    "routing_enabled": True,
+                    "candidate_server_ids": "proxyde, proxynl",
+                    "enabled": True,
+                },
+            )
+            if not routed_service.get("routing_enabled") or routed_service.get("candidate_server_ids") != ["proxyde", "proxynl"]:
+                raise AssertionError(f"routed service group save failed: {routed_service!r}")
+            service_bootstrap = fetch_json_with_opener(user_opener, f"{base_url}/api/bootstrap")
+            effective_services = service_bootstrap.get("critical_services", {}).get("effective") or []
+            smoke_service = next((item for item in effective_services if item.get("service_key") == "smoke-suite"), None)
+            if not smoke_service or not smoke_service.get("routing_enabled"):
+                raise AssertionError(f"routed service group is missing from bootstrap: {service_bootstrap!r}")
             expect_http_error(
                 lambda: fetch_json_with_opener(
                     user_opener,

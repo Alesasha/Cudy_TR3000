@@ -198,9 +198,10 @@ This is the current implementation order for the managed VPN control project.
 - Add per-user critical-service health lists to user/admin UI. Agents cache the
   list locally; watchdog failures must be visible as diagnostics and should
   first request route repair/Auto failover before a full emergency stop.
-- Extend service aliases into routable service groups: editable dependency
-  domains, one candidate list, one Auto winner and one rendered/content health
-  result for the whole service.
+- Important Services can optionally become routable dependency groups: their
+  target hostnames share one candidate list, Auto cache key and winner. The
+  remaining work is staged production acceptance and one rendered/content
+  health result for JavaScript-only geo decisions.
 
 ## 10. Cudy
 

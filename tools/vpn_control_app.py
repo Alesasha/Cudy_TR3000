@@ -456,6 +456,8 @@ CREATE TABLE IF NOT EXISTS critical_services (
   targets_json TEXT NOT NULL,
   success_pattern TEXT NOT NULL DEFAULT '',
   failure_pattern TEXT NOT NULL DEFAULT '',
+  routing_enabled INTEGER NOT NULL DEFAULT 0,
+  candidate_server_ids TEXT NOT NULL DEFAULT '[]',
   enabled INTEGER NOT NULL DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
@@ -745,12 +747,14 @@ USER_HTML = r"""<!doctype html>
         <input id="criticalServiceTargets" type="text" placeholder="URLs, separated by commas" autocomplete="off">
         <input id="criticalServiceSuccess" type="text" placeholder="success regex (optional)" autocomplete="off">
         <input id="criticalServiceFailure" type="text" placeholder="failure regex (optional)" autocomplete="off">
+        <input id="criticalServiceCandidates" type="text" placeholder="Auto priority: proxyde, proxynl, all-rest" autocomplete="off">
+        <label class="inline muted"><input id="criticalServiceRouting" type="checkbox"> Route as one Auto group</label>
         <label class="inline muted"><input id="criticalServiceEnabled" type="checkbox" checked> Enabled</label>
         <button type="submit">Save</button>
       </form>
       <p id="criticalServiceStatus" class="status"></p>
       <table>
-        <thead><tr><th>Service</th><th>Scope</th><th>Targets</th><th>Content checks</th><th>Enabled</th><th></th></tr></thead>
+        <thead><tr><th>Service</th><th>Scope</th><th>Targets</th><th>Content checks</th><th>Routing</th><th>Enabled</th><th></th></tr></thead>
         <tbody id="criticalServicesBody"></tbody>
       </table>
     </section>
@@ -851,10 +855,11 @@ USER_HTML = r"""<!doctype html>
           <td data-label="Scope">${item.scope === "global" ? "Global" : "Local"}</td>
           <td data-label="Targets">${(item.targets || []).map(escapeHtml).join("<br>")}</td>
           <td data-label="Content checks"><span class="muted">success:</span> ${escapeHtml(item.success_pattern || "-")}<br><span class="muted">failure:</span> ${escapeHtml(item.failure_pattern || "-")}</td>
+          <td data-label="Routing">${item.routing_enabled ? `One Auto winner<br><span class="muted">${(item.candidate_server_ids || []).map(escapeHtml).join(" -> ")}</span>` : "health only"}</td>
           <td data-label="Enabled">${item.enabled ? "yes" : "no"}</td>
           <td>${item.scope === "user" ? `<button class="danger" data-delete-critical="${escapeHtml(item.service_key)}">Delete local</button>` : ""}</td>
         </tr>
-      `).join("") : '<tr><td colspan="6" class="muted">No important services configured.</td></tr>';
+      `).join("") : '<tr><td colspan="7" class="muted">No important services configured.</td></tr>';
       body.querySelectorAll("[data-delete-critical]").forEach(button => {
         button.addEventListener("click", async () => {
           await api(`/api/critical-services?service_key=${encodeURIComponent(button.dataset.deleteCritical)}`, { method: "DELETE" });
@@ -986,10 +991,13 @@ USER_HTML = r"""<!doctype html>
             targets: document.getElementById("criticalServiceTargets").value,
             success_pattern: document.getElementById("criticalServiceSuccess").value,
             failure_pattern: document.getElementById("criticalServiceFailure").value,
+            routing_enabled: document.getElementById("criticalServiceRouting").checked,
+            candidate_server_ids: document.getElementById("criticalServiceCandidates").value,
             enabled: document.getElementById("criticalServiceEnabled").checked
           })
         });
         event.target.reset();
+        document.getElementById("criticalServiceRouting").checked = false;
         document.getElementById("criticalServiceEnabled").checked = true;
         status.textContent = "Saved.";
         status.className = "status ok";
@@ -1186,12 +1194,14 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>URLs</label><input id="adminCriticalServiceTargets" type="text" placeholder="https://example.com/" autocomplete="off"></div>
         <div class="field"><label>Success regex</label><input id="adminCriticalServiceSuccess" type="text" autocomplete="off"></div>
         <div class="field"><label>Failure regex</label><input id="adminCriticalServiceFailure" type="text" autocomplete="off"></div>
+        <div class="field"><label>Auto priority</label><input id="adminCriticalServiceCandidates" type="text" placeholder="proxyde, proxynl, all-rest" autocomplete="off"></div>
+        <label class="inline muted"><input id="adminCriticalServiceRouting" type="checkbox"> Route as one Auto group</label>
         <label class="inline muted"><input id="adminCriticalServiceEnabled" type="checkbox" checked> Enabled</label>
         <button type="submit">Save Service</button>
       </form>
       <p id="adminCriticalServiceStatus" class="status"></p>
       <table>
-        <thead><tr><th>Service</th><th>Scope</th><th>URLs</th><th>Content checks</th><th>Enabled</th><th></th></tr></thead>
+        <thead><tr><th>Service</th><th>Scope</th><th>URLs</th><th>Content checks</th><th>Routing</th><th>Enabled</th><th></th></tr></thead>
         <tbody id="adminCriticalServicesBody"></tbody>
       </table>
     </section>
@@ -1835,10 +1845,11 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${item.user_id ? `User: ${escapeHtml(item.user_id)}` : "Global"}</td>
           <td>${(item.targets || []).map(escapeHtml).join("<br>")}</td>
           <td><span class="muted">success:</span> ${escapeHtml(item.success_pattern || "-")}<br><span class="muted">failure:</span> ${escapeHtml(item.failure_pattern || "-")}</td>
+          <td>${item.routing_enabled ? `One Auto winner<br><span class="muted">${(item.candidate_server_ids || []).map(escapeHtml).join(" -> ")}</span>` : "health only"}</td>
           <td>${item.enabled ? "yes" : "no"}</td>
           <td><button class="danger" data-delete-critical-key="${escapeHtml(item.service_key)}" data-delete-critical-user="${escapeHtml(item.user_id || "")}">Delete</button></td>
         </tr>
-      `).join("") : '<tr><td colspan="6" class="muted">No important services configured.</td></tr>';
+      `).join("") : '<tr><td colspan="7" class="muted">No important services configured.</td></tr>';
       body.querySelectorAll("[data-delete-critical-key]").forEach(button => {
         button.addEventListener("click", async () => {
           const query = new URLSearchParams({ service_key: button.dataset.deleteCriticalKey, user_id: button.dataset.deleteCriticalUser });
@@ -2350,10 +2361,13 @@ ADMIN_HTML = r"""<!doctype html>
             targets: document.getElementById("adminCriticalServiceTargets").value,
             success_pattern: document.getElementById("adminCriticalServiceSuccess").value,
             failure_pattern: document.getElementById("adminCriticalServiceFailure").value,
+            routing_enabled: document.getElementById("adminCriticalServiceRouting").checked,
+            candidate_server_ids: document.getElementById("adminCriticalServiceCandidates").value,
             enabled: document.getElementById("adminCriticalServiceEnabled").checked
           })
         });
         event.target.reset();
+        document.getElementById("adminCriticalServiceRouting").checked = false;
         document.getElementById("adminCriticalServiceEnabled").checked = true;
         status.textContent = "Saved.";
         status.className = "status ok";
@@ -3148,12 +3162,22 @@ def migrate_db(conn: sqlite3.Connection) -> None:
           targets_json TEXT NOT NULL,
           success_pattern TEXT NOT NULL DEFAULT '',
           failure_pattern TEXT NOT NULL DEFAULT '',
+          routing_enabled INTEGER NOT NULL DEFAULT 0,
+          candidate_server_ids TEXT NOT NULL DEFAULT '[]',
           enabled INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL,
           UNIQUE(user_id, service_key)
         )
         """
+    )
+    ensure_columns(
+        conn,
+        "critical_services",
+        {
+            "routing_enabled": "INTEGER NOT NULL DEFAULT 0",
+            "candidate_server_ids": "TEXT NOT NULL DEFAULT '[]'",
+        },
     )
 
 
@@ -5404,6 +5428,27 @@ def auto_probe_domain_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         ORDER BY domain, user_id
         """,
     )
+    for service in critical_service_rows(conn):
+        if not service.get("enabled") or not service.get("routing_enabled"):
+            continue
+        hosts = critical_service_target_hosts(service)
+        targets = list(service.get("targets") or [])
+        if not hosts or not targets:
+            continue
+        entries.append(
+            {
+                "user_id": service.get("user_id") or "",
+                "domain": service_auto_cache_key(str(service.get("user_id") or ""), str(service["service_key"])),
+                "target_cidr": None,
+                "note": "",
+                "updated_at": service.get("updated_at") or "",
+                "source": "service_group",
+                "url": targets[0],
+                "agent_domain": hosts[0],
+                "candidate_server_ids": list(service.get("candidate_server_ids") or []),
+                "service_key": service["service_key"],
+            }
+        )
     seen: set[tuple[str, str]] = set()
     result: list[dict[str, Any]] = []
     for entry in entries:
@@ -5554,7 +5599,16 @@ def create_auto_probe_jobs_once(
             if cached and cached.get("selected_server_id") and cached_age is not None and cached_age < cache_ttl_seconds:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "cache_fresh", "age_seconds": cached_age})
                 continue
-            policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
+            spec_candidates = list(spec.get("candidate_server_ids") or [])
+            policy = None
+            if spec_candidates:
+                policy = {
+                    "candidate_server_ids": spec_candidates,
+                    "expanded_candidate_server_ids": expand_auto_candidate_ids(servers, spec_candidates),
+                    "scope": "user_service_group" if user_id else "global_service_group",
+                }
+            else:
+                policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=domain)
             candidates = list(
                 (policy or {}).get("expanded_candidate_server_ids")
                 or (policy or {}).get("candidate_server_ids")
@@ -5580,7 +5634,7 @@ def create_auto_probe_jobs_once(
             )
             assigned_device_id = choose_probe_agent(
                 agents,
-                domain=domain,
+                domain=str(spec.get("agent_domain") or domain),
                 user_id=user_id,
                 requires_managed_transports=candidates_require_managed_transports(servers, probe_candidates),
             )
@@ -7042,6 +7096,30 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
     if not user:
         raise PermissionError("Agent user is disabled or missing")
     effective: dict[str, dict[str, Any]] = {}
+
+    def add_service_group_routes(*, scope: str, overwrite: bool) -> None:
+        for service in effective_critical_services(conn, user_id=user_id):
+            if service.get("scope") != scope or not service.get("routing_enabled"):
+                continue
+            cache_key = service_auto_cache_key(str(service.get("user_id") or ""), str(service["service_key"]))
+            policy = service_group_policy(conn, service)
+            for domain in critical_service_target_hosts(service):
+                route = {
+                    "domain": domain,
+                    "server_id": "auto",
+                    "source": f"{scope}_service_group",
+                    "service_key": service["service_key"],
+                    "service_label": service.get("label") or service["service_key"],
+                    "auto_cache_key": cache_key,
+                    "auto_candidate_policy": policy,
+                    "updated_at": service.get("updated_at") or "",
+                }
+                if overwrite:
+                    effective[domain] = route
+                else:
+                    effective.setdefault(domain, route)
+
+    add_service_group_routes(scope="global", overwrite=False)
     for route in rows(
         conn,
         """
@@ -7052,6 +7130,7 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         """,
     ):
         effective[route["domain"]] = {**route, "source": "global"}
+    add_service_group_routes(scope="user", overwrite=True)
     for route in rows(
         conn,
         """
@@ -7070,13 +7149,12 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
     for route in sorted(effective.values(), key=lambda item: item["domain"]):
         requested_server_id = route["server_id"]
         route_warnings: list[str] = []
-        auto_policy = (
-            resolve_auto_candidate_policy(conn, user_id=user_id, domain=route["domain"])
-            if requested_server_id == "auto"
-            else None
-        )
+        cache_key = str(route.get("auto_cache_key") or route["domain"])
+        auto_policy = route.get("auto_candidate_policy")
+        if requested_server_id == "auto" and auto_policy is None:
+            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=route["domain"])
         resolved_server_id, cached = resolve_route_server(
-            domain=route["domain"],
+            domain=cache_key,
             requested_server_id=requested_server_id,
             servers=servers,
             auto_cache=cached_auto,
@@ -7095,8 +7173,11 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
                 "server_id": server_id,
                 "resolved_server_id": resolved_server_id,
                 "server": compact_server(servers.get(server_id)),
+                "auto_cache_key": cache_key if requested_server_id == "auto" else "",
                 "auto_cache": cached,
                 "auto_candidate_policy": auto_policy,
+                "service_key": route.get("service_key") or "",
+                "service_label": route.get("service_label") or "",
                 "updated_at": route["updated_at"],
             }
         )
@@ -8606,7 +8687,8 @@ def critical_service_rows(conn: sqlite3.Connection, *, user_id: str | None = Non
         conn,
         f"""
         SELECT user_id, service_key, label, targets_json, success_pattern,
-               failure_pattern, enabled, created_at, updated_at
+               failure_pattern, routing_enabled, candidate_server_ids,
+               enabled, created_at, updated_at
         FROM critical_services
         {where}
         ORDER BY CASE WHEN user_id = '' THEN 0 ELSE 1 END, user_id, label, service_key
@@ -8618,7 +8700,12 @@ def critical_service_rows(conn: sqlite3.Connection, *, user_id: str | None = Non
             entry["targets"] = json.loads(entry.pop("targets_json") or "[]")
         except json.JSONDecodeError:
             entry["targets"] = []
+        try:
+            entry["candidate_server_ids"] = json.loads(entry.get("candidate_server_ids") or "[]")
+        except json.JSONDecodeError:
+            entry["candidate_server_ids"] = []
         entry["enabled"] = bool(entry.get("enabled"))
+        entry["routing_enabled"] = bool(entry.get("routing_enabled"))
         entry["scope"] = "global" if not entry.get("user_id") else "user"
     return entries
 
@@ -8635,6 +8722,59 @@ def effective_critical_services(conn: sqlite3.Connection, *, user_id: str) -> li
         else:
             effective.pop(item["service_key"], None)
     return sorted(effective.values(), key=lambda item: (str(item.get("label") or "").lower(), item["service_key"]))
+
+
+def critical_service_target_hosts(service: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for target in service.get("targets") or []:
+        parsed = urlparse(str(target))
+        try:
+            host = normalize_domain(parsed.hostname or "")
+        except ValueError:
+            continue
+        if host not in seen:
+            result.append(host)
+            seen.add(host)
+    return result
+
+
+def service_auto_cache_key(user_id: str, service_key: str) -> str:
+    identity = f"{user_id}:{service_key}".encode("utf-8")
+    digest = hashlib.sha256(identity).hexdigest()[:16]
+    return f"service-{digest}.group.local"
+
+
+def service_group_policy(conn: sqlite3.Connection, service: dict[str, Any]) -> dict[str, Any]:
+    candidates = list(service.get("candidate_server_ids") or [])
+    return {
+        "user_id": service.get("user_id") or "",
+        "domain": service_auto_cache_key(str(service.get("user_id") or ""), str(service["service_key"])),
+        "candidate_server_ids": candidates,
+        "expanded_candidate_server_ids": expand_auto_candidate_ids(server_map(conn), candidates),
+        "scope": "user_service_group" if service.get("user_id") else "global_service_group",
+        "service_key": service["service_key"],
+        "label": service.get("label") or service["service_key"],
+    }
+
+
+def effective_service_group_for_domain(
+    conn: sqlite3.Connection,
+    *,
+    user_id: str,
+    domain: str,
+) -> dict[str, Any] | None:
+    try:
+        normalized_domain = normalize_domain(domain)
+    except ValueError:
+        return None
+    for service in effective_critical_services(conn, user_id=user_id):
+        if not service.get("routing_enabled"):
+            continue
+        for host in critical_service_target_hosts(service):
+            if normalized_domain == host or normalized_domain.endswith("." + host):
+                return service
+    return None
 
 
 def critical_probe_patterns(
@@ -8684,6 +8824,8 @@ def save_critical_service(
     targets: Any,
     success_pattern: str = "",
     failure_pattern: str = "",
+    routing_enabled: bool = False,
+    candidate_server_ids: Any = None,
     enabled: bool = True,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
@@ -8692,21 +8834,32 @@ def save_critical_service(
     normalized_targets = parse_critical_service_targets(targets)
     success_pattern = normalize_content_pattern(success_pattern, field="success pattern")
     failure_pattern = normalize_content_pattern(failure_pattern, field="failure pattern")
+    candidates: list[str] = []
+    if candidate_server_ids not in (None, "", []):
+        candidates = parse_candidate_server_ids(candidate_server_ids)
+    if routing_enabled and not candidates:
+        raise ValueError("A routed service group requires at least one Auto candidate")
     timestamp = now()
     with connect(db_path) as conn:
         if user_id and row(conn, "SELECT id FROM users WHERE id = ?", (user_id,)) is None:
             raise ValueError(f"Unknown user: {user_id}")
+        for server_id in candidates:
+            if server_id != AUTO_ALL_REST:
+                validate_server_id(conn, server_id, require_user_visible=True)
         conn.execute(
             """
             INSERT INTO critical_services (
               user_id, service_key, label, targets_json, success_pattern,
-              failure_pattern, enabled, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+              failure_pattern, routing_enabled, candidate_server_ids,
+              enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(user_id, service_key) DO UPDATE SET
               label = excluded.label,
               targets_json = excluded.targets_json,
               success_pattern = excluded.success_pattern,
               failure_pattern = excluded.failure_pattern,
+              routing_enabled = excluded.routing_enabled,
+              candidate_server_ids = excluded.candidate_server_ids,
               enabled = excluded.enabled,
               updated_at = excluded.updated_at
             """,
@@ -8717,6 +8870,8 @@ def save_critical_service(
                 json.dumps(normalized_targets, ensure_ascii=False),
                 success_pattern,
                 failure_pattern,
+                int(bool(routing_enabled)),
+                json.dumps(candidates, ensure_ascii=False),
                 int(enabled),
                 timestamp,
                 timestamp,
@@ -8730,6 +8885,8 @@ def save_critical_service(
         "targets": normalized_targets,
         "success_pattern": success_pattern,
         "failure_pattern": failure_pattern,
+        "routing_enabled": bool(routing_enabled),
+        "candidate_server_ids": candidates,
         "enabled": bool(enabled),
     }
 
@@ -9069,14 +9226,33 @@ def resolve_lookup_rule(
     kind = target_info["kind"]
     target = target_info["target"]
     rule = domain_rule_for_user(conn, user_id=user_id, domain=target) if kind == "domain" else ip_rule_for_user(conn, user_id=user_id, target=target)
+    service = effective_service_group_for_domain(conn, user_id=user_id, domain=target) if kind == "domain" else None
+    service_policy = None
+    if service and (rule is None or (rule.get("source") == "global" and service.get("scope") == "user")):
+        service_policy = service_group_policy(conn, service)
+        rule = {
+            "domain": target,
+            "server_id": "auto",
+            "enabled": 1,
+            "updated_at": service.get("updated_at") or "",
+            "source": f"{service.get('scope')}_service_group",
+            "service_key": service["service_key"],
+            "service_label": service.get("label") or service["service_key"],
+        }
     cache_key = ""
     if kind == "ip":
         cache_key = auto_cache_key_for_ip_route((rule or {}).get("target_cidr") or target)
     else:
-        cache_key = target
+        cache_key = (
+            service_auto_cache_key(str(service.get("user_id") or ""), str(service["service_key"]))
+            if service_policy
+            else target
+        )
     if rule:
         requested_server_id = str(rule["server_id"])
-        auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=cache_key) if requested_server_id == "auto" else None
+        auto_policy = service_policy
+        if requested_server_id == "auto" and auto_policy is None:
+            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=cache_key)
         resolved_server_id, cached = resolve_route_server(
             domain=cache_key,
             requested_server_id=requested_server_id,
@@ -9776,6 +9952,8 @@ class Handler(BaseHTTPRequestHandler):
                         targets=data.get("targets") or "",
                         success_pattern=str(data.get("success_pattern") or ""),
                         failure_pattern=str(data.get("failure_pattern") or ""),
+                        routing_enabled=data.get("routing_enabled") is True,
+                        candidate_server_ids=data.get("candidate_server_ids") or [],
                         enabled=data.get("enabled") is not False,
                     )
                 )
@@ -9826,6 +10004,8 @@ class Handler(BaseHTTPRequestHandler):
                         targets=data.get("targets") or "",
                         success_pattern=str(data.get("success_pattern") or ""),
                         failure_pattern=str(data.get("failure_pattern") or ""),
+                        routing_enabled=data.get("routing_enabled") is True,
+                        candidate_server_ids=data.get("candidate_server_ids") or [],
                         enabled=data.get("enabled") is not False,
                     )
                 )
