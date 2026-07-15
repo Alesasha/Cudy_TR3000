@@ -398,6 +398,129 @@ def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
     )
 
 
+def run_probe_claim_requires_transport_capability_check(db_path: Path) -> None:
+    timestamp = app.now()
+    devices = [
+        ("smoke-observer-device", False),
+        ("smoke-capable-device", True),
+    ]
+    for device_id, can_manage in devices:
+        app.create_agent_device(
+            db_path,
+            INVENTORY,
+            user_id=TEST_USER_ID,
+            device_id=device_id,
+            display_name=device_id,
+            platform="openwrt" if not can_manage else "windows",
+        )
+        with app.connect(db_path) as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO agent_status (device_id, status_json, reported_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    device_id,
+                    json.dumps(
+                        {
+                            "platform": "openwrt" if not can_manage else "windows",
+                            "capabilities": {"can_manage_transports": can_manage, "can_probe": True},
+                        }
+                    ),
+                    timestamp,
+                ),
+            )
+    job = app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="capability-claim.example",
+        candidate_server_ids=["proxyde"],
+        user_id=TEST_USER_ID,
+    )
+    observer_jobs = app.claim_agent_probe_jobs(
+        db_path,
+        INVENTORY,
+        device={"id": "smoke-observer-device", "user_id": TEST_USER_ID, "platform": "openwrt"},
+        limit=2,
+    )
+    assert_equal(observer_jobs, [], "observer must not claim a provider-transport probe job")
+    capable_jobs = app.claim_agent_probe_jobs(
+        db_path,
+        INVENTORY,
+        device={"id": "smoke-capable-device", "user_id": TEST_USER_ID, "platform": "windows"},
+        limit=2,
+    )
+    assert_equal([item["id"] for item in capable_jobs], [job["id"]], "capable agent should claim provider probe job")
+
+
+def run_auto_worker_skips_without_capable_agent_check(tmp: Path) -> None:
+    db_path = tmp / "no-capable-agent.db"
+    app.init_db(db_path, INVENTORY)
+    create_test_user(db_path)
+    app.save_transport_config(
+        db_path,
+        INVENTORY,
+        server_id="proxyde",
+        transport_type="http-proxy-tun",
+        interface_name="proxyde",
+        config={"server": "127.0.0.1", "server_port": 19090},
+        enabled=True,
+        source="test",
+    )
+    save_policy(db_path, user_id=TEST_USER_ID, domain="observer-only.example", servers=["proxyde"])
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id="observer-only-device",
+        display_name="Observer only",
+        platform="openwrt",
+    )
+    timestamp = app.now()
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_domain_routes (user_id, domain, server_id, enabled, created_at, updated_at)
+            VALUES (?, 'observer-only.example', 'auto', 1, ?, ?)
+            """,
+            (TEST_USER_ID, timestamp, timestamp),
+        )
+        conn.execute(
+            "UPDATE agent_devices SET last_seen_at = ?, updated_at = ? WHERE id = 'observer-only-device'",
+            (timestamp, timestamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO agent_status (device_id, status_json, reported_at)
+            VALUES (?, ?, ?)
+            """,
+            (
+                "observer-only-device",
+                json.dumps(
+                    {
+                        "platform": "openwrt",
+                        "capabilities": {"can_manage_transports": False, "can_probe": True},
+                        "domain_routes": [{"domain": "observer-only.example"}],
+                    }
+                ),
+                timestamp,
+            ),
+        )
+    result = app.create_auto_probe_jobs_once(
+        db_path,
+        INVENTORY,
+        cache_ttl_seconds=0,
+        agent_stale_seconds=600,
+        max_jobs=100,
+        max_candidates_per_job=1,
+    )
+    created_for_domain = [item for item in result["created"] if item.get("domain") == "observer-only.example"]
+    assert_equal(created_for_domain, [], "worker must not create a provider probe without a capable agent")
+    matching = [item for item in result["skipped"] if item.get("domain") == "observer-only.example"]
+    assert_true(bool(matching), "worker should explain why the observer-only domain was skipped")
+    assert_equal(matching[0]["reason"], "no_capable_agent", "observer-only skip reason")
+
+
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     target_cidr = "203.0.113.0/24"
     cache_key = app.auto_cache_key_for_ip_route(target_cidr)
@@ -444,6 +567,8 @@ def main() -> int:
         run_cached_winner_respects_effective_policy_check()
         run_agent_transport_plan_is_minimal_check(db_path)
         run_auto_worker_prefers_domain_agent_check(db_path)
+        run_probe_claim_requires_transport_capability_check(db_path)
+        run_auto_worker_skips_without_capable_agent_check(tmp_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
         gc.collect()
 

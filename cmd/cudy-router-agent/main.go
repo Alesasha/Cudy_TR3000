@@ -633,7 +633,7 @@ func (a *agent) postAgentStatus(ctx context.Context, status statusFile, desired 
 		"capabilities": map[string]any{
 			"can_probe":             a.opts.ProbeLimit > 0,
 			"can_route":             a.opts.Mode == "apply",
-			"can_manage_transports": true,
+			"can_manage_transports": canManageTransports(a.opts.Mode),
 		},
 		"errors": []string{},
 	}
@@ -643,6 +643,10 @@ func (a *agent) postAgentStatus(ctx context.Context, status statusFile, desired 
 	requestCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	return a.controlJSON(requestCtx, http.MethodPost, "/api/agent/status", payload, &map[string]any{})
+}
+
+func canManageTransports(mode string) bool {
+	return strings.EqualFold(strings.TrimSpace(mode), "apply")
 }
 
 func probePatterns(job probeJob, services []criticalService, target, domain string) (string, string) {

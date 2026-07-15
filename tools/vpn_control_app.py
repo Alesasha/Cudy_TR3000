@@ -5135,6 +5135,22 @@ def claim_agent_probe_jobs(
     timestamp = now()
     max_limit = max(1, min(int(limit), 10))
     with connect(db_path) as conn:
+        status_entry = row(
+            conn,
+            "SELECT status_json FROM agent_status WHERE device_id = ?",
+            (device["id"],),
+        )
+        try:
+            device_status = json.loads((status_entry or {}).get("status_json") or "{}")
+        except json.JSONDecodeError:
+            device_status = {}
+        probe_agent = {
+            "device_id": device["id"],
+            "user_id": device.get("user_id") or "",
+            "platform": device.get("platform") or "",
+            "status": device_status,
+        }
+        servers = server_map(conn)
         entries = rows(
             conn,
             """
@@ -5145,10 +5161,17 @@ def claim_agent_probe_jobs(
             ORDER BY priority ASC, created_at ASC
             LIMIT ?
             """,
-            (device["id"], max_limit),
+            (device["id"], max_limit * 10),
         )
         claimed: list[dict[str, Any]] = []
         for item in entries:
+            try:
+                candidates = json.loads(item.get("candidate_server_ids") or "[]")
+            except json.JSONDecodeError:
+                candidates = []
+            requires_managed_transports = candidates_require_managed_transports(servers, candidates)
+            if not agent_can_probe(probe_agent, requires_managed_transports=requires_managed_transports):
+                continue
             cursor = conn.execute(
                 """
                 UPDATE agent_probe_jobs
@@ -5174,6 +5197,8 @@ def claim_agent_probe_jobs(
                         )
                     )
                     claimed.append(claimed_job)
+                    if len(claimed) >= max_limit:
+                        break
     return claimed
 
 
@@ -5499,8 +5524,19 @@ def create_auto_probe_jobs_once(
                 user_id=user_id,
                 requires_managed_transports=candidates_require_managed_transports(servers, probe_candidates),
             )
+            eligible_agents = [
+                agent
+                for agent in agents
+                if agent_can_probe(
+                    agent,
+                    requires_managed_transports=candidates_require_managed_transports(servers, probe_candidates),
+                )
+            ]
             if not assigned_device_id and not agents:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "no_active_agent"})
+                continue
+            if not assigned_device_id and not eligible_agents:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": "no_capable_agent"})
                 continue
             job_requests.append(
                 {

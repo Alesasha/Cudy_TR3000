@@ -210,6 +210,15 @@ func TestValidateRequiresExplicitApplyGate(t *testing.T) {
 	}
 }
 
+func TestObserveDoesNotAdvertiseTransportManagement(t *testing.T) {
+	if canManageTransports("observe") || canManageTransports("disabled") {
+		t.Fatal("non-apply modes must not advertise transport management")
+	}
+	if !canManageTransports("apply") {
+		t.Fatal("apply mode must advertise transport management")
+	}
+}
+
 func TestApplyTransactionRestoresFileWhenApplyFails(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "force-proxyde.domains")
