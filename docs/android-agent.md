@@ -16,7 +16,9 @@ Verified on the physical test phone:
 - builds one unified Android sing-box config;
 - starts a foreground `VpnService`;
 - starts libbox behind Android TUN;
-- adds control-server `ip_routes` into Android `VpnService.Builder`;
+- captures full IPv4 traffic in Android `VpnService.Builder`, including DNS;
+- excludes the agent package from its own VPN and protects libbox sockets so
+  direct/provider/control connections use the physical default network;
 - posts `/api/agent/status`;
 - can run local candidate probes through generated local mixed proxy inbounds.
 - shows service, policy, probe, route, transport, engine, runtime, and last
@@ -28,7 +30,7 @@ Verified on the physical test phone:
 Latest verified smoke status for release `1.19 (20)`:
 
 ```text
-ok ip=8 cleanup=0 transports=7 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 probe_jobs jobs=2 completed=2 failed=0
+ok ip=8 cleanup=0 transports=6 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 config=19A5BD19F86F probe_jobs jobs=0 completed=0 failed=0
 ```
 
 Latest Release APK smoke on the physical phone:
@@ -67,7 +69,17 @@ Real reboot check on the MIUI test phone:
   did start automatically after a real reboot and completed the first control
   loop successfully.
 
-Latest verified Android VPN routes included the Telegram CIDRs:
+Latest full-TUN verification on 2026-07-15:
+
+- Android VPN interface `tun0` owns `0.0.0.0/0` and DNS `172.40.0.2`;
+- Android reports the VPN network as `VALIDATED`;
+- `example.com` matched the final `Direct` outbound;
+- `chatgpt.com` matched `out-proxynl` by SNI;
+- Telegram `149.154.160.0/20` matched `out-proxynl` by CIDR;
+- unchanged policy cycles logged the same config hash and did not reload
+  libbox.
+
+The control policy still includes these Telegram CIDRs:
 
 ```text
 149.154.160.0/20
@@ -233,6 +245,10 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 ## Remaining Work
 
+- Increment and publish the full-TUN build as the next release.
+- Verify autostart and traffic again after a real phone reboot.
 - Add broader Android-device smoke coverage outside the current MIUI phone.
+- Add service dependency groups and optional rendered probes for services whose
+  geographic decision is made by JavaScript rather than the initial HTTP body.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).

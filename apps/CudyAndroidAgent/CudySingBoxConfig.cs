@@ -98,15 +98,25 @@ public static class CudySingBoxConfig
                 ["tag"] = "cudy-tun",
                 ["interface_name"] = "cudy0",
                 ["address"] = new JsonArray { "172.40.0.1/30" },
+                ["dns_mode"] = "hijack",
                 ["mtu"] = 1400,
                 ["auto_route"] = true,
                 ["strict_route"] = false,
                 ["stack"] = "gvisor",
+                ["exclude_package"] = new JsonArray { "com.nashvpn.cudyagent" },
             },
         };
         AddLocalProbeInbounds(localProbes, inbounds);
 
-        var rules = new JsonArray();
+        var rules = new JsonArray
+        {
+            new JsonObject { ["action"] = "sniff" },
+            new JsonObject
+            {
+                ["protocol"] = "dns",
+                ["action"] = "hijack-dns",
+            },
+        };
         AddLocalProbeRules(localProbes, rules, outboundTags);
         if (directCidrs.Count > 0)
         {
@@ -155,7 +165,7 @@ public static class CudySingBoxConfig
             ["outbounds"] = outbounds,
             ["route"] = new JsonObject
             {
-                ["auto_detect_interface"] = false,
+                ["auto_detect_interface"] = true,
                 ["rules"] = rules,
                 ["final"] = "direct",
             },

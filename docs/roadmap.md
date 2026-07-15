@@ -58,6 +58,12 @@ This is the current implementation order for the managed VPN control project.
   domain. If no live agent is available, test from the control-server.
 - Keep winner history and a TTL cache.
 - Show recent winners with latency and throughput near candidate-list editing.
+- Add service dependency groups. One logical service such as Gemini may need
+  several domains, and all of them must follow the same selected exit instead
+  of independently choosing different Auto winners.
+- Keep lightweight HTTP content checks for ordinary sites, but allow an
+  optional browser-rendered probe class for services whose geographic decision
+  is produced only after JavaScript runs.
 - Current implementation expands `all-rest` on the control-server and sends
   bounded probe windows to agents (`8` candidates by default), so agents do not
   start every provider transport at once.
@@ -140,18 +146,21 @@ This is the current implementation order for the managed VPN control project.
 - Release `1.19 (20)` is built, published through the control-server update
   manifest, and installed on the physical MIUI phone. One-time enrollment was
   reissued without clearing app data; policy fetch, SSH control, status post,
-  foreground service, libbox engine, and selective `tun0` routing all passed.
+  foreground service and libbox engine passed.
 - The libbox platform now publishes actual Android interface inventory and
   keeps one default-network callback across repeated config reloads. A live
   multi-cycle check stayed at one callback with zero interface lookup errors.
 - Effective critical-service checks now run inside the foreground service.
   Three consecutive failures post diagnostics and close the VPN so Android
   returns to direct routing.
-- The production Android engine currently captures explicit `ip_routes` only.
-  A full `0.0.0.0/0` TUN experiment correctly exposed domain rules to the
-  engine but broke direct egress, so it was rolled back before publication.
-  Domain/SNI routing needs a loop-free protected direct outbound before the
-  Android agent can be considered feature-equivalent to Windows/Linux.
+- Full IPv4 TUN capture now uses the official SFA route-range contract, TUN DNS
+  hijacking and libbox `auto_detect_interface`. The agent package is excluded
+  from its own VPN so SSH control cannot recurse. A physical-phone smoke proved
+  direct egress, ChatGPT SNI routing and Telegram CIDR routing concurrently.
+- Config hashing suppresses unchanged libbox reloads and logs short old/new
+  hashes when policy really changes.
+- Publish this full-TUN build as the next version, then verify a real reboot and
+  a longer mobile-network/Wi-Fi soak before declaring Android production-ready.
 
 ## 8. Linux Agent
 
@@ -186,6 +195,9 @@ This is the current implementation order for the managed VPN control project.
 - Add per-user critical-service health lists to user/admin UI. Agents cache the
   list locally; watchdog failures must be visible as diagnostics and should
   first request route repair/Auto failover before a full emergency stop.
+- Extend service aliases into routable service groups: editable dependency
+  domains, one candidate list, one Auto winner and one rendered/content health
+  result for the whole service.
 
 ## 10. Cudy
 

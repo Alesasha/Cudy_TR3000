@@ -531,10 +531,22 @@ public class CudyVpnService : VpnService
 
         if (options?.AutoRoute == true)
         {
-            AddTunRoutes(builder, options.Inet4RouteAddress);
-            AddTunRoutes(builder, options.Inet6RouteAddress);
+            AddTunDnsServers(builder, options);
+            var ipv4Routes = AddTunRoutes(builder, options.Inet4RouteRange);
+            var ipv6Routes = AddTunRoutes(builder, options.Inet6RouteRange);
+            if (ipv4Routes == 0)
+            {
+                builder.AddRoute("0.0.0.0", 0);
+                ipv4Routes = 1;
+            }
+            AddTunPackages(builder, options.IncludePackage, allowed: true);
+            AddTunPackages(builder, options.ExcludePackage, allowed: false);
+            Log.Info(LogTag, $"Added Android auto routes: ipv4={ipv4Routes} ipv6={ipv6Routes}");
         }
-        AddPolicyRoutes(builder);
+        else
+        {
+            AddPolicyRoutes(builder);
+        }
 
         tun = builder.Establish() ?? throw new InvalidOperationException("Android VPN tunnel could not be established.");
         Log.Info(LogTag, "libbox opened Android VPN tun fd=" + tun.Fd);
@@ -592,8 +604,9 @@ public class CudyVpnService : VpnService
         return added;
     }
 
-    private static void AddTunRoutes(Builder builder, IRoutePrefixIterator? iterator)
+    private static int AddTunRoutes(Builder builder, IRoutePrefixIterator? iterator)
     {
+        var added = 0;
         while (iterator?.HasNext == true)
         {
             var prefix = iterator.Next();
@@ -602,6 +615,57 @@ public class CudyVpnService : VpnService
             if (!string.IsNullOrWhiteSpace(address) && bits >= 0)
             {
                 builder.AddRoute(address, bits);
+                added++;
+            }
+        }
+        return added;
+    }
+
+    private static void AddTunDnsServers(Builder builder, ITunOptions options)
+    {
+        if (string.Equals(options.DNSMode?.Value, Libbox.DNSModeDisabled, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+        var iterator = options.DNSServerAddress;
+        var added = 0;
+        while (iterator?.HasNext == true)
+        {
+            var address = iterator.Next();
+            if (string.IsNullOrWhiteSpace(address))
+            {
+                continue;
+            }
+            builder.AddDnsServer(address);
+            added++;
+        }
+        Log.Info(LogTag, $"Added Android VPN DNS servers: {added}");
+    }
+
+    private static void AddTunPackages(Builder builder, IStringIterator? iterator, bool allowed)
+    {
+        while (iterator?.HasNext == true)
+        {
+            var packageName = iterator.Next();
+            if (string.IsNullOrWhiteSpace(packageName))
+            {
+                continue;
+            }
+            try
+            {
+                if (allowed)
+                {
+                    builder.AddAllowedApplication(packageName);
+                }
+                else
+                {
+                    builder.AddDisallowedApplication(packageName);
+                }
+                Log.Info(LogTag, $"Android VPN {(allowed ? "allowed" : "excluded")} package: {packageName}");
+            }
+            catch (PackageManager.NameNotFoundException ex)
+            {
+                Log.Warn(LogTag, $"Android VPN package rule ignored for {packageName}: {ex.Message}");
             }
         }
     }

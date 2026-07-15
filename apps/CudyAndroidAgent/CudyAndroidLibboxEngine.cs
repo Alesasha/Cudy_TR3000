@@ -44,18 +44,30 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
             commandServer.Start();
         }
 
-        if (!string.Equals(activeConfigPath, transport.ConfigPath, StringComparison.Ordinal)
-            || !string.Equals(activeServerId, transport.ServerId, StringComparison.Ordinal)
-            || !string.Equals(activeConfigHash, configHash, StringComparison.Ordinal))
+        var pathChanged = !string.Equals(activeConfigPath, transport.ConfigPath, StringComparison.Ordinal);
+        var serverChanged = !string.Equals(activeServerId, transport.ServerId, StringComparison.Ordinal);
+        var configChanged = !string.Equals(activeConfigHash, configHash, StringComparison.Ordinal);
+        if (pathChanged || serverChanged || configChanged)
         {
+            Log.Info(
+                LogTag,
+                $"libbox config reload old={ShortHash(activeConfigHash)} new={ShortHash(configHash)} " +
+                $"path_changed={pathChanged} server_changed={serverChanged} config_changed={configChanged}");
             commandServer.StartOrReloadService(configJson, new OverrideOptions());
             activeConfigPath = transport.ConfigPath;
             activeServerId = transport.ServerId;
             activeConfigHash = configHash;
         }
+        else
+        {
+            Log.Debug(LogTag, $"libbox config unchanged hash={ShortHash(configHash)}");
+        }
 
-        return $"engine=running server={transport.ServerId} iface={transport.InterfaceName}";
+        return $"engine=running server={transport.ServerId} iface={transport.InterfaceName} config={ShortHash(configHash)}";
     }
+
+    private static string ShortHash(string value) =>
+        string.IsNullOrEmpty(value) ? "none" : value[..Math.Min(12, value.Length)];
 
     public async Task<CudyNativeProbeResult> RunNativeProbeAsync(
         string url,

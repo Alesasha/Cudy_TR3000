@@ -11,15 +11,15 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 - The delayed serialized PBR boot path, fail-open watchdog, forwarding and
   firewall validation are deployed.
 - `cudy-fallback` and the restricted Cudy control tunnel are running. A strict
-  check observed live policy with 22 routes and 9 transports.
+  check observed live policy with 22 routes and 7 transports.
 - `cudy-router-agent` is running in `observe`. It receives live policy, reports
   agent heartbeat, processes Auto probe jobs and passes its strict check with
   22 routes and five healthy critical services. It still does not modify PBR.
 - Provider refresh cron entries exist for VPNtype and LokVPN.
-- Content-aware Auto probes now run on the requesting agent. From Cudy,
-  `gemini.google.com` selected `proxyde` at 1394 ms, while `chatgpt.com`
-  rejected four timing-out provider exits and selected `uswest` at 1050 ms.
-  A matching ChatGPT domain candidate policy now permits that measured winner.
+- Content-aware Auto probes now run on the requesting agent. The Python and Go
+  implementations reject HTTP responses containing known geographic-block
+  text, including HTML-escaped apostrophes. JavaScript-rendered geo decisions
+  remain a separate probe limitation.
 - Primary control loss and recovery were exercised: Cudy served cached policy
   while its control tunnel was stopped, then returned to live policy after the
   tunnel restarted without changing the WAN/default route.
@@ -32,6 +32,11 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 - Control backup and Cudy fallback sync tasks are installed on Windows.
 - Targeted control, Auto, packaging, watchdog, PBR and Go regression tests pass.
 - No file under `secrets/` is tracked by Git.
+- A rebuilt Android `1.19 (20)` test APK is running on the physical phone with
+  full IPv4 TUN capture, TUN DNS, protected direct/provider sockets and SNI
+  routing. Android reports the VPN as `VALIDATED`; `example.com` used `Direct`,
+  `chatgpt.com` used `proxynl`, and Telegram `149.154.160.0/20` used `proxynl`.
+  Repeated unchanged policy cycles did not reload libbox.
 
 ## Incomplete Or Degraded
 
@@ -43,9 +48,12 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   needs a controlled reversible acceptance window before any apply trial.
 - The Windows managed-agent task is disabled on the development workstation;
   current traffic is intentionally handled by Cudy instead.
-- Android release `1.19 (20)` is installed on the physical phone, but its VPN
-  foreground service is currently inactive. Full domain/SNI routing remains a
-  known gap.
+- The full-TUN Android build is not yet versioned and published as the next
+  production APK. The signed-in Chrome profile still reports Gemini
+  `location_rejected` even when a temporary Android-only experiment routed the
+  full Google dependency set through one French exit; those broad temporary
+  rules were removed. Service dependency groups and browser-rendered probes
+  remain open design work.
 - The Linux agent needs a longer real-world soak test covering suspend/resume,
   Wi-Fi changes, Zapret and UFW.
 - Production currently reports one of four enabled agents online. The old Auto
@@ -55,11 +63,12 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 
 ## Next Order Of Work
 
-1. Soak the Cudy observer and reconcile the remaining Auto probe backlog.
-2. Complete Windows, Android and Linux production acceptance separately.
-3. Audit admin/user UI against the current policy model.
-4. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
-5. Prepare a staged, reversible migration from AirTies to Cudy as main router.
+1. Publish and reboot-test the full-TUN Android release.
+2. Add service dependency groups whose domains share one Auto winner.
+3. Complete Windows and Linux production acceptance separately.
+4. Audit admin/user UI against the current policy model.
+5. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
+6. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
 Do not enable router-agent apply mode or move DHCP/WAN ownership to Cudy until
 fallback recovery and critical-service transport checks have passed.

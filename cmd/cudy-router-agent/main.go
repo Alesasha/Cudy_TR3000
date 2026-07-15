@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"net"
@@ -668,9 +669,14 @@ func probePatterns(job probeJob, services []criticalService, target, domain stri
 }
 
 func bodyHasGeoBlock(body string) bool {
-	normalized := strings.ToLower(strings.ReplaceAll(body, "’", "'"))
+	normalized := strings.ToLower(html.UnescapeString(body))
+	for _, apostrophe := range []string{"‘", "’", "ʼ", "`"} {
+		normalized = strings.ReplaceAll(normalized, apostrophe, "'")
+	}
 	for _, pattern := range geoBlockPatterns {
-		if strings.Contains(normalized, pattern) {
+		normalizedPattern := strings.ToLower(html.UnescapeString(pattern))
+		normalizedPattern = strings.ReplaceAll(normalizedPattern, "’", "'")
+		if strings.Contains(normalized, normalizedPattern) {
 			return true
 		}
 	}

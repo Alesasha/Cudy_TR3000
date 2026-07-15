@@ -14,6 +14,7 @@ MAIN_ACTIVITY = ROOT / "apps" / "CudyAndroidAgent" / "MainActivity.cs"
 BOOT_RECEIVER = ROOT / "apps" / "CudyAndroidAgent" / "BootReceiver.cs"
 VPN_SERVICE = ROOT / "apps" / "CudyAndroidAgent" / "CudyVpnService.cs"
 CRITICAL_MONITOR = ROOT / "apps" / "CudyAndroidAgent" / "CudyCriticalServiceMonitor.cs"
+SING_BOX_CONFIG = ROOT / "apps" / "CudyAndroidAgent" / "CudySingBoxConfig.cs"
 
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
@@ -97,6 +98,20 @@ def main() -> int:
             "CudyCriticalServiceMonitor.CheckAsync",
             "stop_vpn_restore_direct",
             '"/api/agent/diagnostics"',
+            "options.Inet4RouteRange",
+            "AddTunDnsServers",
+            "AddDisallowedApplication",
+            "Added Android auto routes",
+        ],
+    )
+    assert_contains(
+        SING_BOX_CONFIG,
+        [
+            '["dns_mode"] = "hijack"',
+            '["action"] = "sniff"',
+            '["action"] = "hijack-dns"',
+            '["auto_detect_interface"] = true',
+            '["exclude_package"] = new JsonArray { "com.nashvpn.cudyagent" }',
         ],
     )
     print("Android agent UI static smoke passed.")

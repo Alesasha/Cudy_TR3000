@@ -376,6 +376,12 @@ func TestProbeRejectsGeoBlockAndFailurePattern(t *testing.T) {
 	if !bodyHasGeoBlock("Service is NOT AVAILABLE IN YOUR COUNTRY") {
 		t.Fatal("geo block evidence was missed")
 	}
+	if !bodyHasGeoBlock("Gemini isn&rsquo;t currently supported in your country") {
+		t.Fatal("HTML-escaped Gemini geo block evidence was missed")
+	}
+	if !bodyHasGeoBlock("Gemini isn&#39;t currently supported in your country") {
+		t.Fatal("numeric HTML-escaped Gemini geo block evidence was missed")
+	}
 	matched, err := patternMatches("access\\s+denied", "Access denied", false)
 	if err != nil || !matched {
 		t.Fatalf("matched=%t err=%v", matched, err)

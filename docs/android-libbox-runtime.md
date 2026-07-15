@@ -23,11 +23,16 @@ Current repo status:
   stored config.
 - Current verified release status on the test phone:
   `ok ip=8 cleanup=0 transports=2 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0`.
-- Android `VpnService.Builder` receives policy IPv4 CIDRs from control-server
-  `ip_routes`, so matching traffic enters the Android TUN instead of only the
-  internal `172.40.0.0/30` route.
-- With the unified Android VPN running, `adb shell ping -c 2 -W 3 1.1.1.1` and
-  Telegram CIDR pings succeed with `0% packet loss`.
+- Android `VpnService.Builder` uses libbox `Inet4RouteRange` and captures
+  `0.0.0.0/0`; DNS is sent to the TUN and hijacked by sing-box.
+- The agent package is excluded from the VPN, while libbox
+  `auto_detect_interface` invokes the Android protect callback for direct and
+  provider sockets. This prevents full-TUN recursion.
+- With the unified Android VPN running, Android reports a validated `tun0`.
+  Live logs prove `example.com -> direct`, `chatgpt.com -> out-proxynl`, and
+  Telegram CIDRs -> `out-proxynl`.
+- The engine hashes generated configs and skips reloads when the policy is
+  unchanged.
 
 Why the first iteration used a probe before a full runtime:
 
@@ -84,7 +89,7 @@ standard VPN connection dialog. The app now records
 
 Remaining implementation work:
 
-1. Extend Android status with active config summary: route count, outbound tags,
+1. Publish and reboot-test the full-TUN build as a new release.
+2. Extend Android status with active config summary: route count, outbound tags,
    and last probe result.
-2. Harden probe-job scheduling for mobile foreground/battery constraints.
-3. Add boot/reconnect handling and a user-facing diagnostics screen.
+3. Harden probe-job scheduling for mobile foreground/battery constraints.
