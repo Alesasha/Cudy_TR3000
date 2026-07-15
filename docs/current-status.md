@@ -38,6 +38,13 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   routing. Android reports the VPN as `VALIDATED`; `example.com` used `Direct`,
   `chatgpt.com` used `proxynl`, and Telegram `149.154.160.0/20` used `proxynl`.
   Repeated unchanged policy cycles did not reload libbox.
+- The first admin/UI audit is complete. The admin page now uses focused tabs,
+  global lookup aliases are read-only for ordinary users, and HTTP regression
+  coverage rejects user attempts to mutate the shared alias dictionary.
+- Auto probe assignment now checks transport-management capability both when a
+  job is scheduled and when an agent claims it. The Cudy observer no longer
+  advertises transport management while in `observe`; stale assignments were
+  reconciled and no active probe job remains assigned to `cudy-home`.
 
 ## Incomplete Or Degraded
 
@@ -49,25 +56,33 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   needs a controlled reversible acceptance window before any apply trial.
 - The Windows managed-agent task is disabled on the development workstation;
   current traffic is intentionally handled by Cudy instead.
-- The full-TUN Android build is not yet versioned and published as the next
-  production APK. The signed-in Chrome profile still reports Gemini
+- A real locked-boot test found that Android `1.20 (21)` touches
+  credential-encrypted preferences too early on MIUI. Android `1.21 (22)` moves
+  the locked-boot marker to device-protected storage and waits for user unlock
+  before reading enrollment secrets; the signed build exists locally but is
+  intentionally not published until it passes install, locked reboot and
+  post-unlock acceptance on the physical phone. The signed-in Chrome profile
+  still reports Gemini
   `location_rejected` even when a temporary Android-only experiment routed the
   full Google dependency set through one French exit; those broad temporary
   rules were removed. Service dependency groups and browser-rendered probes
   remain open design work.
 - The Linux agent needs a longer real-world soak test covering suspend/resume,
   Wi-Fi changes, Zapret and UFW.
-- Production currently reports one of four enabled agents online. The old Auto
-  backlog is being drained by Cudy; recent failed probes are warnings rather
-  than a control-server readiness failure and must be reconciled during
-  platform acceptance.
+- Production currently reports one of four enabled agents online. Historical
+  OpenAI probe failures remain visible for the one-hour warning window, but
+  Cudy no longer claims jobs that require transports it cannot start in
+  observer mode. Two old unassigned Speedtest jobs remain pending for a capable
+  agent.
 
 ## Next Order Of Work
 
-1. Reboot-test the published full-TUN Android `1.20 (21)` release.
+1. Unlock the physical phone, install Android `1.21 (22)`, and pass locked
+   reboot plus post-unlock recovery before publishing it.
 2. Add service dependency groups whose domains share one Auto winner.
 3. Complete Windows and Linux production acceptance separately.
-4. Audit admin/user UI against the current policy model.
+4. Add a separate per-user alias table and effective lookup precedence; keep
+   the global alias dictionary admin-owned.
 5. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
 6. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
