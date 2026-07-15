@@ -293,7 +293,20 @@ file under a timestamped root-only transaction directory, starts only required
 transports, updates PBR atomically, and restores the previous files and PBR
 state if transport startup, PBR restart, or the post-apply health request fails.
 
-The current observe plan contains 22 routes and one dynamic action for
-`lokvpn-de1`; the generated VLESS Reality config passes the router's own
-`sing-box check`. Keep observe mode active until repeated diffs are stable and
-the independent workstation watchdog is installed.
+The first live apply must use the independent guarded trial tool. Its default
+invocation is read-only and prints the exact eligible files:
+
+```powershell
+python tools\trial_cudy_router_agent_apply.py
+```
+
+The tool refuses stale or unhealthy observer state, blockers, unsafe paths and
+plans that need a new transport. `--apply --yes` arms a rollback process on the
+router before changing the persistent mode gate. If the workstation or SSH
+session disappears, Cudy restores the previous override files, runs the
+fail-open PBR restart and returns the agent to `observe`. A successful result is
+retained only with the additional `--commit` gate.
+
+The current observe plan contains 22 routes, seven PBR override changes and no
+dynamic transport action. Keep observe mode active until repeated diffs are
+stable and the independent rollback guard has been exercised.
