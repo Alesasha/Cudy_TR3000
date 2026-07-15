@@ -38,9 +38,11 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   routing. Android reports the VPN as `VALIDATED`; `example.com` used `Direct`,
   `chatgpt.com` used `proxynl`, and Telegram `149.154.160.0/20` used `proxynl`.
   Repeated unchanged policy cycles did not reload libbox.
-- The first admin/UI audit is complete. The admin page now uses focused tabs,
-  global lookup aliases are read-only for ordinary users, and HTTP regression
-  coverage rejects user attempts to mutate the shared alias dictionary.
+- The first admin/UI audit is complete. The admin page now uses focused tabs.
+  Global lookup aliases remain admin-owned, while every user can create local
+  aliases that override the same global name only for that account. HTTP and
+  rendered mobile UI checks cover precedence, isolation, deletion fallback and
+  shared-dictionary authorization.
 - Auto probe assignment now checks transport-management capability both when a
   job is scheduled and when an agent claims it. The Cudy observer no longer
   advertises transport management while in `observe`; stale assignments were
@@ -81,10 +83,8 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
    reboot plus post-unlock recovery before publishing it.
 2. Add service dependency groups whose domains share one Auto winner.
 3. Complete Windows and Linux production acceptance separately.
-4. Add a separate per-user alias table and effective lookup precedence; keep
-   the global alias dictionary admin-owned.
-5. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
-6. Prepare a staged, reversible migration from AirTies to Cudy as main router.
+4. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
+5. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
 Do not enable router-agent apply mode or move DHCP/WAN ownership to Cudy until
 fallback recovery and critical-service transport checks have passed.

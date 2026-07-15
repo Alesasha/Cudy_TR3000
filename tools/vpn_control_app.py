@@ -437,6 +437,17 @@ CREATE TABLE IF NOT EXISTS service_aliases (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS user_service_aliases (
+  user_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  label TEXT NOT NULL,
+  targets_json TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(user_id, alias),
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS critical_services (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id TEXT NOT NULL DEFAULT '',
@@ -712,8 +723,8 @@ USER_HTML = r"""<!doctype html>
     </section>
     <section>
       <h2>Lookup Aliases</h2>
-      <p id="aliasHelp" class="muted">Aliases are shared lookup shortcuts. They do not create tunnel rules by themselves.</p>
-      <form id="aliasForm" class="row" hidden>
+      <p id="aliasHelp" class="muted">Local aliases override global lookup shortcuts with the same name. They do not create tunnel rules.</p>
+      <form id="aliasForm" class="row">
         <input id="aliasInput" type="text" placeholder="alias, e.g. телеграм" autocomplete="off">
         <input id="aliasLabel" type="text" placeholder="label" autocomplete="off">
         <input id="aliasTargets" type="text" placeholder="lookup targets: domain, IP/CIDR, ..." autocomplete="off">
@@ -721,7 +732,7 @@ USER_HTML = r"""<!doctype html>
       </form>
       <p id="aliasStatus" class="status"></p>
       <table>
-        <thead><tr><th>Alias</th><th>Label</th><th>Lookup Targets</th><th>Routing Effect</th><th></th></tr></thead>
+        <thead><tr><th>Alias</th><th>Label</th><th>Scope</th><th>Lookup Targets</th><th>Routing Effect</th><th></th></tr></thead>
         <tbody id="aliasesBody"></tbody>
       </table>
     </section>
@@ -813,14 +824,15 @@ USER_HTML = r"""<!doctype html>
         <tr>
           <td data-label="Alias">${escapeHtml(item.alias)}</td>
           <td data-label="Label">${escapeHtml(item.label)}</td>
+          <td data-label="Scope">${item.scope === "user" ? "Local" : "Global"}</td>
           <td data-label="Lookup Targets">${(item.targets || []).map(escapeHtml).join(", ")}</td>
           <td data-label="Routing Effect" class="muted">none; use Route Lookup or Domain Routes</td>
-          <td>${state.user?.role === "admin" ? `<button class="danger" data-delete-alias="${escapeHtml(item.alias)}">Delete</button>` : ""}</td>
+          <td>${item.scope === "user" ? `<button class="danger" data-delete-alias="${escapeHtml(item.alias)}">Delete local</button>` : ""}</td>
         </tr>
-      `).join("") : '<tr><td data-label="Alias" colspan="5" class="muted">No aliases.</td></tr>';
+      `).join("") : '<tr><td data-label="Alias" colspan="6" class="muted">No aliases.</td></tr>';
       body.querySelectorAll("[data-delete-alias]").forEach(button => {
         button.addEventListener("click", async () => {
-          await api(`/api/service-aliases?alias=${encodeURIComponent(button.dataset.deleteAlias)}`, { method: "DELETE" });
+          await api(`/api/user/service-aliases?alias=${encodeURIComponent(button.dataset.deleteAlias)}`, { method: "DELETE" });
           await load();
         });
       });
@@ -858,11 +870,7 @@ USER_HTML = r"""<!doctype html>
       state.user = data.user;
       state.aliases = data.aliases || [];
       state.criticalServices = data.critical_services || { global: [], local: [], effective: [] };
-      const canManageAliases = state.user?.role === "admin";
-      document.getElementById("aliasForm").hidden = !canManageAliases;
-      document.getElementById("aliasHelp").textContent = canManageAliases
-        ? "Aliases are shared lookup shortcuts. They do not create tunnel rules by themselves."
-        : "Global lookup aliases are managed by the administrator. They are available here for Route Lookup only.";
+      document.getElementById("aliasHelp").textContent = "Create local lookup aliases here. A local alias replaces the global alias with the same name for your account only; aliases do not create tunnel rules.";
       state.default_auto_candidate_policy = data.default_auto_candidate_policy || null;
       fillServerSelect(document.getElementById("defaultServer"), state.user.default_server_id);
       fillServerSelect(document.getElementById("routeServer"), "auto");
@@ -947,7 +955,7 @@ USER_HTML = r"""<!doctype html>
       const status = document.getElementById("aliasStatus");
       status.className = "status";
       try {
-        await api("/api/service-aliases", {
+        await api("/api/user/service-aliases", {
           method: "POST",
           body: JSON.stringify({
             alias: document.getElementById("aliasInput").value,
@@ -956,7 +964,7 @@ USER_HTML = r"""<!doctype html>
           })
         });
         event.target.reset();
-        status.textContent = "Alias saved.";
+        status.textContent = "Local alias saved.";
         status.className = "status ok";
         await load();
       } catch (error) {
@@ -3113,6 +3121,20 @@ def migrate_db(conn: sqlite3.Connection) -> None:
           targets_json TEXT NOT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_service_aliases (
+          user_id TEXT NOT NULL,
+          alias TEXT NOT NULL,
+          label TEXT NOT NULL,
+          targets_json TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(user_id, alias),
+          FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
         )
         """
     )
@@ -8355,11 +8377,61 @@ def service_alias_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         """,
     )
     for entry in entries:
+        entry["scope"] = "global"
         try:
             entry["targets"] = json.loads(entry.pop("targets_json") or "[]")
         except json.JSONDecodeError:
             entry["targets"] = []
     return entries
+
+
+def user_service_alias_rows(conn: sqlite3.Connection, *, user_id: str) -> list[dict[str, Any]]:
+    entries = rows(
+        conn,
+        """
+        SELECT alias, label, targets_json, updated_at
+        FROM user_service_aliases
+        WHERE user_id = ?
+        ORDER BY label, alias
+        """,
+        (user_id,),
+    )
+    for entry in entries:
+        entry["scope"] = "user"
+        try:
+            entry["targets"] = json.loads(entry.pop("targets_json") or "[]")
+        except json.JSONDecodeError:
+            entry["targets"] = []
+    return entries
+
+
+def effective_service_alias_rows(conn: sqlite3.Connection, *, user_id: str) -> list[dict[str, Any]]:
+    effective = {entry["alias"]: entry for entry in service_alias_rows(conn)}
+    effective.update({entry["alias"]: entry for entry in user_service_alias_rows(conn, user_id=user_id)})
+    return sorted(effective.values(), key=lambda entry: (str(entry.get("label") or "").casefold(), entry["alias"]))
+
+
+def resolve_service_alias(conn: sqlite3.Connection, *, user_id: str, alias: str) -> dict[str, Any] | None:
+    local = row(
+        conn,
+        """
+        SELECT alias, label, targets_json, updated_at, 'user' AS scope
+        FROM user_service_aliases
+        WHERE user_id = ? AND alias = ?
+        """,
+        (user_id, alias),
+    )
+    if local:
+        return local
+    return row(
+        conn,
+        """
+        SELECT alias, label, targets_json, updated_at, 'global' AS scope
+        FROM service_aliases
+        WHERE alias = ?
+        """,
+        (alias,),
+    )
 
 
 def save_service_alias(
@@ -8402,6 +8474,68 @@ def delete_service_alias(db_path: Path, inventory_path: Path, *, alias: str) -> 
     with connect(db_path) as conn:
         conn.execute("DELETE FROM service_aliases WHERE alias = ?", (normalized_alias,))
     return {"ok": True, "alias": normalized_alias}
+
+
+def save_user_service_alias(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    alias: str,
+    label: str,
+    targets: Any,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_alias = normalize_alias(alias)
+    normalized_label = (label or normalized_alias).strip()[:80]
+    normalized_targets = parse_alias_targets(targets)
+    timestamp = now()
+    with connect(db_path) as conn:
+        if row(conn, "SELECT id FROM users WHERE id = ? AND enabled = 1", (user_id,)) is None:
+            raise ValueError(f"Unknown or disabled user: {user_id}")
+        conn.execute(
+            """
+            INSERT INTO user_service_aliases (user_id, alias, label, targets_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(user_id, alias)
+            DO UPDATE SET label = excluded.label,
+                          targets_json = excluded.targets_json,
+                          updated_at = excluded.updated_at
+            """,
+            (
+                user_id,
+                normalized_alias,
+                normalized_label,
+                json.dumps(normalized_targets, ensure_ascii=False),
+                timestamp,
+                timestamp,
+            ),
+        )
+    return {
+        "ok": True,
+        "user_id": user_id,
+        "alias": normalized_alias,
+        "label": normalized_label,
+        "targets": normalized_targets,
+        "scope": "user",
+    }
+
+
+def delete_user_service_alias(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    user_id: str,
+    alias: str,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_alias = normalize_alias(alias)
+    with connect(db_path) as conn:
+        conn.execute(
+            "DELETE FROM user_service_aliases WHERE user_id = ? AND alias = ?",
+            (user_id, normalized_alias),
+        )
+    return {"ok": True, "user_id": user_id, "alias": normalized_alias, "scope": "user"}
 
 
 def normalize_critical_service_key(value: str) -> str:
@@ -8997,7 +9131,7 @@ def route_lookup(db_path: Path, inventory_path: Path, *, user_id: str, target: s
             alias_key = normalize_alias(target_raw)
         except ValueError:
             alias_key = ""
-        alias = row(conn, "SELECT alias, label, targets_json, updated_at FROM service_aliases WHERE alias = ?", (alias_key,)) if alias_key else None
+        alias = resolve_service_alias(conn, user_id=user_id, alias=alias_key) if alias_key else None
         servers = server_map(conn)
         cached_auto = auto_cache_map(conn)
         expanded_targets: list[dict[str, str]]
@@ -9008,7 +9142,12 @@ def route_lookup(db_path: Path, inventory_path: Path, *, user_id: str, target: s
             except json.JSONDecodeError:
                 raw_targets = []
             expanded_targets = [normalize_lookup_target(str(item)) for item in raw_targets]
-            alias_info = {"alias": alias["alias"], "label": alias["label"], "targets": raw_targets}
+            alias_info = {
+                "alias": alias["alias"],
+                "label": alias["label"],
+                "targets": raw_targets,
+                "scope": alias.get("scope") or "global",
+            }
         else:
             expanded_targets = [normalize_lookup_target(target_raw)]
         results = [
@@ -9456,6 +9595,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.require_user()
                 with self.app.conn() as conn:
                     self.send_json({"ok": True, "aliases": service_alias_rows(conn)})
+            elif parsed.path == "/api/user/service-aliases":
+                user = self.require_user()
+                with self.app.conn() as conn:
+                    self.send_json(
+                        {
+                            "ok": True,
+                            "global": service_alias_rows(conn),
+                            "local": user_service_alias_rows(conn, user_id=user["id"]),
+                            "effective": effective_service_alias_rows(conn, user_id=user["id"]),
+                        }
+                    )
             elif parsed.path == "/api/critical-services":
                 user = self.require_user()
                 with self.app.conn() as conn:
@@ -9597,6 +9747,18 @@ class Handler(BaseHTTPRequestHandler):
                     save_service_alias(
                         self.app.db_path,
                         self.app.inventory_path,
+                        alias=str(data.get("alias") or ""),
+                        label=str(data.get("label") or ""),
+                        targets=data.get("targets") or "",
+                    )
+                )
+            elif parsed.path == "/api/user/service-aliases":
+                user = self.require_user()
+                self.send_json(
+                    save_user_service_alias(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=user["id"],
                         alias=str(data.get("alias") or ""),
                         label=str(data.get("label") or ""),
                         targets=data.get("targets") or "",
@@ -9836,6 +9998,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.require_admin()
                 query = parse_qs(parsed.query)
                 self.send_json(delete_service_alias(self.app.db_path, self.app.inventory_path, alias=query.get("alias", [""])[0]))
+            elif parsed.path == "/api/user/service-aliases":
+                user = self.require_user()
+                query = parse_qs(parsed.query)
+                self.send_json(
+                    delete_user_service_alias(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        user_id=user["id"],
+                        alias=query.get("alias", [""])[0],
+                    )
+                )
             elif parsed.path == "/api/critical-services":
                 user = self.require_user()
                 query = parse_qs(parsed.query)
@@ -9986,7 +10159,7 @@ class Handler(BaseHTTPRequestHandler):
                 "user": user,
                 "servers": user_servers(conn),
                 "routes": routes,
-                "aliases": service_alias_rows(conn),
+                "aliases": effective_service_alias_rows(conn, user_id=user_id),
                 "critical_services": {
                     "global": critical_service_rows(conn, user_id=""),
                     "local": critical_service_rows(conn, user_id=user_id),

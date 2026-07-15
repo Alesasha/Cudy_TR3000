@@ -163,6 +163,24 @@ def main() -> int:
                 "--inventory",
                 str(INVENTORY),
                 "create-user",
+                "other-user",
+                "--role",
+                "user",
+                "--password",
+                "other-password",
+            ],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+        )
+        subprocess.check_call(
+            [
+                sys.executable,
+                str(ROOT / "tools" / "vpn_control_app.py"),
+                "--db",
+                str(db_path),
+                "--inventory",
+                str(INVENTORY),
+                "create-user",
                 "phone-user",
                 "--role",
                 "user",
@@ -297,9 +315,9 @@ def main() -> int:
             if user_login.get("ok") is not True:
                 raise AssertionError(f"user login failed: {user_login!r}")
             user_page = fetch_text(user_opener, f"{base_url}/")
-            for snippet in ('id="aliasForm" class="row" hidden', "Global lookup aliases are managed by the administrator"):
+            for snippet in ('id="aliasForm" class="row"', "A local alias replaces the global alias with the same name"):
                 if snippet not in user_page:
-                    raise AssertionError(f"user page is missing read-only alias UI: {snippet!r}")
+                    raise AssertionError(f"user page is missing local alias UI: {snippet!r}")
             expect_http_error(
                 lambda: post_json(
                     user_opener,
@@ -308,6 +326,44 @@ def main() -> int:
                 ),
                 403,
             )
+            local_alias = post_json(
+                user_opener,
+                f"{base_url}/api/user/service-aliases",
+                {"alias": "smoke-alias", "label": "Local Smoke", "targets": "216.239.36.21"},
+            )
+            if local_alias.get("scope") != "user":
+                raise AssertionError(f"local alias save failed: {local_alias!r}")
+            alias_payload = fetch_json_with_opener(user_opener, f"{base_url}/api/user/service-aliases")
+            effective_aliases = alias_payload.get("effective") or []
+            smoke_effective = next((item for item in effective_aliases if item.get("alias") == "smoke-alias"), None)
+            if not smoke_effective or smoke_effective.get("scope") != "user" or smoke_effective.get("targets") != ["216.239.36.21/32"]:
+                raise AssertionError(f"local alias did not override the global alias: {alias_payload!r}")
+            local_lookup = fetch_json_with_opener(user_opener, f"{base_url}/api/route-lookup?target=smoke-alias")
+            if local_lookup.get("alias", {}).get("scope") != "user" or [item.get("target") for item in local_lookup.get("results") or []] != ["216.239.36.21/32"]:
+                raise AssertionError(f"route lookup did not use the local alias: {local_lookup!r}")
+
+            other_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+            other_login = post_json(
+                other_opener,
+                f"{base_url}/api/login",
+                {"username": "other-user", "password": "other-password"},
+            )
+            if other_login.get("ok") is not True:
+                raise AssertionError(f"second user login failed: {other_login!r}")
+            other_lookup = fetch_json_with_opener(other_opener, f"{base_url}/api/route-lookup?target=smoke-alias")
+            if other_lookup.get("alias", {}).get("scope") != "global" or [item.get("target") for item in other_lookup.get("results") or []] != ["example.com"]:
+                raise AssertionError(f"local alias leaked to another user: {other_lookup!r}")
+
+            deleted_local = fetch_json_with_opener(
+                user_opener,
+                f"{base_url}/api/user/service-aliases?alias=smoke-alias",
+                method="DELETE",
+            )
+            if deleted_local.get("ok") is not True:
+                raise AssertionError(f"local alias delete failed: {deleted_local!r}")
+            restored_lookup = fetch_json_with_opener(user_opener, f"{base_url}/api/route-lookup?target=smoke-alias")
+            if restored_lookup.get("alias", {}).get("scope") != "global" or [item.get("target") for item in restored_lookup.get("results") or []] != ["example.com"]:
+                raise AssertionError(f"global alias was not restored after deleting local override: {restored_lookup!r}")
             expect_http_error(
                 lambda: fetch_json_with_opener(
                     user_opener,

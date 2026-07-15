@@ -189,12 +189,12 @@ This is the current implementation order for the managed VPN control project.
 - User auth can be skipped when the user arrives through VPN/agent identity.
 - Admin keeps login/password.
 - Show statuses: applied, waiting for probe, Auto winner, agent offline.
-- Global route lookup aliases are admin-managed and read-only in the ordinary
-  user UI. They can also be managed through `service-alias-list`,
-  `service-alias-set`, and `service-alias-delete`.
-- Add a separate per-user alias table. Effective lookup should prefer a local
-  user alias over the global alias without allowing users to modify shared
-  names.
+- Global route lookup aliases are admin-managed. They can also be managed
+  through `service-alias-list`, `service-alias-set`, and
+  `service-alias-delete`.
+- Per-user aliases are stored separately. A local alias overrides the global
+  alias with the same name only for its owner; deleting it restores the global
+  lookup shortcut. Users cannot modify the shared dictionary.
 - Add per-user critical-service health lists to user/admin UI. Agents cache the
   list locally; watchdog failures must be visible as diagnostics and should
   first request route repair/Auto failover before a full emergency stop.
