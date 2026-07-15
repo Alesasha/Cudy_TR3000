@@ -506,6 +506,14 @@ def run_auto_worker_skips_without_capable_agent_check(tmp: Path) -> None:
                 timestamp,
             ),
         )
+    stale_job = app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="observer-only.example",
+        candidate_server_ids=["proxyde"],
+        user_id=TEST_USER_ID,
+        assigned_device_id="observer-only-device",
+    )
     result = app.create_auto_probe_jobs_once(
         db_path,
         INVENTORY,
@@ -516,6 +524,12 @@ def run_auto_worker_skips_without_capable_agent_check(tmp: Path) -> None:
     )
     created_for_domain = [item for item in result["created"] if item.get("domain") == "observer-only.example"]
     assert_equal(created_for_domain, [], "worker must not create a provider probe without a capable agent")
+    invalid_ids = [item["id"] for item in result.get("invalid_assignments") or []]
+    assert_equal(invalid_ids, [stale_job["id"]], "worker should reconcile the stale observer assignment")
+    with app.connect(db_path) as conn:
+        reconciled = app.row(conn, "SELECT status, error FROM agent_probe_jobs WHERE id = ?", (stale_job["id"],))
+    assert_equal((reconciled or {}).get("status"), "failed", "stale observer assignment status")
+    assert_true("no longer probe-capable" in str((reconciled or {}).get("error") or ""), "stale assignment error")
     matching = [item for item in result["skipped"] if item.get("domain") == "observer-only.example"]
     assert_true(bool(matching), "worker should explain why the observer-only domain was skipped")
     assert_equal(matching[0]["reason"], "no_capable_agent", "observer-only skip reason")

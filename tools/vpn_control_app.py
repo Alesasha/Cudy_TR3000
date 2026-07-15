@@ -5447,6 +5447,7 @@ def create_auto_probe_jobs_once(
     created: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
     job_requests: list[dict[str, Any]] = []
+    invalid_assignments: list[dict[str, Any]] = []
     active_agent_count = 0
     planned_domains: set[str] = set()
     with connect(db_path) as conn:
@@ -5466,6 +5467,43 @@ def create_auto_probe_jobs_once(
         default_candidates = default_auto_candidate_ids(servers)
         agents = active_agent_rows(conn, agent_stale_seconds=agent_stale_seconds)
         active_agent_count = len(agents)
+        agents_by_id = {str(agent.get("device_id") or ""): agent for agent in agents}
+        for pending in rows(
+            conn,
+            """
+            SELECT id, domain, assigned_device_id, candidate_server_ids
+            FROM agent_probe_jobs
+            WHERE status = 'pending' AND assigned_device_id != ''
+            """,
+        ):
+            try:
+                pending_candidates = json.loads(pending.get("candidate_server_ids") or "[]")
+            except json.JSONDecodeError:
+                pending_candidates = []
+            assigned_agent = agents_by_id.get(str(pending.get("assigned_device_id") or ""))
+            requires_managed_transports = candidates_require_managed_transports(servers, pending_candidates)
+            if assigned_agent and agent_can_probe(
+                assigned_agent,
+                requires_managed_transports=requires_managed_transports,
+            ):
+                continue
+            reason = "assigned agent is offline or no longer probe-capable"
+            conn.execute(
+                """
+                UPDATE agent_probe_jobs
+                SET status = 'failed', error = ?, finished_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (reason, now(), now(), pending["id"]),
+            )
+            invalid_assignments.append(
+                {
+                    "id": pending["id"],
+                    "domain": pending["domain"],
+                    "assigned_device_id": pending["assigned_device_id"],
+                    "reason": reason,
+                }
+            )
         cache = auto_cache_map(conn)
         for spec in auto_probe_domain_rows(conn):
             if len(job_requests) >= max_jobs:
@@ -5573,6 +5611,7 @@ def create_auto_probe_jobs_once(
         "cache_ttl_seconds": cache_ttl_seconds,
         "max_jobs": max_jobs,
         "max_candidates_per_job": max_candidates_per_job,
+        "invalid_assignments": invalid_assignments,
     }
 
 
