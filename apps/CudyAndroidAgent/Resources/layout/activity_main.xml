@@ -70,6 +70,118 @@
             android:paddingTop="6dp"
             android:text="Setup: -"
             android:textSize="13sp" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingTop="12dp">
+            <Button
+                android:id="@+id/startButton"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_weight="1"
+                android:text="ON" />
+            <Button
+                android:id="@+id/stopButton"
+                android:layout_width="0dp"
+                android:layout_height="56dp"
+                android:layout_marginStart="8dp"
+                android:layout_weight="1"
+                android:text="OFF" />
+        </LinearLayout>
+        <Button
+            android:id="@+id/statusButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Refresh status" />
+        <Button
+            android:id="@+id/updateButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Check for updates" />
+        <CheckBox
+            android:id="@+id/autostartCheckBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Autostart after reboot" />
+        <Button
+            android:id="@+id/setupPermissionsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Setup permissions" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="18dp"
+            android:text="Enrollment"
+            android:textStyle="bold" />
+        <EditText
+            android:id="@+id/enrollmentCodeInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="One-time code"
+            android:inputType="textVisiblePassword" />
+        <Button
+            android:id="@+id/enrollButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Activate this device" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="18dp"
+            android:text="Routing"
+            android:textStyle="bold" />
+        <Button
+            android:id="@+id/loadUiButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Load settings" />
+        <EditText
+            android:id="@+id/defaultServerInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Default server: auto, proxyde, proxynl..."
+            android:inputType="text" />
+        <Button
+            android:id="@+id/saveDefaultButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Save default server" />
+        <EditText
+            android:id="@+id/domainInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Domain, e.g. gemini.google.com"
+            android:inputType="textUri" />
+        <EditText
+            android:id="@+id/domainServerInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Server for domain: auto, proxyde, direct..."
+            android:inputType="text" />
+        <Button
+            android:id="@+id/saveDomainButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Save domain route" />
+        <EditText
+            android:id="@+id/lookupInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Check route for domain/IP/alias"
+            android:inputType="textUri" />
+        <Button
+            android:id="@+id/lookupButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Check route" />
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="18dp"
+            android:text="Advanced"
+            android:textStyle="bold" />
         <EditText
             android:id="@+id/controlUrlInput"
             android:layout_width="match_parent"
@@ -114,11 +226,6 @@
             android:layout_height="wrap_content"
             android:text="Save" />
         <Button
-            android:id="@+id/setupPermissionsButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Setup permissions" />
-        <Button
             android:id="@+id/fetchButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -133,16 +240,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Prepare VPN" />
-        <Button
-            android:id="@+id/startButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Start agent" />
-        <Button
-            android:id="@+id/stopButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Stop agent" />
         <TextView
             android:id="@+id/outputText"
             android:layout_width="match_parent"

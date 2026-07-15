@@ -6,6 +6,7 @@ using IO.Nekohasekai.Libbox;
 using System.Security.Cryptography;
 using System.Text;
 using Libbox = IO.Nekohasekai.Libbox.Libbox;
+using LibboxNetworkInterface = IO.Nekohasekai.Libbox.NetworkInterface;
 
 namespace CudyAndroidAgent;
 
@@ -150,6 +151,7 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
         activeConfigPath = "";
         activeServerId = "";
         activeConfigHash = "";
+        platform.CloseAllDefaultInterfaceMonitors();
         service.CloseLibboxTun();
     }
 
@@ -602,14 +604,16 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
     private const string LogTag = "CudyAgent";
     private readonly CudyVpnService service;
     private readonly object defaultInterfaceLock = new();
-    private readonly Dictionary<IInterfaceUpdateListener, ConnectivityManager.NetworkCallback> defaultInterfaceCallbacks = new();
+    private IInterfaceUpdateListener? defaultInterfaceListener;
+    private ConnectivityManager.NetworkCallback? defaultInterfaceCallback;
+    private string defaultInterfaceSignature = "";
 
     public CudyLibboxPlatform(CudyVpnService service)
     {
         this.service = service;
     }
 
-    public INetworkInterfaceIterator? Interfaces => null;
+    public INetworkInterfaceIterator? Interfaces => BuildNetworkInterfaces();
 
     public void AutoDetectInterfaceControl(int fd)
     {
@@ -635,10 +639,15 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
         ConnectivityManager.NetworkCallback? callback = null;
         lock (defaultInterfaceLock)
         {
-            if (defaultInterfaceCallbacks.Remove(listener, out var existing))
+            if (!ReferenceEquals(defaultInterfaceListener, listener)
+                && defaultInterfaceListener?.Equals(listener) != true)
             {
-                callback = existing;
+                return;
             }
+            defaultInterfaceListener = null;
+            defaultInterfaceSignature = "";
+            callback = defaultInterfaceCallback;
+            defaultInterfaceCallback = null;
         }
 
         if (callback is null)
@@ -653,6 +662,32 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
         catch (Exception ex)
         {
             Log.Warn(LogTag, "default interface monitor close failed: " + ex.Message);
+        }
+    }
+
+    public void CloseAllDefaultInterfaceMonitors()
+    {
+        ConnectivityManager.NetworkCallback? callback;
+        lock (defaultInterfaceLock)
+        {
+            defaultInterfaceListener = null;
+            defaultInterfaceSignature = "";
+            callback = defaultInterfaceCallback;
+            defaultInterfaceCallback = null;
+        }
+
+        var connectivityManager = GetConnectivityManager();
+        if (connectivityManager is null || callback is null)
+        {
+            return;
+        }
+        try
+        {
+            connectivityManager.UnregisterNetworkCallback(callback);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(LogTag, "default interface monitor cleanup failed: " + ex.Message);
         }
     }
 
@@ -717,8 +752,6 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
             return;
         }
 
-        UpdateDefaultInterface(listener);
-
         var connectivityManager = GetConnectivityManager();
         if (connectivityManager is null)
         {
@@ -726,25 +759,35 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
             return;
         }
 
-        var callback = new CudyDefaultNetworkCallback(this, listener);
+        ConnectivityManager.NetworkCallback? callbackToRegister = null;
         lock (defaultInterfaceLock)
         {
-            if (defaultInterfaceCallbacks.ContainsKey(listener))
+            defaultInterfaceListener = listener;
+            defaultInterfaceSignature = "";
+            if (defaultInterfaceCallback is null)
             {
-                return;
+                defaultInterfaceCallback = new CudyDefaultNetworkCallback(this);
+                callbackToRegister = defaultInterfaceCallback;
             }
-            defaultInterfaceCallbacks[listener] = callback;
         }
 
+        UpdateDefaultInterface();
+        if (callbackToRegister is null)
+        {
+            return;
+        }
         try
         {
-            connectivityManager.RegisterDefaultNetworkCallback(callback);
+            connectivityManager.RegisterDefaultNetworkCallback(callbackToRegister);
         }
         catch (Exception ex)
         {
             lock (defaultInterfaceLock)
             {
-                defaultInterfaceCallbacks.Remove(listener);
+                if (ReferenceEquals(defaultInterfaceCallback, callbackToRegister))
+                {
+                    defaultInterfaceCallback = null;
+                }
             }
             Log.Warn(LogTag, "default interface monitor start failed: " + ex.Message);
         }
@@ -771,10 +814,20 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
         return service.GetSystemService(Context.ConnectivityService) as ConnectivityManager;
     }
 
-    private void UpdateDefaultInterface(IInterfaceUpdateListener listener)
+    private void UpdateDefaultInterface()
     {
         try
         {
+            IInterfaceUpdateListener? listener;
+            lock (defaultInterfaceLock)
+            {
+                listener = defaultInterfaceListener;
+            }
+            if (listener is null)
+            {
+                return;
+            }
+
             var connectivityManager = GetConnectivityManager();
             if (connectivityManager is null)
             {
@@ -820,8 +873,124 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
         var isExpensive = capabilities?.HasCapability(NetCapability.NotMetered) == false;
         var isConstrained = capabilities?.HasCapability(NetCapability.NotRestricted) == false;
         var index = GetInterfaceIndex(interfaceName);
+        var signature = $"{interfaceName}|{index}|{isExpensive}|{isConstrained}";
+        lock (defaultInterfaceLock)
+        {
+            if (!ReferenceEquals(defaultInterfaceListener, listener)
+                && defaultInterfaceListener?.Equals(listener) != true)
+            {
+                return;
+            }
+            if (string.Equals(defaultInterfaceSignature, signature, StringComparison.Ordinal))
+            {
+                return;
+            }
+            defaultInterfaceSignature = signature;
+        }
         listener.UpdateDefaultInterface(interfaceName, index, isExpensive, isConstrained);
         Log.Info(LogTag, $"libbox default interface: name={interfaceName} index={index} expensive={isExpensive} constrained={isConstrained}");
+    }
+
+    private INetworkInterfaceIterator BuildNetworkInterfaces()
+    {
+        var items = new List<LibboxNetworkInterface>();
+        var connectivityManager = GetConnectivityManager();
+        if (connectivityManager is null)
+        {
+            return new CudyNetworkInterfaceIterator(items);
+        }
+
+        foreach (var network in connectivityManager.GetAllNetworks() ?? Array.Empty<Network>())
+        {
+            try
+            {
+                var linkProperties = connectivityManager.GetLinkProperties(network);
+                var capabilities = connectivityManager.GetNetworkCapabilities(network);
+                var interfaceName = linkProperties?.InterfaceName;
+                if (linkProperties is null || capabilities is null || string.IsNullOrWhiteSpace(interfaceName))
+                {
+                    continue;
+                }
+
+                var javaInterface = Java.Net.NetworkInterface.GetByName(interfaceName);
+                if (javaInterface is null)
+                {
+                    continue;
+                }
+
+                var addresses = javaInterface.InterfaceAddresses?
+                    .Select(FormatInterfaceAddress)
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .ToArray() ?? Array.Empty<string>();
+                var dnsServers = linkProperties.DnsServers?
+                    .Select(address => address.HostAddress ?? "")
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .ToArray() ?? Array.Empty<string>();
+
+                var flags = 0;
+                if (capabilities.HasCapability(NetCapability.Internet))
+                {
+                    flags |= 0x1 | 0x40; // IFF_UP | IFF_RUNNING
+                }
+                if (javaInterface.IsLoopback)
+                {
+                    flags |= 0x8; // IFF_LOOPBACK
+                }
+                if (javaInterface.IsPointToPoint)
+                {
+                    flags |= 0x10; // IFF_POINTOPOINT
+                }
+                if (javaInterface.SupportsMulticast())
+                {
+                    flags |= 0x1000; // IFF_MULTICAST
+                }
+
+                items.Add(new LibboxNetworkInterface
+                {
+                    Name = interfaceName,
+                    Index = javaInterface.Index,
+                    MTU = javaInterface.MTU,
+                    Addresses = new CudyStringIterator(addresses),
+                    DNSServer = new CudyStringIterator(dnsServers),
+                    Type = InterfaceType(capabilities),
+                    Flags = flags,
+                    Metered = !capabilities.HasCapability(NetCapability.NotMetered),
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogTag, "libbox interface inventory item failed: " + ex.Message);
+            }
+        }
+        return new CudyNetworkInterfaceIterator(items);
+    }
+
+    private static int InterfaceType(NetworkCapabilities capabilities)
+    {
+        if (capabilities.HasTransport(TransportType.Wifi))
+        {
+            return Libbox.InterfaceTypeWIFI;
+        }
+        if (capabilities.HasTransport(TransportType.Cellular))
+        {
+            return Libbox.InterfaceTypeCellular;
+        }
+        if (capabilities.HasTransport(TransportType.Ethernet))
+        {
+            return Libbox.InterfaceTypeEthernet;
+        }
+        return Libbox.InterfaceTypeOther;
+    }
+
+    private static string FormatInterfaceAddress(Java.Net.InterfaceAddress item)
+    {
+        var host = item.Address?.HostAddress ?? "";
+        var scope = host.IndexOf('%');
+        if (scope >= 0)
+        {
+            host = host[..scope];
+        }
+        return string.IsNullOrWhiteSpace(host) ? "" : $"{host}/{item.NetworkPrefixLength}";
     }
 
     private static int GetInterfaceIndex(string interfaceName)
@@ -891,34 +1060,47 @@ public sealed class CudyLibboxPlatform : Java.Lang.Object, IPlatformInterface
     private sealed class CudyDefaultNetworkCallback : ConnectivityManager.NetworkCallback
     {
         private readonly CudyLibboxPlatform platform;
-        private readonly IInterfaceUpdateListener listener;
 
-        public CudyDefaultNetworkCallback(CudyLibboxPlatform platform, IInterfaceUpdateListener listener)
+        public CudyDefaultNetworkCallback(CudyLibboxPlatform platform)
         {
             this.platform = platform;
-            this.listener = listener;
         }
 
         public override void OnAvailable(Network network)
         {
-            platform.UpdateDefaultInterface(listener);
+            platform.UpdateDefaultInterface();
         }
 
         public override void OnCapabilitiesChanged(Network network, NetworkCapabilities networkCapabilities)
         {
-            platform.UpdateDefaultInterface(listener);
+            platform.UpdateDefaultInterface();
         }
 
         public override void OnLinkPropertiesChanged(Network network, LinkProperties linkProperties)
         {
-            platform.UpdateDefaultInterface(listener);
+            platform.UpdateDefaultInterface();
         }
 
         public override void OnLost(Network network)
         {
-            platform.UpdateDefaultInterface(listener);
+            platform.UpdateDefaultInterface();
         }
     }
+}
+
+public sealed class CudyNetworkInterfaceIterator : Java.Lang.Object, INetworkInterfaceIterator
+{
+    private readonly IReadOnlyList<LibboxNetworkInterface> values;
+    private int index;
+
+    public CudyNetworkInterfaceIterator(IReadOnlyList<LibboxNetworkInterface> values)
+    {
+        this.values = values;
+    }
+
+    public bool HasNext => index < values.Count;
+
+    public LibboxNetworkInterface? Next() => HasNext ? values[index++] : null;
 }
 
 public sealed class CudyStringIterator : Java.Lang.Object, IStringIterator

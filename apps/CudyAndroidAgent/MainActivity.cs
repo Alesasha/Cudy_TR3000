@@ -7,7 +7,9 @@ using Android.Net;
 using Android.OS;
 using Android.Provider;
 using Android.Widget;
+using System.Net;
 using System.Text;
+using System.Text.Json;
 
 [Activity(
     Name = "com.nashvpn.cudyagent.MainActivity",
@@ -25,6 +27,12 @@ public class MainActivity : Activity
     private EditText? sshHostInput;
     private EditText? sshUserInput;
     private EditText? sshKeyInput;
+    private EditText? enrollmentCodeInput;
+    private EditText? defaultServerInput;
+    private EditText? domainInput;
+    private EditText? domainServerInput;
+    private EditText? lookupInput;
+    private CheckBox? autostartCheckBox;
     private TextView? statusText;
     private TextView? serviceStatusText;
     private TextView? policyStatusText;
@@ -54,6 +62,12 @@ public class MainActivity : Activity
         sshHostInput = FindViewById<EditText>(Resource.Id.sshHostInput);
         sshUserInput = FindViewById<EditText>(Resource.Id.sshUserInput);
         sshKeyInput = FindViewById<EditText>(Resource.Id.sshKeyInput);
+        enrollmentCodeInput = FindViewById<EditText>(Resource.Id.enrollmentCodeInput);
+        defaultServerInput = FindViewById<EditText>(Resource.Id.defaultServerInput);
+        domainInput = FindViewById<EditText>(Resource.Id.domainInput);
+        domainServerInput = FindViewById<EditText>(Resource.Id.domainServerInput);
+        lookupInput = FindViewById<EditText>(Resource.Id.lookupInput);
+        autostartCheckBox = FindViewById<CheckBox>(Resource.Id.autostartCheckBox);
         statusText = FindViewById<TextView>(Resource.Id.statusText);
         serviceStatusText = FindViewById<TextView>(Resource.Id.serviceStatusText);
         policyStatusText = FindViewById<TextView>(Resource.Id.policyStatusText);
@@ -66,6 +80,8 @@ public class MainActivity : Activity
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshKeyInput is null
+            || enrollmentCodeInput is null || defaultServerInput is null || domainInput is null
+            || domainServerInput is null || lookupInput is null || autostartCheckBox is null
             || statusText is null || serviceStatusText is null || policyStatusText is null
             || probeStatusText is null || routeStatusText is null || transportStatusText is null
             || engineStatusText is null || permissionStatusText is null || permissionGuideText is null
@@ -80,10 +96,19 @@ public class MainActivity : Activity
         sshHostInput.Text = preferences.GetString("ssh_host", "95.182.91.203");
         sshUserInput.Text = preferences.GetString("ssh_user", "cudy-tunnel-windows");
         sshKeyInput.Text = preferences.GetString("ssh_key", "");
+        defaultServerInput.Text = preferences.GetString("last_default_server_id", "auto");
+        autostartCheckBox.Checked = preferences.GetBoolean("autostart_enabled", true);
         statusText.Text = "Ready";
 
         RequireButton(Resource.Id.saveButton).Click += (_, _) => SaveSettings();
         RequireButton(Resource.Id.setupPermissionsButton).Click += (_, _) => SetupBackgroundPermissions();
+        RequireButton(Resource.Id.statusButton).Click += (_, _) => RenderStoredStatus();
+        RequireButton(Resource.Id.updateButton).Click += async (_, _) => await CheckUpdateAsync();
+        RequireButton(Resource.Id.enrollButton).Click += async (_, _) => await EnrollDeviceAsync();
+        RequireButton(Resource.Id.loadUiButton).Click += async (_, _) => await LoadUserUiAsync();
+        RequireButton(Resource.Id.saveDefaultButton).Click += async (_, _) => await SaveDefaultServerAsync();
+        RequireButton(Resource.Id.saveDomainButton).Click += async (_, _) => await SaveDomainRouteAsync();
+        RequireButton(Resource.Id.lookupButton).Click += async (_, _) => await LookupRouteAsync();
         RequireButton(Resource.Id.fetchButton).Click += async (_, _) => await FetchPolicyAsync();
         RequireButton(Resource.Id.checkButton).Click += async (_, _) => await CheckControlAsync();
         RequireButton(Resource.Id.prepareButton).Click += (_, _) => PrepareVpn();
@@ -135,6 +160,7 @@ public class MainActivity : Activity
         editor.PutString("ssh_host", sshHostInput?.Text?.Trim() ?? "");
         editor.PutString("ssh_user", sshUserInput?.Text?.Trim() ?? "");
         editor.PutString("ssh_key", sshKeyInput?.Text ?? "");
+        editor.PutBoolean("autostart_enabled", autostartCheckBox?.Checked ?? true);
         editor.Apply();
     }
 
@@ -198,16 +224,7 @@ public class MainActivity : Activity
         SaveSettings();
         try
         {
-            var json = HasSshSettings()
-                ? await Task.Run(() => CudySshControl.RunCurlWithNewClient(
-                    InputText(sshHostInput).Trim(),
-                    InputText(sshUserInput).Trim(),
-                    InputText(sshKeyInput),
-                    "GET",
-                    InputText(tokenInput),
-                    "/api/agent/config",
-                    body: null))
-                : await FetchHttpStringAsync("/api/agent/config", useAuth: true);
+            var json = await ControlRequestAsync("GET", "/api/agent/config", body: null, useAuth: true);
             var summary = CudyPolicy.Summarize(json);
             preferences?.Edit()
                 ?.PutString("last_policy_summary", summary)
@@ -229,16 +246,7 @@ public class MainActivity : Activity
         SaveSettings();
         try
         {
-            var reply = HasSshSettings()
-                ? await Task.Run(() => CudySshControl.RunCurlWithNewClient(
-                    InputText(sshHostInput).Trim(),
-                    InputText(sshUserInput).Trim(),
-                    InputText(sshKeyInput),
-                    "GET",
-                    token: null,
-                    "/healthz",
-                    body: null))
-                : await FetchHttpStringAsync("/healthz", useAuth: false);
+            var reply = await ControlRequestAsync("GET", "/healthz", body: null, useAuth: false);
             statusText!.Text = "Control reachable";
             outputText!.Text = reply.Trim();
         }
@@ -256,6 +264,26 @@ public class MainActivity : Activity
             && !string.IsNullOrWhiteSpace(InputText(sshKeyInput));
     }
 
+    private async Task<string> ControlRequestAsync(string method, string path, string? body, bool useAuth)
+    {
+        var token = useAuth ? InputText(tokenInput) : null;
+        if (HasSshSettings())
+        {
+            return await Task.Run(() => CudySshControl.RunCurlWithNewClient(
+                InputText(sshHostInput).Trim(),
+                InputText(sshUserInput).Trim(),
+                InputText(sshKeyInput),
+                method,
+                token,
+                path,
+                body));
+        }
+
+        return method == "POST"
+            ? await PostHttpStringAsync(path, body ?? "", useAuth)
+            : await FetchHttpStringAsync(path, useAuth);
+    }
+
     private async Task<string> FetchHttpStringAsync(string path, bool useAuth)
     {
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
@@ -266,6 +294,234 @@ public class MainActivity : Activity
         }
         var url = (controlUrlInput!.Text ?? "").Trim().TrimEnd('/') + path;
         return await client.GetStringAsync(url);
+    }
+
+    private async Task<string> PostHttpStringAsync(string path, string body, bool useAuth)
+    {
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        if (useAuth)
+        {
+            client.DefaultRequestHeaders.Authorization =
+                new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", tokenInput!.Text);
+        }
+        var url = (controlUrlInput!.Text ?? "").Trim().TrimEnd('/') + path;
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var response = await client.PostAsync(url, content);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    private async Task LoadUserUiAsync()
+    {
+        SaveSettings();
+        try
+        {
+            var json = await ControlRequestAsync("GET", "/api/agent/bootstrap", body: null, useAuth: true);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var user = root.GetProperty("user");
+            var defaultServer = user.TryGetProperty("default_server_id", out var defaultProperty)
+                ? defaultProperty.GetString() ?? "auto"
+                : "auto";
+            defaultServerInput!.Text = defaultServer;
+            preferences?.Edit()?.PutString("last_default_server_id", defaultServer)?.Apply();
+            var routes = root.TryGetProperty("routes", out var routeArray) && routeArray.ValueKind == JsonValueKind.Array
+                ? routeArray.GetArrayLength()
+                : 0;
+            statusText!.Text = "Settings loaded";
+            outputText!.Text = $"user={user.GetProperty("id").GetString()}\ndefault={defaultServer}\ndomain_routes={routes}";
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Load settings failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private async Task SaveDefaultServerAsync()
+    {
+        SaveSettings();
+        var serverId = InputText(defaultServerInput).Trim();
+        if (string.IsNullOrWhiteSpace(serverId))
+        {
+            serverId = "auto";
+        }
+        try
+        {
+            var body = JsonSerializer.Serialize(new { server_id = serverId });
+            var reply = await ControlRequestAsync("POST", "/api/agent/user-default-server", body, useAuth: true);
+            preferences?.Edit()?.PutString("last_default_server_id", serverId)?.Apply();
+            statusText!.Text = "Default server saved";
+            outputText!.Text = reply;
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Save default failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private async Task SaveDomainRouteAsync()
+    {
+        SaveSettings();
+        var domain = InputText(domainInput).Trim();
+        var serverId = InputText(domainServerInput).Trim();
+        if (string.IsNullOrWhiteSpace(serverId))
+        {
+            serverId = "auto";
+        }
+        try
+        {
+            var body = JsonSerializer.Serialize(new { domain, server_id = serverId });
+            var reply = await ControlRequestAsync("POST", "/api/agent/domain-routes", body, useAuth: true);
+            statusText!.Text = "Domain route saved";
+            outputText!.Text = reply;
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Save route failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private async Task LookupRouteAsync()
+    {
+        SaveSettings();
+        var target = WebUtility.UrlEncode(InputText(lookupInput).Trim());
+        try
+        {
+            var json = await ControlRequestAsync("GET", $"/api/agent/route-lookup?target={target}", body: null, useAuth: true);
+            outputText!.Text = SummarizeLookup(json);
+            statusText!.Text = "Route checked";
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Route check failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private async Task CheckUpdateAsync()
+    {
+        SaveSettings();
+        try
+        {
+            var json = await ControlRequestAsync("GET", "/api/agent/app-version?platform=android", body: null, useAuth: true);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var latestCode = root.TryGetProperty("version_code", out var codeProperty)
+                ? codeProperty.GetInt64()
+                : 0;
+            var latestName = root.TryGetProperty("version_name", out var nameProperty)
+                ? nameProperty.GetString() ?? ""
+                : "";
+            var downloadUrl = root.TryGetProperty("download_url", out var urlProperty)
+                ? urlProperty.GetString() ?? ""
+                : "";
+            var currentCode = CurrentVersionCode();
+            if (latestCode <= currentCode)
+            {
+                statusText!.Text = "App is up to date";
+                outputText!.Text = $"current={currentCode}\nlatest={latestCode} {latestName}";
+                return;
+            }
+
+            statusText!.Text = "Update available";
+            outputText!.Text = $"current={currentCode}\nlatest={latestCode} {latestName}\nurl={downloadUrl}";
+            if (!string.IsNullOrWhiteSpace(downloadUrl))
+            {
+                StartActivity(new Intent(Intent.ActionView, Uri.Parse(downloadUrl)));
+            }
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Update check failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private long CurrentVersionCode()
+    {
+        var packageManager = PackageManager ?? throw new InvalidOperationException("Package manager is unavailable.");
+        var packageName = PackageName ?? throw new InvalidOperationException("Package name is unavailable.");
+#pragma warning disable CA1422
+        var packageInfo = packageManager.GetPackageInfo(packageName, 0)
+            ?? throw new InvalidOperationException("Package info is unavailable.");
+#pragma warning restore CA1422
+        if ((int)Build.VERSION.SdkInt >= 28)
+        {
+#pragma warning disable CA1416
+            return packageInfo.LongVersionCode;
+#pragma warning restore CA1416
+        }
+#pragma warning disable CA1422
+        return packageInfo.VersionCode;
+#pragma warning restore CA1422
+    }
+
+    private async Task EnrollDeviceAsync()
+    {
+        SaveSettings();
+        var code = InputText(enrollmentCodeInput).Trim();
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            statusText!.Text = "Enrollment code required";
+            outputText!.Text = "Enter the one-time activation code from the administrator.";
+            return;
+        }
+
+        try
+        {
+            var requestedDeviceId = InputText(deviceIdInput).Trim();
+            var body = JsonSerializer.Serialize(new
+            {
+                code,
+                device_id = requestedDeviceId,
+                display_name = string.IsNullOrWhiteSpace(requestedDeviceId) ? "Android phone" : requestedDeviceId,
+                platform = "android",
+            });
+            var json = await ControlRequestAsync("POST", "/api/agent/enroll", body, useAuth: false);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("token", out var tokenProperty))
+            {
+                throw new InvalidOperationException("Enrollment response did not contain a device token.");
+            }
+            var token = tokenProperty.GetString() ?? "";
+            var deviceId = root.TryGetProperty("device_id", out var deviceProperty)
+                ? deviceProperty.GetString() ?? requestedDeviceId
+                : requestedDeviceId;
+            tokenInput!.Text = token;
+            deviceIdInput!.Text = deviceId;
+            enrollmentCodeInput!.Text = "";
+            SaveSettingsToPreferences();
+            statusText!.Text = "Device activated";
+            outputText!.Text = $"device={deviceId}\nuser={root.GetProperty("user_id").GetString()}";
+            await LoadUserUiAsync();
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Activation failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private static string SummarizeLookup(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        var root = doc.RootElement;
+        var lines = new List<string> { $"input={root.GetProperty("input").GetString()}" };
+        if (root.TryGetProperty("results", out var results) && results.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in results.EnumerateArray())
+            {
+                var target = item.GetProperty("target").GetString();
+                var state = item.GetProperty("route_state").GetString();
+                var server = item.GetProperty("server_id").GetString();
+                lines.Add($"{target}: {state} -> {server}");
+            }
+        }
+        return string.Join("\n", lines);
     }
 
     private static string InputText(EditText? input)

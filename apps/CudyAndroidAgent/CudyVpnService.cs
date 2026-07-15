@@ -41,6 +41,8 @@ public class CudyVpnService : VpnService
     private string debugProbeUrl = "";
     private string debugProbeCandidates = "";
     private bool debugProbePending;
+    private IReadOnlyList<CudyCriticalService> criticalServices = Array.Empty<CudyCriticalService>();
+    private int consecutiveCriticalFailures;
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
     {
@@ -249,6 +251,7 @@ public class CudyVpnService : VpnService
                 SavePolicySummary(configJson);
                 using var doc = JsonDocument.Parse(configJson);
                 var root = doc.RootElement;
+                criticalServices = CudyCriticalServiceMonitor.Parse(root);
                 domainRoutes = ArrayLength(root, "domain_routes");
                 ipRoutes = ArrayLength(root, "ip_routes");
                 cleanupRoutes = ArrayLength(root, "cleanup_ip_routes");
@@ -294,6 +297,19 @@ public class CudyVpnService : VpnService
                     }
                 }
 
+                var criticalResult = controlOnly
+                    ? new CudyCriticalCheckResult(Array.Empty<CudyCriticalServiceResult>())
+                    : await CudyCriticalServiceMonitor.CheckAsync(client, criticalServices, cancellationToken);
+                if (criticalResult.Ok)
+                {
+                    consecutiveCriticalFailures = 0;
+                }
+                else
+                {
+                    consecutiveCriticalFailures++;
+                    Log.Warn(LogTag, $"Critical connectivity failure {consecutiveCriticalFailures}/3: {string.Join(", ", criticalResult.FailedServices)}");
+                }
+
                 var status = new
                 {
                     schema_version = 1,
@@ -310,7 +326,7 @@ public class CudyVpnService : VpnService
                     },
                     health = new
                     {
-                        ok = true,
+                        ok = criticalResult.Ok,
                         mode = controlOnly ? "android-control-only" : "android-libbox",
                         transports,
                         prepared_transports = preparedTransports,
@@ -320,6 +336,8 @@ public class CudyVpnService : VpnService
                         probe_jobs = probeSummary,
                         tunnel_established = tun is not null,
                         control_tunnel_established = useSshControl && sshClient?.IsConnected == true,
+                        critical_services_ok = criticalResult.Ok,
+                        critical_service_failures = consecutiveCriticalFailures,
                     },
                     capabilities = new
                     {
@@ -327,7 +345,7 @@ public class CudyVpnService : VpnService
                         can_route = !controlOnly && tun is not null,
                         can_manage_transports = !controlOnly && storedTransports > 0,
                     },
-                    errors = Array.Empty<string>(),
+                    errors = criticalResult.FailedServices,
                 };
                 await PostControlJsonAsync(
                     client,
@@ -336,7 +354,7 @@ public class CudyVpnService : VpnService
                     "/api/agent/status",
                     JsonSerializer.Serialize(status),
                     cancellationToken);
-                ok = true;
+                ok = criticalResult.Ok;
                 SaveLoopDetails(
                     domainRoutes,
                     ipRoutes,
@@ -348,8 +366,39 @@ public class CudyVpnService : VpnService
                     probeSummary,
                     useSshControl && sshClient?.IsConnected == true,
                     error: "");
-                SaveServiceStatus($"ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
-                Log.Info(LogTag, $"Control loop ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
+                SaveServiceStatus(criticalResult.Ok
+                    ? $"ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}"
+                    : $"critical services unavailable: {string.Join(", ", criticalResult.FailedServices)}");
+                Log.Info(LogTag, $"Control loop {(criticalResult.Ok ? "ok" : "degraded")} ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
+
+                if (consecutiveCriticalFailures >= 3)
+                {
+                    var diagnostic = new
+                    {
+                        summary = "Android agent watchdog: critical connectivity failure",
+                        report = JsonSerializer.Serialize(new
+                        {
+                            device_id = deviceId,
+                            consecutive_failures = consecutiveCriticalFailures,
+                            failed_services = criticalResult.FailedServices,
+                            services = criticalResult.Services,
+                            action = "stop_vpn_restore_direct",
+                            reported_at = DateTimeOffset.UtcNow.ToString("O"),
+                        }),
+                    };
+                    try
+                    {
+                        await PostControlJsonAsync(client, controlUrl, token, "/api/agent/diagnostics", JsonSerializer.Serialize(diagnostic), cancellationToken);
+                    }
+                    catch (Exception ex) when (ex is not System.OperationCanceledException)
+                    {
+                        Log.Warn(LogTag, "Critical diagnostic report failed: " + ex.Message);
+                    }
+                    SaveServiceStatus("watchdog stopped VPN; direct internet restored");
+                    UpdateNotification("Safety stop: direct internet restored");
+                    StopAgent(finalStatus: null);
+                    return;
+                }
             }
             catch (Exception ex) when (ex is not System.OperationCanceledException)
             {

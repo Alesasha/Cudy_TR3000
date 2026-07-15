@@ -50,6 +50,17 @@ public sealed class BootReceiver : BroadcastReceiver
         }
 
         var preferences = context.GetSharedPreferences("cudy-agent", FileCreationMode.Private);
+        if (preferences?.GetBoolean("autostart_enabled", true) != true)
+        {
+            Log.Info(LogTag, $"Boot receiver skipped start for {action}: autostart is disabled.");
+            StoreBootMarker(context, action, now, "skipped-autostart-disabled", "");
+            preferences?.Edit()
+                ?.PutString("service_status", "boot skipped: autostart disabled")
+                ?.PutString("service_status_at", now)
+                ?.Apply();
+            return;
+        }
+
         var controlUrl = preferences?.GetString("control_url", "")?.Trim() ?? "";
         var deviceId = preferences?.GetString("device_id", "")?.Trim() ?? "";
         var token = preferences?.GetString("token", "") ?? "";

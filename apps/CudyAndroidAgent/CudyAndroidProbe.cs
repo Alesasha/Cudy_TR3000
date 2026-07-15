@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Android.Util;
@@ -175,7 +177,10 @@ public sealed class CudyAndroidProbeRunner
 
             if (probePortByServer.TryGetValue(serverId, out var proxyPort))
             {
-                var probe = await HttpProbeAsync(url, connectTimeout, maxTime, proxyPort, cancellationToken);
+                var probe = Uri.TryCreate(url, UriKind.Absolute, out var probeUri)
+                    && string.Equals(probeUri.Scheme, "tcp", StringComparison.OrdinalIgnoreCase)
+                    ? await TcpProbeAsync(probeUri, connectTimeout, maxTime, proxyPort, cancellationToken)
+                    : await HttpProbeAsync(url, connectTimeout, maxTime, proxyPort, cancellationToken);
                 foreach (var pair in probe)
                 {
                     check[pair.Key] = pair.Value;
@@ -290,6 +295,82 @@ public sealed class CudyAndroidProbeRunner
                 ["probe_type"] = "local_mixed_proxy",
                 ["local_proxy_port"] = proxyPort,
                 ["http_code"] = null,
+                ["time_total_ms"] = (int)Math.Round(stopwatch.Elapsed.TotalMilliseconds),
+                ["error"] = ex.Message,
+            };
+        }
+    }
+
+    private static async Task<Dictionary<string, object?>> TcpProbeAsync(
+        Uri target,
+        int connectTimeout,
+        int maxTime,
+        int proxyPort,
+        CancellationToken cancellationToken)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(TimeSpan.FromSeconds(maxTime));
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            using var proxy = new TcpClient();
+            using (var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token))
+            {
+                connectCts.CancelAfter(TimeSpan.FromSeconds(connectTimeout));
+                await proxy.ConnectAsync(IPAddress.Loopback, proxyPort, connectCts.Token);
+            }
+
+            var targetPort = target.Port > 0 ? target.Port : 443;
+            var authority = $"{target.Host}:{targetPort}";
+            var request = Encoding.ASCII.GetBytes(
+                $"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\nProxy-Connection: close\r\n\r\n");
+            await using var stream = proxy.GetStream();
+            await stream.WriteAsync(request, cts.Token);
+            await stream.FlushAsync(cts.Token);
+
+            var response = new List<byte>();
+            var buffer = new byte[512];
+            while (response.Count < 8192)
+            {
+                var read = await stream.ReadAsync(buffer, cts.Token);
+                if (read <= 0)
+                {
+                    break;
+                }
+                response.AddRange(buffer.Take(read));
+                if (Encoding.ASCII.GetString(response.ToArray()).Contains("\r\n\r\n", StringComparison.Ordinal))
+                {
+                    break;
+                }
+            }
+
+            stopwatch.Stop();
+            var header = Encoding.ASCII.GetString(response.ToArray());
+            var firstLine = header.Split(new[] { "\r\n" }, StringSplitOptions.None).FirstOrDefault() ?? "";
+            var ok = firstLine.StartsWith("HTTP/1.1 200", StringComparison.OrdinalIgnoreCase)
+                || firstLine.StartsWith("HTTP/1.0 200", StringComparison.OrdinalIgnoreCase);
+            return new Dictionary<string, object?>
+            {
+                ["ok"] = ok,
+                ["probe_type"] = "tcp_via_local_mixed_proxy",
+                ["local_proxy_port"] = proxyPort,
+                ["remote_ip"] = target.Host,
+                ["remote_port"] = targetPort,
+                ["time_total_ms"] = (int)Math.Round(stopwatch.Elapsed.TotalMilliseconds),
+                ["proxy_response"] = firstLine,
+                ["error"] = ok ? "" : (string.IsNullOrWhiteSpace(firstLine) ? "empty proxy response" : firstLine),
+            };
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            stopwatch.Stop();
+            return new Dictionary<string, object?>
+            {
+                ["ok"] = false,
+                ["probe_type"] = "tcp_via_local_mixed_proxy",
+                ["local_proxy_port"] = proxyPort,
+                ["remote_ip"] = target.Host,
+                ["remote_port"] = target.Port > 0 ? target.Port : 443,
                 ["time_total_ms"] = (int)Math.Round(stopwatch.Elapsed.TotalMilliseconds),
                 ["error"] = ex.Message,
             };

@@ -10,10 +10,21 @@ Current MVP:
 - requests Android VPN permission and resumes start after the user accepts it;
 - starts a foreground `VpnService`;
 - periodically fetches control policy and posts `/api/agent/status`;
+- checks the effective control-server critical-service list in parallel and
+  restores direct routing after three consecutive critical failures;
 - shows service, policy, probe, route, transport, engine, runtime, and last
   error status on the main screen;
 - shows battery, VPN permission, and MIUI Autostart readiness on the main
   screen;
+- has a production control screen with ON/OFF, status refresh, autostart
+  checkbox, one-time activation code, default server, domain route, route
+  lookup, and update check controls;
+- activates a device through `/api/agent/enroll` with a one-time enrollment
+  code and stores the returned device token;
+- lets an activated device call agent-scoped control APIs:
+  `/api/agent/bootstrap`, `/api/agent/user-default-server`,
+  `/api/agent/domain-routes`, `/api/agent/route-lookup`, and
+  `/api/agent/app-version`;
 - parses `transport_plan` and prepares compatible sing-box JSON in memory for
   supported transport types.
 - stores prepared sing-box JSON files under app-private `files/transports/`.
@@ -44,6 +55,14 @@ Next implementation steps:
 
 - verify behavior after a real phone reboot on each target Android/MIUI build.
 - add a simple uninstall/reset helper for test devices.
+- add loop-free protected direct outbound for full domain/SNI capture without
+  forcing ordinary traffic through a provider exit.
+
+Current production test build is `1.19 (20)`. It is published through the
+control-server agent-update manifest and has passed a physical-phone smoke:
+policy fetch, foreground service, libbox engine, selective routing, status
+post, HTTP/TCP probe jobs, and repeated config reloads with one stable Android
+default-network callback.
 
 Safety note:
 
@@ -66,22 +85,27 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.0-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.19-YYYYMMDD.apk
 ```
 
 Manual smoke test:
 
 1. Install the signed APK.
-2. Enter `Control URL`, `Device ID`, device token, SSH host, SSH user, and SSH private key.
-3. Tap `Save`, then `Setup permissions`.
-4. Allow notification, VPN, and battery unrestricted mode when prompted.
-5. On MIUI/Xiaomi/POCO/Redmi, enable Autostart when the app opens the vendor
+2. Enter the SSH host/user/key bootstrap fields if they were not delivered by
+   the installer/intents. Current direct control HTTP is local to uswest, so a
+   fresh phone needs either this SSH bootstrap path or a future public HTTPS
+   enrollment endpoint.
+3. Enter the one-time activation code and tap `Activate this device`.
+4. Tap `Setup permissions`.
+5. Allow notification, VPN, and battery unrestricted mode when prompted.
+6. On MIUI/Xiaomi/POCO/Redmi, enable Autostart when the app opens the vendor
    settings screen. Android does not allow the app to grant this vendor
    permission by itself.
-6. Tap `Check control`.
-7. Tap `Fetch policy`.
-8. Tap `Prepare VPN` and grant Android VPN permission.
-9. Tap `Start agent`.
+7. Tap `Load settings`.
+8. Set the default server or a domain route if needed, then tap the matching
+   save button.
+9. Tap `Prepare VPN` and grant Android VPN permission.
+10. Tap `ON`.
 
 Expected MVP status:
 
@@ -153,6 +177,23 @@ foreground service use SSH remote `curl` to talk to the control-server local
 HTTP API on uswest. The `Control URL` field remains useful for a direct HTTP
 test path.
 
-The Android device token is generated separately on the control-server. The
-test token and the matching SSH private key are kept under `secrets/agents/` in
-the local workspace, not embedded into the APK.
+One-time Android enrollment code:
+
+```powershell
+python tools\vpn_control_app.py enrollment-create USER_ID --device-id USER_ID-android --platform android
+```
+
+The code is printed once. The Android app sends it to `/api/agent/enroll`,
+receives a device token, saves it locally, and then uses only agent-scoped APIs.
+
+Release update metadata:
+
+```powershell
+$env:CUDY_ANDROID_VERSION_NAME = "1.0"
+$env:CUDY_ANDROID_VERSION_CODE = "1"
+$env:CUDY_ANDROID_APK_URL = "https://example.invalid/NashVPN-CudyAgent.apk"
+```
+
+Android cannot silently replace a side-loaded APK without Play Store, MDM, or
+root. `Check for updates` shows the available version and opens
+`CUDY_ANDROID_APK_URL` when the server reports a newer version code.
