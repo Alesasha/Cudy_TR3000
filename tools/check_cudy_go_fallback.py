@@ -12,6 +12,7 @@ import getpass
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,27 @@ def parse_json_line(output: str, prefix: str) -> dict[str, Any]:
     raise ValueError(f"missing {prefix!r} line in output")
 
 
+def parse_timestamp(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def observer_is_fresh(observer: dict[str, Any], *, max_age_seconds: int = 300) -> tuple[bool, int | None]:
+    last_success = parse_timestamp(observer.get("last_success_at"))
+    if last_success is None:
+        return False, None
+    age = max(0, int((datetime.now(timezone.utc) - last_success).total_seconds()))
+    return age <= max_age_seconds, age
+
+
 def check(args: argparse.Namespace) -> dict[str, Any]:
     password = load_password(args.ssh_password)
     client = connect(args.host, args.user, password, args.timeout)
@@ -78,12 +100,16 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
 set -eu
 printf 'service='
 /etc/init.d/cudy-fallback status || true
+printf '\\ntunnel_service='
+/etc/init.d/cudy-control-tunnel status || true
 printf '\\nready='
 curl -fsS --max-time 5 http://127.0.0.1:8765/readyz
 printf '\\nruntime='
 curl -fsS --max-time 10 http://127.0.0.1:8765/api/cudy/runtime
 printf '\\nagent_preview='
 curl -fsS --max-time 15 http://127.0.0.1:8765/api/cudy/agent-preview
+printf '\\nagent_observer='
+curl -fsS --max-time 5 http://127.0.0.1:8765/api/cudy/agent-observer
 printf '\\n'
 """.strip(),
             args.timeout,
@@ -95,12 +121,29 @@ printf '\\n'
 
     lines = output.splitlines()
     service = next((line.split("=", 1)[1] for line in lines if line.startswith("service=")), "")
+    tunnel_service = next(
+        (line.split("=", 1)[1] for line in lines if line.startswith("tunnel_service=")), ""
+    )
     ready = parse_json_line(output, "ready=")
     runtime = parse_json_line(output, "runtime=")
     agent_preview = parse_json_line(output, "agent_preview=")
+    agent_observer = parse_json_line(output, "agent_observer=")
+    observer_fresh, observer_age = observer_is_fresh(agent_observer)
+    preview_source = str(agent_preview.get("source") or "")
+    preview_ok = (
+        bool(agent_preview.get("ok"))
+        and bool(agent_preview.get("configured"))
+        and preview_source in {"live", "cache"}
+        and bool(agent_preview.get("routes"))
+    )
 
     checks = [
         {"name": "service", "ok": service == "running", "summary": service or "missing"},
+        {
+            "name": "control-tunnel",
+            "ok": tunnel_service == "running",
+            "summary": tunnel_service or "missing",
+        },
         {"name": "readyz", "ok": bool(ready.get("ok")), "summary": f"warnings={len(ready.get('warnings') or [])}"},
         {
             "name": "runtime",
@@ -115,11 +158,24 @@ printf '\\n'
         },
         {
             "name": "agent-preview",
-            "ok": "configured" in agent_preview,
+            "ok": preview_ok,
             "summary": (
                 f"configured={bool(agent_preview.get('configured'))}; "
+                f"source={preview_source or 'none'}; "
+                f"cache_age={int(agent_preview.get('cache_age_seconds') or 0)}s; "
                 f"routes={len(agent_preview.get('routes') or [])}; "
                 f"transports={len(agent_preview.get('transport_plan') or [])}"
+            ),
+        },
+        {
+            "name": "agent-observer",
+            "ok": bool(agent_observer.get("enabled"))
+            and observer_fresh
+            and not bool(agent_observer.get("last_error")),
+            "summary": (
+                f"enabled={bool(agent_observer.get('enabled'))}; "
+                f"last_success_age={observer_age if observer_age is not None else 'never'}s; "
+                f"error={agent_observer.get('last_error') or 'none'}"
             ),
         },
     ]
@@ -136,11 +192,22 @@ printf '\\n'
             "warnings": runtime.get("warnings") or [],
         },
         "agent_preview": {
+            "ok": bool(agent_preview.get("ok")),
             "configured": bool(agent_preview.get("configured")),
+            "source": preview_source,
+            "cache_age_seconds": int(agent_preview.get("cache_age_seconds") or 0),
             "routes": len(agent_preview.get("routes") or []),
             "transports": len(agent_preview.get("transport_plan") or []),
             "warnings": agent_preview.get("warnings") or [],
             "error": agent_preview.get("error") or "",
+        },
+        "agent_observer": {
+            "enabled": bool(agent_observer.get("enabled")),
+            "last_attempt_at": agent_observer.get("last_attempt_at") or "",
+            "last_success_at": agent_observer.get("last_success_at") or "",
+            "last_success_age_seconds": observer_age,
+            "last_error": agent_observer.get("last_error") or "",
+            "cache_updated_at": agent_observer.get("cache_updated_at") or "",
         },
     }
 

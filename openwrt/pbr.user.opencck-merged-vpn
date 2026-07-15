@@ -25,6 +25,17 @@ WAN_CLEAN='/tmp/pbr_wan.clean'
 
 mkdir -p /tmp "$OVERRIDE_DIR"
 
+collapse_file() {
+  file="$1"
+  [ -s "$file" ] || return 0
+  [ -x /usr/bin/cudy-cidr-collapse ] || {
+    logger -t pbr-opencck "ERROR: /usr/bin/cudy-cidr-collapse is missing"
+    return 1
+  }
+  /usr/bin/cudy-cidr-collapse < "$file" > "$file.collapsed"
+  mv "$file.collapsed" "$file"
+}
+
 clean_ipv4_list() {
   awk '
   {
@@ -107,6 +118,7 @@ build_override_list() {
     resolve_domains_to_ipv4 "$domain_file"
     fetch_url_lists "$urls_file"
   } | sort -u > "$output_file"
+  collapse_file "$output_file"
 }
 
 fetch_url_lists() {
@@ -207,11 +219,13 @@ build_override_list "$OVERRIDE_DIR/force-awg2.ips" "$OVERRIDE_DIR/force-awg2.dom
   [ -s "$RAW_RU_IP" ] && clean_ipv4_list "$RAW_RU_IP"
   resolve_geosite_domains_to_ipv4 "$RAW_RU_DOMAINS"
 } | sort -u > "$WAN_RU_CLEAN"
+collapse_file "$WAN_RU_CLEAN"
 
 {
   [ -s "$WAN_RU_CLEAN" ] && cat "$WAN_RU_CLEAN"
   [ -s "$FORCE_WAN_CLEAN" ] && cat "$FORCE_WAN_CLEAN"
 } | sort -u > "$WAN_CLEAN"
+collapse_file "$WAN_CLEAN"
 
 {
   [ -s "$RAW_AF" ] && cat "$RAW_AF"
@@ -237,6 +251,7 @@ TG
   }
 }
 ' | sort -u > "$VPN_DOWNLOADED_CLEAN"
+collapse_file "$VPN_DOWNLOADED_CLEAN"
 
 if [ -s "$WAN_CLEAN" ]; then
   grep -vxF -f "$WAN_CLEAN" "$VPN_DOWNLOADED_CLEAN" > "$CLEAN.tmp" || true
@@ -248,6 +263,7 @@ fi
   [ -s "$CLEAN.tmp" ] && cat "$CLEAN.tmp"
   [ -s "$FORCE_VPN_CLEAN" ] && cat "$FORCE_VPN_CLEAN"
 } | sort -u > "$CLEAN"
+collapse_file "$CLEAN"
 rm -f "$CLEAN.tmp"
 
 [ -s "$CLEAN" ] || {
@@ -260,6 +276,7 @@ add_list_to_nftset "pbr_awg2_4_dst_ip_user" "$FORCE_AWG2_CLEAN" "force-awg2"
 add_list_to_nftset "$TARGET_NFTSET_4" "$CLEAN" "vpn"
 add_interface_overrides
 
+
 force_wan_count=0
 force_awg2_count=0
 wan_ru_count=0
@@ -267,5 +284,10 @@ wan_ru_count=0
 [ -s "$FORCE_AWG2_CLEAN" ] && force_awg2_count=$(wc -l < "$FORCE_AWG2_CLEAN")
 [ -s "$WAN_RU_CLEAN" ] && wan_ru_count=$(wc -l < "$WAN_RU_CLEAN")
 logger -t pbr-opencck "Loaded $(wc -l < "$CLEAN") IPv4/CIDR entries into $TARGET_NFTSET_4; wan $force_wan_count entries; force-awg2 $force_awg2_count entries; generated-wan-ru $wan_ru_count entries"
+
+if [ -x /usr/bin/cudy-pbr-fast-apply ]; then
+  CUDY_PBR_STATE_SYNC=1 /usr/bin/cudy-pbr-fast-apply >/dev/null 2>&1 \
+    || logger -t pbr-opencck "WARN: cudy-pbr-fast state synchronization failed"
+fi
 
 return 0

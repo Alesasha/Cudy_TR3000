@@ -1,0 +1,311 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestBuildDesiredMapsDirectAndRejectsUnavailable(t *testing.T) {
+	preview := previewResponse{OK: true, Configured: true, Source: "live", Routes: []routePreview{
+		{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true},
+		{Kind: "ip", Target: "203.0.113.0/24", ServerID: "direct", Applicable: true},
+	}}
+	desired, err := buildDesired(preview, map[string]bool{}, time.Unix(0, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := desired.Groups["proxyde"].Domains; len(got) != 1 || got[0] != "example.com" {
+		t.Fatalf("domains=%v", got)
+	}
+	if got := desired.Groups["wan"].IPs; len(got) != 1 || got[0] != "203.0.113.0/24" {
+		t.Fatalf("ips=%v", got)
+	}
+
+	preview.Routes = append(preview.Routes, routePreview{Kind: "ip", Target: "198.51.100.1/32", ServerID: "missing", Interface: "missing", Applicable: false})
+	desired, err = buildDesired(preview, map[string]bool{}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(desired.Blockers) != 1 {
+		t.Fatalf("blockers=%v", desired.Blockers)
+	}
+}
+
+func TestPreparableTransportMakesRouteEligible(t *testing.T) {
+	preview := previewResponse{OK: true, Configured: true, Source: "live", Routes: []routePreview{
+		{Kind: "domain", Target: "openai.com", ServerID: "lokvpn-de1", Interface: "lokvpn-de1", Applicable: false, Warning: "missing"},
+	}}
+	desired, err := buildDesired(preview, map[string]bool{"lokvpn-de1": true}, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(desired.Blockers) != 0 || len(desired.Groups["lokvpn-de1"].Domains) != 1 {
+		t.Fatalf("desired=%+v", desired)
+	}
+}
+
+func TestUnusedMissingTransportIsNotPrepared(t *testing.T) {
+	a := &agent{opts: options{PolicyCache: filepath.Join(t.TempDir(), "missing.json")}}
+	preview := previewResponse{
+		TransportPlan: []transportPreview{{ServerID: "unused", Interface: "unused", Applicable: false}},
+		Routes:        []routePreview{{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
+	}
+	actions, updates, preparable, err := a.planTransports(preview)
+	if err != nil || len(actions) != 0 || len(updates) != 0 || len(preparable) != 0 {
+		t.Fatalf("unused transport was prepared: actions=%v updates=%v preparable=%v err=%v", actions, updates, preparable, err)
+	}
+}
+
+func TestApplicableTransportRefreshesChangedConfigWithoutBootstrap(t *testing.T) {
+	root := t.TempDir()
+	policyPath := filepath.Join(root, "cache.json")
+	singBoxDir := filepath.Join(root, "sing-box")
+	if err := os.MkdirAll(singBoxDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache := cachedPolicy{CachedAt: time.Now().UTC().Format(time.RFC3339)}
+	cache.Config.TransportPlan = []rawTransport{{
+		ServerID: "proxyde", InterfaceName: "proxyde", TransportType: "http-proxy-tun",
+		Config: map[string]any{"server": "203.0.113.10", "server_port": float64(8080), "proxy_type": "http"},
+	}}
+	raw, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded cachedPolicy
+	if err := json.Unmarshal(raw, &decoded); err != nil || len(decoded.Config.TransportPlan) != 1 {
+		t.Fatalf("cache round trip failed: %s err=%v decoded=%+v", raw, err, decoded)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(singBoxDir, "proxyde.json"), []byte("stale\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{opts: options{PolicyCache: policyPath, SingBoxDir: singBoxDir}, now: time.Now}
+	preview := previewResponse{
+		TransportPlan: []transportPreview{{ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
+		Routes:        []routePreview{{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
+	}
+	actions, updates, preparable, err := a.planTransports(preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || actions[0].Action != "refresh-and-restart" || actions[0].RequiresBootstrap {
+		t.Fatalf("actions=%+v", actions)
+	}
+	if len(updates) != 2 || len(preparable) != 0 {
+		t.Fatalf("updates=%v preparable=%v", updates, preparable)
+	}
+}
+
+func TestExistingUnsupportedTransportIsAcceptedWithoutManagement(t *testing.T) {
+	root := t.TempDir()
+	policyPath := filepath.Join(root, "cache.json")
+	cache := cachedPolicy{CachedAt: time.Now().UTC().Format(time.RFC3339)}
+	cache.Config.TransportPlan = []rawTransport{{
+		ServerID: "aktau", InterfaceName: "awg1", TransportType: "amneziawg-conf",
+	}}
+	raw, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{opts: options{PolicyCache: policyPath, SingBoxDir: filepath.Join(root, "sing-box")}, now: time.Now}
+	preview := previewResponse{
+		TransportPlan: []transportPreview{{
+			ServerID: "aktau", Interface: "awg1", InterfacePresent: true,
+			InterfaceSupported: false, Applicable: false,
+		}},
+		Routes: []routePreview{{
+			Kind: "domain", Target: "chatgpt.com", ServerID: "aktau", Interface: "awg1", Applicable: false,
+		}},
+	}
+	actions, updates, preparable, err := a.planTransports(preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 0 || len(updates) != 0 || !preparable["awg1"] {
+		t.Fatalf("actions=%v updates=%v preparable=%v", actions, updates, preparable)
+	}
+	desired, err := buildDesired(preview, preparable, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(desired.Blockers) != 0 || len(desired.Groups["awg1"].Domains) != 1 {
+		t.Fatalf("desired=%+v", desired)
+	}
+}
+
+func TestRenderHTTPTransportDoesNotExposeAutoRoute(t *testing.T) {
+	raw := rawTransport{ServerID: "proxyde", InterfaceName: "proxyde", TransportType: "http-proxy-tun", Config: map[string]any{
+		"server": "203.0.113.10", "server_port": float64(8080), "proxy_type": "http",
+	}}
+	data, err := renderSingBox(raw, "proxyde")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	if !strings.Contains(text, `"interface_name": "proxyde"`) || !strings.Contains(text, `"auto_route": false`) {
+		t.Fatalf("config=%s", text)
+	}
+}
+
+func TestManagedBlockPreservesManualLines(t *testing.T) {
+	original := "manual.example\n" + beginMarker + "\nold.example\n" + endMarker + "\nkeep.example\n"
+	updated := replaceManagedBlock(original, []string{"new.example"})
+	want := "manual.example\nkeep.example\n" + beginMarker + "\nnew.example\n" + endMarker + "\n"
+	if updated != want {
+		t.Fatalf("updated:\n%s\nwant:\n%s", updated, want)
+	}
+	if got := extractManagedLines(updated); len(got) != 1 || got[0] != "new.example" {
+		t.Fatalf("managed=%v", got)
+	}
+}
+
+func TestObserveWritesDesiredAndDiffWithoutChangingOverrides(t *testing.T) {
+	stateDir := t.TempDir()
+	overrideDir := t.TempDir()
+	path := filepath.Join(overrideDir, "force-proxyde.domains")
+	if err := os.WriteFile(path, []byte("manual.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{opts: options{Mode: "observe", StateDir: stateDir, OverrideDir: overrideDir}, now: func() time.Time { return time.Unix(0, 0) }}
+	desired := desiredState{SchemaVersion: 1, PolicySource: "live", Groups: map[string]routeSet{"proxyde": {Domains: []string{"example.com"}}}}
+	diff, updates, err := a.planUpdates(desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diff) != 1 || len(updates) != 1 {
+		t.Fatalf("diff=%v updates=%d", diff, len(updates))
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "manual.example\n" {
+		t.Fatalf("observe changed file: %q", data)
+	}
+}
+
+func TestValidateRequiresExplicitApplyGate(t *testing.T) {
+	a := &agent{opts: options{Mode: "apply", PollInterval: time.Minute}}
+	if err := a.validate(); err == nil {
+		t.Fatal("expected apply gate failure")
+	}
+	a.opts.AllowApply = true
+	if err := a.validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestApplyTransactionRestoresFileWhenApplyFails(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "force-proxyde.domains")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{
+		opts: options{StateDir: filepath.Join(root, "state"), ApplyCommand: "fail", HealthURL: "http://invalid"},
+		now:  func() time.Time { return time.Unix(0, 0) },
+		runCommand: func(_ context.Context, command string) error {
+			if command == "fail" {
+				return errors.New("planned failure")
+			}
+			return nil
+		},
+	}
+	rolledBack, err := a.applyTransaction(context.Background(), map[string][]byte{path: []byte("after\n")}, nil, nil, nil)
+	if err == nil || !rolledBack {
+		t.Fatalf("rolledBack=%t err=%v", rolledBack, err)
+	}
+	data, readErr := os.ReadFile(path)
+	if readErr != nil || string(data) != "before\n" {
+		t.Fatalf("restored=%q err=%v", data, readErr)
+	}
+}
+
+func TestBuildDesiredRejectsInvalidCriticalPattern(t *testing.T) {
+	preview := previewResponse{
+		OK: true, Configured: true, Source: "live",
+		CriticalServices: []criticalService{{ServiceKey: "broken", Targets: []string{"https://example.com/"}, FailurePattern: "("}},
+	}
+	if _, err := buildDesired(preview, nil, time.Now()); err == nil || !strings.Contains(err.Error(), "failure pattern") {
+		t.Fatalf("invalid critical pattern was accepted: %v", err)
+	}
+}
+
+func TestHealthCheckRequiresAndValidatesCriticalServices(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	mux.HandleFunc("/service", func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("service ready")) })
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := &agent{opts: options{HealthURL: server.URL + "/healthz"}, httpClient: server.Client()}
+	if err := a.healthCheck(context.Background(), nil, nil); err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("empty critical service set was accepted: %v", err)
+	}
+	services := []criticalService{{ServiceKey: "work", Label: "Work", Targets: []string{server.URL + "/service"}, SuccessPattern: "service\\s+ready", FailurePattern: "blocked"}}
+	if err := a.healthCheck(context.Background(), services, nil); err != nil {
+		t.Fatalf("valid service failed: %v", err)
+	}
+	services[0].FailurePattern = "ready"
+	if err := a.healthCheck(context.Background(), services, nil); err == nil || !strings.Contains(err.Error(), "Work") {
+		t.Fatalf("failure pattern was ignored: %v", err)
+	}
+}
+
+func TestCriticalServiceTCPProbe(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		connection, acceptErr := listener.Accept()
+		if acceptErr == nil {
+			_ = connection.Close()
+		}
+	}()
+
+	a := &agent{httpClient: http.DefaultClient}
+	services := []criticalService{{ServiceKey: "telegram", Targets: []string{"tcp://" + listener.Addr().String()}}}
+	if failures := a.checkCriticalServices(context.Background(), services, nil); len(failures) != 0 {
+		t.Fatalf("TCP probe failed: %v", failures)
+	}
+}
+
+func TestTargetInterfaceUsesDomainAndMostSpecificCIDR(t *testing.T) {
+	groups := map[string]routeSet{
+		"proxyde": {Domains: []string{"openai.com"}, IPs: []string{"149.154.160.0/20"}},
+		"proxyfr": {IPs: []string{"149.154.167.0/24"}},
+		"wan":     {Domains: []string{"gosuslugi.ru"}},
+	}
+	if got := targetInterface("https://api.openai.com/", groups); got != "proxyde" {
+		t.Fatalf("domain interface=%q", got)
+	}
+	if got := targetInterface("tcp://149.154.167.50:443", groups); got != "proxyfr" {
+		t.Fatalf("IP interface=%q", got)
+	}
+	if got := targetInterface("https://gosuslugi.ru/", groups); got != "" {
+		t.Fatalf("direct interface=%q", got)
+	}
+}
+
+func TestManagedTransportConfigsArePrivate(t *testing.T) {
+	if got := managedFileMode("/etc/sing-box/lokvpn-de1.json"); got != 0o600 {
+		t.Fatalf("sing-box mode=%#o", got)
+	}
+	if got := managedFileMode("/etc/init.d/sing-box-lokvpn-de1"); got != 0o755 {
+		t.Fatalf("init mode=%#o", got)
+	}
+}

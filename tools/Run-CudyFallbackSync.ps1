@@ -4,8 +4,8 @@ param(
     [string]$CudyPasswordFile = "$PSScriptRoot\..\secrets\cudy_ssh_password.txt",
     [string]$LogPath = "$PSScriptRoot\..\backups\control-server\cudy-fallback-sync.log",
     [int]$KeepRemote = 3,
-    [int]$ConnectAttempts = 12,
-    [int]$Timeout = 90
+    [int]$ConnectAttempts = 2,
+    [int]$Timeout = 45
 )
 
 $ErrorActionPreference = "Stop"

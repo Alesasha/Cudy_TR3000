@@ -28,7 +28,7 @@ file_for() {
 }
 
 apply_pbr() {
-  /etc/init.d/pbr restart
+  /usr/bin/cudy-pbr-safe-restart
 }
 
 mkdir -p "$DIR"

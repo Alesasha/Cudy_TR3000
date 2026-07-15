@@ -1,0 +1,31 @@
+#!/bin/sh /etc/rc.common
+
+START=96
+STOP=9
+USE_PROCD=1
+
+start_service() {
+    local mode allow_apply apply_gate
+    config_load cudy-router-agent
+    config_get mode main mode observe
+    config_get_bool allow_apply main allow_apply 0
+    apply_gate=""
+    if [ "$mode" = "apply" ] && [ "$allow_apply" -eq 1 ]; then
+        apply_gate="-allow-apply"
+    else
+        mode="observe"
+    fi
+
+    procd_open_instance
+    procd_set_param command /usr/bin/cudy-router-agent \
+        -mode "$mode" $apply_gate \
+        -preview-url http://127.0.0.1:8765/api/cudy/agent-preview \
+        -state-dir /var/lib/cudy-router-agent \
+        -override-dir /etc/pbr-overrides \
+        -bootstrap-command /usr/bin/cudy-pbr-safe-restart \
+        -poll-interval 1m
+    procd_set_param respawn 30 5 5
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
+}

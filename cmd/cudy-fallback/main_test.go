@@ -3,11 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -122,6 +124,23 @@ func TestAgentPreviewNotConfigured(t *testing.T) {
 	}
 }
 
+func TestPreviewTransportsUsesLocalInterfaceMap(t *testing.T) {
+	config := map[string]any{
+		"transport_plan": []any{map[string]any{
+			"server_id": "aktau", "interface_name": "AmneziaVPN", "transport_type": "amneziawg-conf",
+		}},
+	}
+	rows := previewTransports(
+		config,
+		map[string]bool{"awg1": true},
+		map[string]bool{"awg1": true},
+		map[string]string{"aktau": "awg1"},
+	)
+	if len(rows) != 1 || rows[0].Interface != "awg1" || !rows[0].InterfacePresent || !rows[0].InterfaceSupported || !rows[0].Applicable {
+		t.Fatalf("rows=%+v", rows)
+	}
+}
+
 func TestAgentPreviewFromControlServer(t *testing.T) {
 	now := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
 	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -134,6 +153,9 @@ func TestAgentPreviewFromControlServer(t *testing.T) {
 		writeJSON(w, http.StatusOK, map[string]any{
 			"user":   map[string]any{"id": "DC_via_Cudy"},
 			"device": map[string]any{"id": "DC_via_Cudy-linux"},
+			"critical_services": []map[string]any{
+				{"service_key": "work", "label": "Work", "targets": []any{"https://example.com/", "tcp://149.154.167.50:443", "ftp://ignored.example"}, "failure_pattern": "blocked"},
+			},
 			"transport_plan": []map[string]any{
 				{
 					"server_id":      "proxyde",
@@ -182,12 +204,94 @@ func TestAgentPreviewFromControlServer(t *testing.T) {
 	if len(status.Routes) != 2 || !status.Routes[0].Applicable || !status.Routes[1].Applicable {
 		t.Fatalf("unexpected route preview: %#v", status.Routes)
 	}
+	if len(status.CriticalServices) != 1 || len(status.CriticalServices[0].Targets) != 2 || status.CriticalServices[0].Targets[0] != "https://example.com/" || status.CriticalServices[0].Targets[1] != "tcp://149.154.167.50:443" {
+		t.Fatalf("critical services=%#v", status.CriticalServices)
+	}
 	raw, err := json.Marshal(status)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(raw), "must-not-leak") || strings.Contains(string(raw), "config_json") {
 		t.Fatalf("preview leaked raw transport config: %s", string(raw))
+	}
+}
+
+func TestAgentPreviewFallsBackToFreshCache(t *testing.T) {
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "agent.json")
+	cachePath := filepath.Join(dir, "cache", "agent-config.json")
+	writeTestJSON(t, settingsPath, map[string]any{
+		"control_url": "http://127.0.0.1:1",
+		"device_id":   "cudy-home",
+		"token":       "test-token",
+		"cache_path":  cachePath,
+	})
+	if err := writeAgentCache(cachePath, agentCache{
+		CachedAt: now.Add(-5 * time.Minute).Format(time.RFC3339),
+		Config: map[string]any{
+			"user":   map[string]any{"id": "cudy_lan"},
+			"device": map[string]any{"id": "cudy-home"},
+			"transport_plan": []map[string]any{
+				{"server_id": "proxyde", "interface_name": "proxyde", "transport_type": "sing-box-json"},
+			},
+			"domain_routes": []map[string]any{
+				{"domain": "example.com", "server_id": "proxyde"},
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := &server{
+		agentConfigPath:  settingsPath,
+		agentCachePath:   cachePath,
+		maxAgentCacheAge: time.Hour,
+		now:              func() time.Time { return now },
+		run:              fakeRuntimeRunner(),
+		fetchAgentConfig: func(context.Context, agentSettings) (map[string]any, error) {
+			return nil, errors.New("control unavailable")
+		},
+	}
+	status := srv.agentPreview(context.Background())
+	if !status.OK || status.Source != "cache" || status.ControlError == "" {
+		t.Fatalf("unexpected cached preview: %#v", status)
+	}
+	if status.CacheAge != 300 || len(status.Routes) != 1 || !status.Routes[0].Applicable {
+		t.Fatalf("unexpected cached routes/age: %#v", status)
+	}
+}
+
+func TestLocalCriticalServicesOverrideControl(t *testing.T) {
+	merged := mergeCriticalServices(
+		[]criticalServicePreview{{ServiceKey: "chat", Label: "Control", Targets: []string{"https://control.example/"}}},
+		[]criticalServicePreview{
+			{ServiceKey: "chat", Label: "Local", Targets: []string{"https://local.example/"}},
+			{ServiceKey: "internet", Targets: []string{"https://example.com/", "tcp://149.154.167.50:443", "tcp://missing-port", "ftp://ignored.example"}},
+		},
+	)
+	if len(merged) != 2 || merged[0].Label != "Local" || merged[0].Targets[0] != "https://local.example/" {
+		t.Fatalf("merged=%#v", merged)
+	}
+	if len(merged[1].Targets) != 2 || merged[1].Targets[1] != "tcp://149.154.167.50:443" || merged[1].Label != "internet" {
+		t.Fatalf("sanitized local service=%#v", merged[1])
+	}
+}
+
+func TestAgentCacheRejectsStalePolicy(t *testing.T) {
+	now := time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "agent-cache.json")
+	if err := writeAgentCache(path, agentCache{CachedAt: now.Add(-2 * time.Hour).Format(time.RFC3339), Config: map[string]any{"ok": true}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readAgentCache(path, now, time.Hour); err == nil || !strings.Contains(err.Error(), "stale") {
+		t.Fatalf("stale cache was accepted: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("cache permissions=%o want=600", info.Mode().Perm())
 	}
 }
 

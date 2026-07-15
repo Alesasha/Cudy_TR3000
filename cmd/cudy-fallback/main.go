@@ -8,22 +8,29 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 type server struct {
 	publicDir        string
 	agentConfigPath  string
+	agentCachePath   string
+	maxAgentCacheAge time.Duration
 	maxStateAge      time.Duration
 	now              func() time.Time
 	run              commandRunner
 	httpClient       *http.Client
 	fetchAgentConfig func(context.Context, agentSettings) (map[string]any, error)
+	observerMu       sync.RWMutex
+	observer         agentObserverStatus
 }
 
 type commandRunner func(ctx context.Context, name string, args ...string) (string, error)
@@ -61,24 +68,53 @@ type runtimeResponse struct {
 }
 
 type agentSettings struct {
-	ControlURL      string `json:"control_url"`
-	AgentConfigPath string `json:"agent_config_path,omitempty"`
-	DeviceID        string `json:"device_id,omitempty"`
-	Token           string `json:"token,omitempty"`
-	TokenFile       string `json:"token_file,omitempty"`
+	ControlURL       string                   `json:"control_url"`
+	AgentConfigPath  string                   `json:"agent_config_path,omitempty"`
+	DeviceID         string                   `json:"device_id,omitempty"`
+	Token            string                   `json:"token,omitempty"`
+	TokenFile        string                   `json:"token_file,omitempty"`
+	CachePath        string                   `json:"cache_path,omitempty"`
+	InterfaceMap     map[string]string        `json:"interface_map,omitempty"`
+	CriticalServices []criticalServicePreview `json:"critical_services,omitempty"`
 }
 
 type agentPreviewResponse struct {
-	OK            bool               `json:"ok"`
-	Configured    bool               `json:"configured"`
-	GeneratedAt   string             `json:"generated_at"`
-	ControlURL    string             `json:"control_url,omitempty"`
-	DeviceID      string             `json:"device_id,omitempty"`
-	UserID        string             `json:"user_id,omitempty"`
-	TransportPlan []transportPreview `json:"transport_plan,omitempty"`
-	Routes        []routePreview     `json:"routes,omitempty"`
-	Warnings      []string           `json:"warnings,omitempty"`
-	Error         string             `json:"error,omitempty"`
+	OK               bool                     `json:"ok"`
+	Configured       bool                     `json:"configured"`
+	GeneratedAt      string                   `json:"generated_at"`
+	ControlURL       string                   `json:"control_url,omitempty"`
+	DeviceID         string                   `json:"device_id,omitempty"`
+	UserID           string                   `json:"user_id,omitempty"`
+	TransportPlan    []transportPreview       `json:"transport_plan,omitempty"`
+	Routes           []routePreview           `json:"routes,omitempty"`
+	CriticalServices []criticalServicePreview `json:"critical_services,omitempty"`
+	Warnings         []string                 `json:"warnings,omitempty"`
+	Error            string                   `json:"error,omitempty"`
+	Source           string                   `json:"source,omitempty"`
+	CacheAge         int64                    `json:"cache_age_seconds,omitempty"`
+	ControlError     string                   `json:"control_error,omitempty"`
+}
+
+type criticalServicePreview struct {
+	ServiceKey     string   `json:"service_key"`
+	Label          string   `json:"label"`
+	Targets        []string `json:"targets"`
+	SuccessPattern string   `json:"success_pattern,omitempty"`
+	FailurePattern string   `json:"failure_pattern,omitempty"`
+}
+
+type agentCache struct {
+	CachedAt string         `json:"cached_at"`
+	Config   map[string]any `json:"config"`
+}
+
+type agentObserverStatus struct {
+	Enabled        bool   `json:"enabled"`
+	LastAttemptAt  string `json:"last_attempt_at,omitempty"`
+	LastSuccessAt  string `json:"last_success_at,omitempty"`
+	LastError      string `json:"last_error,omitempty"`
+	CachePath      string `json:"cache_path,omitempty"`
+	CacheUpdatedAt string `json:"cache_updated_at,omitempty"`
 }
 
 type transportPreview struct {
@@ -106,6 +142,8 @@ type routePreview struct {
 
 var cudyServices = []string{
 	"cudy-fallback",
+	"cudy-control-tunnel",
+	"cudy-router-agent",
 	"pbr",
 	"sing-box",
 	"sing-box-vpntype",
@@ -133,16 +171,21 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:8765", "HTTP listen address")
 	publicDir := flag.String("public-dir", "/www/cudy-control", "directory containing endpoints.json and state.json")
 	agentConfigPath := flag.String("agent-config", "/etc/cudy-fallback/agent.json", "optional agent settings for read-only policy preview")
+	agentCachePath := flag.String("agent-cache", "/var/lib/cudy-fallback/agent-config-cache.json", "root-only cache for the last valid agent policy")
+	agentPollInterval := flag.Duration("agent-poll-interval", time.Minute, "control policy refresh interval; zero disables background refresh")
+	maxAgentCacheAge := flag.Duration("max-agent-cache-age", 24*time.Hour, "maximum accepted offline agent policy cache age")
 	maxStateAge := flag.Duration("max-state-age", 3*time.Hour, "maximum accepted age for state.json")
 	flag.Parse()
 
 	srv := &server{
-		publicDir:       *publicDir,
-		agentConfigPath: *agentConfigPath,
-		maxStateAge:     *maxStateAge,
-		now:             func() time.Time { return time.Now().UTC() },
-		run:             runCommand,
-		httpClient:      &http.Client{Timeout: 12 * time.Second},
+		publicDir:        *publicDir,
+		agentConfigPath:  *agentConfigPath,
+		agentCachePath:   *agentCachePath,
+		maxAgentCacheAge: *maxAgentCacheAge,
+		maxStateAge:      *maxStateAge,
+		now:              func() time.Time { return time.Now().UTC() },
+		run:              runCommand,
+		httpClient:       &http.Client{Timeout: 12 * time.Second},
 	}
 
 	mux := http.NewServeMux()
@@ -151,10 +194,14 @@ func main() {
 	mux.HandleFunc("/api/control/endpoints", srv.handleEndpoints)
 	mux.HandleFunc("/api/cudy/runtime", srv.handleRuntime)
 	mux.HandleFunc("/api/cudy/agent-preview", srv.handleAgentPreview)
+	mux.HandleFunc("/api/cudy/agent-observer", srv.handleAgentObserver)
 	mux.HandleFunc("/cudy-control/endpoints.json", srv.handleEndpoints)
 	mux.HandleFunc("/cudy-control/state.json", srv.handleState)
 
-	log.Printf("cudy fallback service listening on %s public_dir=%s", *listen, *publicDir)
+	if *agentPollInterval > 0 {
+		go srv.runAgentObserver(context.Background(), *agentPollInterval)
+	}
+	log.Printf("cudy fallback service listening on %s public_dir=%s agent_poll=%s", *listen, *publicDir, *agentPollInterval)
 	if err := http.ListenAndServe(*listen, mux); err != nil {
 		log.Fatal(err)
 	}
@@ -201,6 +248,13 @@ func (s *server) handleAgentPreview(w http.ResponseWriter, _ *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	writeJSON(w, http.StatusOK, s.agentPreview(ctx))
+}
+
+func (s *server) handleAgentObserver(w http.ResponseWriter, _ *http.Request) {
+	s.observerMu.RLock()
+	status := s.observer
+	s.observerMu.RUnlock()
+	writeJSON(w, http.StatusOK, status)
 }
 
 func (s *server) ready() readyResponse {
@@ -316,28 +370,29 @@ func (s *server) agentPreview(ctx context.Context) agentPreviewResponse {
 		}
 	}
 
-	fetch := s.fetchAgentConfig
-	if fetch == nil {
-		fetch = s.fetchAgentConfigHTTP
-	}
-	config, err := fetch(ctx, settings)
+	config, source, cacheAge, controlError, err := s.loadAgentConfig(ctx, settings)
 	if err != nil {
 		return agentPreviewResponse{
-			OK:          false,
-			Configured:  true,
-			GeneratedAt: now.Format(time.RFC3339),
-			ControlURL:  settings.ControlURL,
-			DeviceID:    settings.DeviceID,
-			Error:       err.Error(),
+			OK:           false,
+			Configured:   true,
+			GeneratedAt:  now.Format(time.RFC3339),
+			ControlURL:   settings.ControlURL,
+			DeviceID:     settings.DeviceID,
+			Error:        err.Error(),
+			ControlError: controlError,
 		}
 	}
 
 	runtime := s.runtime(ctx)
 	supported := stringSet(runtime.SupportedInterfaces)
 	present := stringSet(runtime.Links)
-	transports := previewTransports(config, supported, present)
+	transports := previewTransports(config, supported, present, settings.InterfaceMap)
 	routes := previewRoutes(config, transports, supported, present)
+	criticalServices := mergeCriticalServices(previewCriticalServices(config), settings.CriticalServices)
 	warnings := append([]string{}, runtime.Warnings...)
+	if controlError != "" {
+		warnings = append(warnings, "live control unavailable; using cached policy: "+controlError)
+	}
 	for _, route := range routes {
 		if route.Warning != "" {
 			warnings = append(warnings, fmt.Sprintf("%s %s: %s", route.Kind, route.Target, route.Warning))
@@ -345,16 +400,230 @@ func (s *server) agentPreview(ctx context.Context) agentPreviewResponse {
 	}
 
 	return agentPreviewResponse{
-		OK:            len(warnings) == 0,
-		Configured:    true,
-		GeneratedAt:   now.Format(time.RFC3339),
-		ControlURL:    settings.ControlURL,
-		DeviceID:      firstNonEmpty(settings.DeviceID, stringFromMap(config, "device.id"), stringFromMap(config, "device_id")),
-		UserID:        stringFromMap(config, "user.id"),
-		TransportPlan: transports,
-		Routes:        routes,
-		Warnings:      warnings,
+		OK:               len(runtime.Warnings) == 0,
+		Configured:       true,
+		GeneratedAt:      now.Format(time.RFC3339),
+		ControlURL:       settings.ControlURL,
+		DeviceID:         firstNonEmpty(settings.DeviceID, stringFromMap(config, "device.id"), stringFromMap(config, "device_id")),
+		UserID:           stringFromMap(config, "user.id"),
+		TransportPlan:    transports,
+		Routes:           routes,
+		CriticalServices: criticalServices,
+		Warnings:         warnings,
+		Source:           source,
+		CacheAge:         int64(cacheAge.Seconds()),
+		ControlError:     controlError,
 	}
+}
+
+func previewCriticalServices(config map[string]any) []criticalServicePreview {
+	result := []criticalServicePreview{}
+	for _, item := range asMapSlice(config["critical_services"]) {
+		targets := []string{}
+		if rawTargets, ok := item["targets"].([]any); ok {
+			for _, raw := range rawTargets {
+				value := stringValue(raw)
+				if validCriticalTarget(value) {
+					targets = append(targets, value)
+				}
+			}
+		}
+		if len(targets) == 0 {
+			continue
+		}
+		result = append(result, criticalServicePreview{
+			ServiceKey:     stringValue(item["service_key"]),
+			Label:          firstNonEmpty(stringValue(item["label"]), stringValue(item["service_key"])),
+			Targets:        targets,
+			SuccessPattern: stringValue(item["success_pattern"]),
+			FailurePattern: stringValue(item["failure_pattern"]),
+		})
+	}
+	return result
+}
+
+func mergeCriticalServices(control, local []criticalServicePreview) []criticalServicePreview {
+	result := []criticalServicePreview{}
+	positions := map[string]int{}
+	for _, service := range append(append([]criticalServicePreview{}, control...), local...) {
+		service.ServiceKey = strings.TrimSpace(service.ServiceKey)
+		service.Label = firstNonEmpty(service.Label, service.ServiceKey)
+		targets := []string{}
+		seenTargets := map[string]bool{}
+		for _, target := range service.Targets {
+			target = strings.TrimSpace(target)
+			if validCriticalTarget(target) && !seenTargets[target] {
+				seenTargets[target] = true
+				targets = append(targets, target)
+			}
+		}
+		service.Targets = targets
+		if service.ServiceKey == "" || len(service.Targets) == 0 {
+			continue
+		}
+		if index, exists := positions[service.ServiceKey]; exists {
+			result[index] = service
+		} else {
+			positions[service.ServiceKey] = len(result)
+			result = append(result, service)
+		}
+	}
+	return result
+}
+
+func validCriticalTarget(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.User != nil || parsed.Host == "" {
+		return false
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		return true
+	case "tcp":
+		if parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return false
+		}
+		host, port, err := net.SplitHostPort(parsed.Host)
+		return err == nil && host != "" && port != ""
+	default:
+		return false
+	}
+}
+
+func (s *server) runAgentObserver(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		s.refreshAgentCache(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *server) refreshAgentCache(parent context.Context) {
+	status := agentObserverStatus{Enabled: true, LastAttemptAt: s.now().UTC().Format(time.RFC3339), CachePath: s.agentCachePath}
+	settings, err := readAgentSettings(s.agentConfigPath)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+		defer cancel()
+		fetch := s.fetchAgentConfig
+		if fetch == nil {
+			fetch = s.fetchAgentConfigHTTP
+		}
+		var config map[string]any
+		config, err = fetch(ctx, settings)
+		if err == nil {
+			cachePath := s.cachePath(settings)
+			status.CachePath = cachePath
+			if cachePath != "" {
+				err = writeAgentCache(cachePath, agentCache{CachedAt: s.now().UTC().Format(time.RFC3339), Config: config})
+			}
+		}
+	}
+	if err != nil {
+		status.LastError = err.Error()
+	} else {
+		status.LastSuccessAt = s.now().UTC().Format(time.RFC3339)
+		status.CacheUpdatedAt = status.LastSuccessAt
+	}
+	s.observerMu.Lock()
+	s.observer = status
+	s.observerMu.Unlock()
+}
+
+func (s *server) loadAgentConfig(ctx context.Context, settings agentSettings) (map[string]any, string, time.Duration, string, error) {
+	fetch := s.fetchAgentConfig
+	if fetch == nil {
+		fetch = s.fetchAgentConfigHTTP
+	}
+	config, controlErr := fetch(ctx, settings)
+	if controlErr == nil {
+		cachePath := s.cachePath(settings)
+		if cachePath != "" {
+			if err := writeAgentCache(cachePath, agentCache{CachedAt: s.now().UTC().Format(time.RFC3339), Config: config}); err != nil {
+				log.Printf("agent cache write failed: %v", err)
+			}
+		}
+		return config, "live", 0, "", nil
+	}
+
+	cachePath := s.cachePath(settings)
+	cache, age, cacheErr := readAgentCache(cachePath, s.now().UTC(), s.maxAgentCacheAge)
+	if cacheErr != nil {
+		return nil, "", 0, controlErr.Error(), fmt.Errorf("control fetch failed: %v; cache unavailable: %w", controlErr, cacheErr)
+	}
+	return cache.Config, "cache", age, controlErr.Error(), nil
+}
+
+func (s *server) cachePath(settings agentSettings) string {
+	if settings.CachePath != "" {
+		if filepath.IsAbs(settings.CachePath) {
+			return settings.CachePath
+		}
+		return filepath.Join(filepath.Dir(s.agentConfigPath), settings.CachePath)
+	}
+	return s.agentCachePath
+}
+
+func writeAgentCache(path string, cache agentCache) error {
+	if path == "" {
+		return nil
+	}
+	raw, err := json.Marshal(cache)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func readAgentCache(path string, now time.Time, maxAge time.Duration) (agentCache, time.Duration, error) {
+	if path == "" {
+		return agentCache{}, 0, errors.New("agent cache path is empty")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return agentCache{}, 0, err
+	}
+	var cache agentCache
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		return agentCache{}, 0, err
+	}
+	if cache.Config == nil || cache.CachedAt == "" {
+		return agentCache{}, 0, errors.New("agent cache is incomplete")
+	}
+	cachedAt, err := parseTime(cache.CachedAt)
+	if err != nil {
+		return agentCache{}, 0, fmt.Errorf("agent cache time: %w", err)
+	}
+	age := now.Sub(cachedAt)
+	if age < 0 {
+		return agentCache{}, age, errors.New("agent cache timestamp is in the future")
+	}
+	if maxAge > 0 && age > maxAge {
+		return agentCache{}, age, fmt.Errorf("agent cache is stale: age=%s max=%s", age.Round(time.Second), maxAge)
+	}
+	return cache, age, nil
 }
 
 func readAgentSettings(path string) (agentSettings, error) {
@@ -374,6 +643,7 @@ func readAgentSettings(path string) (agentSettings, error) {
 	settings.DeviceID = strings.TrimSpace(settings.DeviceID)
 	settings.Token = strings.TrimSpace(settings.Token)
 	settings.TokenFile = strings.TrimSpace(settings.TokenFile)
+	settings.CachePath = strings.TrimSpace(settings.CachePath)
 	if settings.ControlURL == "" {
 		return agentSettings{}, errors.New("control_url is missing in agent config")
 	}
@@ -432,11 +702,14 @@ func (s *server) fetchAgentConfigHTTP(ctx context.Context, settings agentSetting
 	return payload, nil
 }
 
-func previewTransports(config map[string]any, supported map[string]bool, present map[string]bool) []transportPreview {
+func previewTransports(config map[string]any, supported map[string]bool, present map[string]bool, interfaceMap map[string]string) []transportPreview {
 	rows := []transportPreview{}
 	for _, item := range asMapSlice(config["transport_plan"]) {
 		serverID := stringValue(item["server_id"])
 		iface := stringValue(item["interface_name"])
+		if mapped := strings.TrimSpace(interfaceMap[serverID]); mapped != "" {
+			iface = mapped
+		}
 		if iface == "" {
 			iface = serverID
 		}

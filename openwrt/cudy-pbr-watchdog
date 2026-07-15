@@ -1,0 +1,54 @@
+#!/bin/sh
+
+# Independent fail-open guard. It never starts PBR; it only restores forwarding.
+set -u
+
+STATE_DIR="${STATE_DIR:-/var/run/cudy-pbr-safety}"
+INTERVAL="${INTERVAL:-5}"
+START_MAX_AGE="${START_MAX_AGE:-300}"
+TAG="cudy-pbr-watchdog"
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+set_forwarding() {
+    echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+    if [ -e /proc/sys/net/ipv6/conf/all/forwarding ]; then
+        echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
+    fi
+}
+
+fail_open() {
+    reason="$1"
+    log "$reason; stopping PBR and restoring direct WAN"
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 30 /etc/init.d/pbr stop >/tmp/cudy-pbr-watchdog-stop.log 2>&1 || true
+    else
+        /etc/init.d/pbr stop >/tmp/cudy-pbr-watchdog-stop.log 2>&1 || true
+    fi
+    set_forwarding
+    rm -f "$STATE_DIR/starting" "$STATE_DIR/expected"
+    printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$reason" > "$STATE_DIR/failed"
+}
+
+mkdir -p "$STATE_DIR"
+while true; do
+    forwarding="$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null || echo 0)"
+    if [ "$forwarding" != "1" ]; then
+        fail_open "IPv4 forwarding was disabled"
+    fi
+
+    if [ -s "$STATE_DIR/starting" ]; then
+        started="$(cat "$STATE_DIR/starting" 2>/dev/null || echo 0)"
+        now="$(date +%s)"
+        case "$started" in ''|*[!0-9]*) started=0 ;; esac
+        if [ $((now - started)) -gt "$START_MAX_AGE" ]; then
+            fail_open "PBR rebuild exceeded ${START_MAX_AGE}s"
+        fi
+    elif [ -e "$STATE_DIR/expected" ] && [ ! -e /var/run/pbr.lock ]; then
+        fail_open "PBR running marker disappeared"
+    fi
+
+    sleep "$INTERVAL"
+done

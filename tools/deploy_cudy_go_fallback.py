@@ -13,6 +13,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -58,9 +59,24 @@ def connect(host: str, user: str, password: str, timeout: int) -> paramiko.SSHCl
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> tuple[int, str]:
     _stdin, stdout, stderr = client.exec_command(command, timeout=timeout)
-    out = stdout.read().decode("utf-8", errors="replace")
-    err = stderr.read().decode("utf-8", errors="replace")
-    rc = stdout.channel.recv_exit_status()
+    channel = stdout.channel
+    out_chunks: list[bytes] = []
+    err_chunks: list[bytes] = []
+    deadline = time.monotonic() + timeout
+    while True:
+        while channel.recv_ready():
+            out_chunks.append(channel.recv(65536))
+        while channel.recv_stderr_ready():
+            err_chunks.append(channel.recv_stderr(65536))
+        if channel.exit_status_ready() and not channel.recv_ready() and not channel.recv_stderr_ready():
+            break
+        if time.monotonic() >= deadline:
+            channel.close()
+            raise TimeoutError(f"SSH command exceeded {timeout}s")
+        time.sleep(0.02)
+    rc = channel.recv_exit_status()
+    out = b"".join(out_chunks).decode("utf-8", errors="replace")
+    err = b"".join(err_chunks).decode("utf-8", errors="replace")
     return rc, (out + err).strip()
 
 

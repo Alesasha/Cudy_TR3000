@@ -1,0 +1,71 @@
+#!/bin/sh
+
+# Collapse IPv4/CIDR input into a sorted, non-overlapping CIDR list.
+set -eu
+
+work="/tmp/cudy-cidr-collapse.$$"
+trap 'rm -rf "$work"' EXIT INT TERM
+mkdir -p "$work"
+
+awk '
+function pow2(n, value, i) {
+    value = 1
+    for (i = 0; i < n; i++) value *= 2
+    return value
+}
+function ip2int(ip, octets, count, i) {
+    count = split(ip, octets, ".")
+    if (count != 4) return -1
+    for (i = 1; i <= 4; i++) {
+        if (octets[i] !~ /^[0-9]+$/ || octets[i] < 0 || octets[i] > 255) return -1
+    }
+    return (((octets[1] * 256 + octets[2]) * 256 + octets[3]) * 256 + octets[4])
+}
+{
+    sub(/#.*/, "")
+    gsub(/[[:space:]\r]/, "")
+    if ($0 == "") next
+    count = split($0, parts, "/")
+    prefix = (count == 1 ? 32 : parts[2])
+    value = ip2int(parts[1])
+    if (value < 0 || prefix !~ /^[0-9]+$/ || prefix < 0 || prefix > 32) next
+    block = pow2(32 - prefix)
+    first = int(value / block) * block
+    last = first + block - 1
+    printf "%010.0f %010.0f\n", first, last
+}
+' > "$work/ranges"
+
+sort -k1,1 -k2,2r "$work/ranges" | awk '
+NR == 1 { first = $1; last = $2; next }
+$1 <= last + 1 { if ($2 > last) last = $2; next }
+{ printf "%.0f %.0f\n", first, last; first = $1; last = $2 }
+END { if (NR > 0) printf "%.0f %.0f\n", first, last }
+' > "$work/merged"
+
+awk '
+function int2ip(value, a, b, c, d) {
+    a = int(value / 16777216); value -= a * 16777216
+    b = int(value / 65536); value -= b * 65536
+    c = int(value / 256); d = value - c * 256
+    return sprintf("%d.%d.%d.%d", a, b, c, d)
+}
+function aligned_size(value, size) {
+    if (value == 0) return 4294967296
+    size = 1
+    while (size < 4294967296 && int(value / size) % 2 == 0) size *= 2
+    return size
+}
+{
+    first = $1; last = $2
+    while (first <= last) {
+        size = aligned_size(first)
+        remaining = last - first + 1
+        while (size > remaining) size /= 2
+        prefix = 32; step = size
+        while (step > 1) { prefix--; step /= 2 }
+        print int2ip(first) "/" prefix
+        first += size
+    }
+}
+' "$work/merged"

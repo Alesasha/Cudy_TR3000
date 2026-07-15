@@ -1,6 +1,6 @@
 param(
     [string]$TaskName = "Cudy Fallback Control Sync",
-    [int]$EveryMinutes = 30,
+    [int]$EveryMinutes = 60,
     [int]$RepetitionDays = 3650,
     [switch]$RunNow
 )

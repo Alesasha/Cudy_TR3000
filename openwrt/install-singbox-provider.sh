@@ -104,7 +104,9 @@ sleep 2
 /etc/init.d/network reload
 /etc/init.d/firewall reload
 
-if [ -x /etc/init.d/pbr ]; then
+if [ -x /usr/bin/cudy-pbr-safe-restart ]; then
+  /usr/bin/cudy-pbr-safe-restart
+elif [ -x /etc/init.d/pbr ]; then
   /etc/init.d/pbr restart
 fi
 

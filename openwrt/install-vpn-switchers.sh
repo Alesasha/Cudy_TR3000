@@ -169,13 +169,21 @@ if [ -s "$CLEAN" ] && nft list set $TARGET_TABLE "$target_set" >/dev/null 2>&1; 
     append_interface_overrides "$batch"
     if ! nft -f "$batch"; then
         rm -f "$batch"
-        echo "Fast nft switch failed; falling back to full pbr restart" >&2
-        /etc/init.d/pbr restart
+        echo "Fast nft switch failed; requesting a safe full PBR rebuild" >&2
+        if [ -x /usr/bin/cudy-pbr-safe-restart ]; then
+            /usr/bin/cudy-pbr-safe-restart
+        else
+            /etc/init.d/pbr restart
+        fi
     fi
     rm -f "$batch"
 else
-    echo "Cached PBR lists are missing; falling back to full pbr restart" >&2
-    /etc/init.d/pbr restart
+    echo "Cached PBR lists are missing; requesting a safe full PBR rebuild" >&2
+    if [ -x /usr/bin/cudy-pbr-safe-restart ]; then
+        /usr/bin/cudy-pbr-safe-restart
+    else
+        /etc/init.d/pbr restart
+    fi
 fi
 
 flush_client_conntrack

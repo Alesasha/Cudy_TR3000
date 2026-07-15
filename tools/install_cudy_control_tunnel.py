@@ -67,7 +67,10 @@ def install(args: argparse.Namespace) -> dict[str, Any]:
         with tempfile.TemporaryDirectory(prefix="cudy-control-tunnel-") as tmp_raw:
             tmp = Path(tmp_raw)
             env_path = tmp / "tunnel.env"
-            env_path.write_text(render_env(args), encoding="utf-8")
+            # OpenWrt sources this file with /bin/sh. Write explicit LF bytes;
+            # Path.write_text on Windows would otherwise emit CRLF and leave
+            # a literal carriage return in host/user option values.
+            env_path.write_bytes(render_env(args).encode("utf-8"))
             upload_via_cat(client, DEFAULT_INIT, "/tmp/cudy-control-tunnel.init")
             upload_via_cat(client, env_path, "/tmp/cudy-control-tunnel.env")
             upload_via_cat(client, identity, "/tmp/cudy-control-tunnel.key")
