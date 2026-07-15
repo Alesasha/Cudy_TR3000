@@ -13,6 +13,7 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 import deploy_control_server as deploy
+import deploy_control_server_via_tunnel_user as fallback_deploy
 
 
 def main() -> int:
@@ -26,6 +27,13 @@ def main() -> int:
     assert not defaults.skip_agent_updates
     selected = deploy.build_parser().parse_args(["--skip-agent-updates"])
     assert selected.skip_agent_updates
+
+    fallback_code_only = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=False)]
+    fallback_with_updates = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=True)]
+    assert fallback_deploy.AGENT_UPDATE_DIR not in fallback_code_only
+    assert fallback_deploy.AGENT_UPDATE_DIR in fallback_with_updates
+    fallback_selected = fallback_deploy.build_parser().parse_args(["--skip-agent-updates"])
+    assert fallback_selected.skip_agent_updates
     print("Control-server deploy payload regression passed.")
     return 0
 

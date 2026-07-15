@@ -27,7 +27,9 @@ DEFAULT_TUNNEL_USER = "cudy-tunnel-windows"
 DEFAULT_KEY = ROOT / "secrets" / "agents" / "isasha_R7_Cudy-windows" / "uswest_control_tunnel_ed25519"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control"
-UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools", "build/agent-updates"]
+DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
+UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
+AGENT_UPDATE_DIR = "build/agent-updates"
 UPLOAD_FILES = ["requirements.txt"]
 EXCLUDE_NAMES = {".git", "__pycache__", "node_modules", ".playwright-cli"}
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".log", ".tmp", ".bak"}
@@ -40,6 +42,10 @@ def root_password(explicit: str | None) -> str:
         value = os.environ.get(name)
         if value:
             return value
+    if DEFAULT_PASSWORD_FILE.exists():
+        value = DEFAULT_PASSWORD_FILE.read_text(encoding="utf-8-sig").strip()
+        if value:
+            return value
     return getpass.getpass("Root password for uswest su: ")
 
 
@@ -47,8 +53,9 @@ def should_skip(path: Path) -> bool:
     return path.name in EXCLUDE_NAMES or path.suffix in EXCLUDE_SUFFIXES
 
 
-def archive_paths() -> Iterable[Path]:
-    for dirname in UPLOAD_DIRS:
+def archive_paths(*, include_agent_updates: bool = True) -> Iterable[Path]:
+    directories = [*UPLOAD_DIRS, *([AGENT_UPDATE_DIR] if include_agent_updates else [])]
+    for dirname in directories:
         path = ROOT / dirname
         if path.exists():
             yield path
@@ -58,10 +65,10 @@ def archive_paths() -> Iterable[Path]:
             yield path
 
 
-def build_archive(output: Path) -> int:
+def build_archive(output: Path, *, include_agent_updates: bool = True) -> int:
     count = 0
     with tarfile.open(output, "w") as tar:
-        for base in archive_paths():
+        for base in archive_paths(include_agent_updates=include_agent_updates):
             if base.is_file():
                 tar.add(base, arcname=base.relative_to(ROOT).as_posix())
                 count += 1
@@ -137,7 +144,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
     password = root_password(args.root_password)
     with tempfile.TemporaryDirectory(prefix="cudy-control-deploy-") as temp_dir:
         archive = Path(temp_dir) / "cudy-control-deploy.tar"
-        count = build_archive(archive)
+        count = build_archive(archive, include_agent_updates=not args.skip_agent_updates)
         print(f"Built archive: {archive} ({archive.stat().st_size} bytes, {count} files)", flush=True)
         client = connect(args)
         try:
@@ -187,6 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--root-password")
     parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=30)
+    parser.add_argument("--skip-agent-updates", action="store_true", help="Deploy code without re-uploading agent release artifacts.")
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE)
     parser.add_argument("--service-user", default="cudy-control")

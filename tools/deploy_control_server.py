@@ -28,6 +28,7 @@ DEFAULT_HOST = "95.182.91.203"
 DEFAULT_USER = "root"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control"
+DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
 
 UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
 AGENT_UPDATE_DIR = "build/agent-updates"
@@ -54,6 +55,10 @@ def ssh_password(explicit: str | None) -> str:
         return explicit
     for name in ("USWEST_SSH_PASSWORD", "AWG_SSH_PASSWORD_HOSTVDS_USWEST", "AWG_SSH_PASSWORD"):
         value = os.environ.get(name)
+        if value:
+            return value
+    if DEFAULT_PASSWORD_FILE.exists():
+        value = DEFAULT_PASSWORD_FILE.read_text(encoding="utf-8-sig").strip()
         if value:
             return value
     return getpass.getpass("SSH password for uswest: ")
