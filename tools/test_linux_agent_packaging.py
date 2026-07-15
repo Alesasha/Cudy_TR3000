@@ -317,6 +317,8 @@ def main() -> int:
     assert_contains(builder, '"watch_agent_connectivity.py"', label="Build-LinuxAgentPackage.ps1")
     assert_contains(builder, '"agent.version.json"', label="Build-LinuxAgentPackage.ps1")
     assert_contains(update_builder, '"watch_agent_connectivity.py"', label="Build-AgentUpdateArtifacts.ps1")
+    assert_contains(update_builder, '[string[]]$Platforms', label="Build-AgentUpdateArtifacts.ps1")
+    assert_contains(update_builder, '$selectedPlatforms -contains "android"', label="Build-AgentUpdateArtifacts.ps1")
 
     print("Linux agent packaging regression passed.")
     return 0

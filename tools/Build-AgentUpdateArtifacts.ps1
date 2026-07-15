@@ -1,8 +1,10 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\..\build\agent-updates",
-    [string]$VersionName = "1.19",
-    [int]$VersionCode = 20,
-    [string]$AndroidApk = ""
+    [string]$VersionName = "1.20",
+    [int]$VersionCode = 21,
+    [string]$AndroidApk = "",
+    [ValidateSet("windows", "linux", "android")]
+    [string[]]$Platforms = @("windows", "linux", "android")
 )
 
 $ErrorActionPreference = "Stop"
@@ -167,9 +169,10 @@ function Build-AndroidUpdate {
     Write-VersionFile -Platform "android" -ArtifactPath $target
 }
 
-Build-WindowsUpdate
-Build-LinuxUpdate
-Build-AndroidUpdate
+$selectedPlatforms = @($Platforms | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)
+if ($selectedPlatforms -contains "windows") { Build-WindowsUpdate }
+if ($selectedPlatforms -contains "linux") { Build-LinuxUpdate }
+if ($selectedPlatforms -contains "android") { Build-AndroidUpdate }
 
 Get-ChildItem -LiteralPath $resolvedOutputDir -File | Sort-Object Name | ForEach-Object {
     Write-Host "$($_.Name) bytes=$($_.Length) modified=$($_.LastWriteTime.ToString('s'))"

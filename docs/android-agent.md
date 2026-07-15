@@ -27,7 +27,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest verified smoke status for release `1.19 (20)`:
+Latest verified smoke status for release `1.20 (21)`:
 
 ```text
 ok ip=8 cleanup=0 transports=6 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 config=19A5BD19F86F probe_jobs jobs=0 completed=0 failed=0
@@ -35,7 +35,7 @@ ok ip=8 cleanup=0 transports=6 prepared=1 stored=1 libbox=unknown config=ok engi
 
 Latest Release APK smoke on the physical phone:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.19-20260713.apk`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.20-20260715.apk`;
 - SHA256: `07227e1fc9173c1ac977b85392dced3ac8c9f645e0ec984d2fd61146ab50c789`;
 - foreground service stayed running;
 - Android VPN was established on `tun2`;
@@ -109,7 +109,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.19-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.20-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -245,7 +245,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 ## Remaining Work
 
-- Increment and publish the full-TUN build as the next release.
+- Reboot-test `1.20 (21)` on the physical phone and verify automatic startup.
 - Verify autostart and traffic again after a real phone reboot.
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add service dependency groups and optional rendered probes for services whose

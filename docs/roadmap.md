@@ -143,7 +143,7 @@ This is the current implementation order for the managed VPN control project.
 - Real reboot smoke now verifies `BOOT_COMPLETED -> foreground service ->
   policy fetch -> engine=running`; the boot path waits briefly for Android
   networking before the first SSH control fetch.
-- Release `1.19 (20)` is built, published through the control-server update
+- Release `1.20 (21)` is built, published through the control-server update
   manifest, and installed on the physical MIUI phone. One-time enrollment was
   reissued without clearing app data; policy fetch, SSH control, status post,
   foreground service and libbox engine passed.

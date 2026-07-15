@@ -58,7 +58,7 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current production test build is `1.19 (20)`. It is published through the
+Current production build is `1.20 (21)`. It is published through the
 control-server agent-update manifest and has passed a physical-phone smoke:
 policy fetch, foreground service, libbox engine, selective routing, status
 post, HTTP/TCP probe jobs, and repeated config reloads with one stable Android
@@ -85,7 +85,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.19-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.20-YYYYMMDD.apk
 ```
 
 Manual smoke test:

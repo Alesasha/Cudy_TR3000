@@ -32,7 +32,8 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 - Control backup and Cudy fallback sync tasks are installed on Windows.
 - Targeted control, Auto, packaging, watchdog, PBR and Go regression tests pass.
 - No file under `secrets/` is tracked by Git.
-- A rebuilt Android `1.19 (20)` test APK is running on the physical phone with
+- Android `1.20 (21)` is published on the production control-server and running
+  on the physical phone with
   full IPv4 TUN capture, TUN DNS, protected direct/provider sockets and SNI
   routing. Android reports the VPN as `VALIDATED`; `example.com` used `Direct`,
   `chatgpt.com` used `proxynl`, and Telegram `149.154.160.0/20` used `proxynl`.
@@ -63,7 +64,7 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 
 ## Next Order Of Work
 
-1. Publish and reboot-test the full-TUN Android release.
+1. Reboot-test the published full-TUN Android `1.20 (21)` release.
 2. Add service dependency groups whose domains share one Auto winner.
 3. Complete Windows and Linux production acceptance separately.
 4. Audit admin/user UI against the current policy model.
