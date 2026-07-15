@@ -206,6 +206,7 @@ def main() -> int:
     assert_contains(managed, "restore_direct_dns_baseline()", label="managed_agent.sh")
     assert_contains(managed, "./restore_direct.sh --keep-transports", label="managed_agent.sh")
     assert_contains(managed, "AGENT_AUTO_UPDATE", label="managed_agent.sh")
+    assert_contains(managed, "--can-manage-transports", label="managed_agent.sh")
     assert_contains(managed, "./update_agent.sh --from-agent", label="managed_agent.sh")
     assert_contains(managed, "while true; do\n  mkdir -p run logs transports", label="managed_agent.sh")
     assert_contains(updater, "/api/agent/app-version?platform=", label="update_agent.sh")

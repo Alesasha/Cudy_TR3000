@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from argparse import Namespace
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,25 @@ import route_agent  # noqa: E402
 
 
 def main() -> int:
+    parsed = route_agent.build_parser().parse_args(["apply", "--can-manage-transports", "--yes"])
+    if not parsed.can_manage_transports:
+        raise AssertionError("managed platform wrappers must be able to declare transport capability")
+    original_request_json_failover = route_agent.request_json_failover
+    original_load_token = route_agent.load_token
+    original_is_windows = route_agent.is_windows
+    try:
+        captured = {}
+        route_agent.load_token = lambda args: "test-token"  # type: ignore[assignment]
+        route_agent.is_windows = lambda: False  # type: ignore[assignment]
+        route_agent.request_json_failover = lambda args, path, **kwargs: captured.update(kwargs["data"]) or {"ok": True}  # type: ignore[assignment]
+        route_agent.post_status(Namespace(can_manage_transports=True, status_mode="apply"), {})
+        if not captured["capabilities"]["can_manage_transports"]:
+            raise AssertionError("explicit Linux wrapper capability was not posted")
+    finally:
+        route_agent.request_json_failover = original_request_json_failover  # type: ignore[assignment]
+        route_agent.load_token = original_load_token  # type: ignore[assignment]
+        route_agent.is_windows = original_is_windows  # type: ignore[assignment]
+
     action, command = route_agent.windows_route_command_for_ip(
         ip="203.0.113.1",
         server_id="auto",

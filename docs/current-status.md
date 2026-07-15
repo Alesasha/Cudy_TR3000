@@ -52,6 +52,20 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
   and winner. Global and per-user groups are isolated, explicit user-domain
   routes stay highest priority, and all existing services migrate as
   `health only` until routing is enabled explicitly.
+- The alias and dependency-group build is deployed on `uswest`. A production
+  staging user proved that two dependent domains received one cache key, one
+  `proxyde` winner and the expected transport plan; all staging rows were then
+  removed. The strict production audit remains green.
+- A guarded Cudy apply-trial tool now validates observer freshness, critical
+  services, paths and transport actions before it can arm apply. Its rollback
+  process runs on Cudy and restores the previous overrides, managed-path state,
+  PBR state and persistent `observe` gate if the workstation disappears. The
+  live preflight is green for seven existing PBR override files; apply has not
+  been enabled.
+- Linux now reports transport-management capability explicitly from its
+  managed wrapper instead of inheriting the old Windows-only platform default.
+  This allows the capability-gated Auto worker to assign provider probe jobs to
+  a Linux agent that can actually start its `transport_plan`.
 
 ## Incomplete Or Degraded
 
@@ -86,12 +100,11 @@ Verified on 2026-07-15 from the development workstation and live Cudy router.
 
 1. Unlock the physical phone, install Android `1.21 (22)`, and pass locked
    reboot plus post-unlock recovery before publishing it.
-2. Deploy the dependency-group foundation and exercise one explicitly enabled
-   staging group without changing current production services.
-3. Complete Windows and Linux production acceptance separately.
-4. Add browser-rendered probes for JavaScript-only geo decisions.
-5. Run a controlled rollback-tested Cudy apply trial without moving DHCP/WAN.
-6. Prepare a staged, reversible migration from AirTies to Cudy as main router.
+2. Complete Windows and Linux production acceptance separately.
+3. Add browser-rendered probes for JavaScript-only geo decisions.
+4. Run an uncommitted guarded Cudy apply trial and verify its automatic
+   rollback without moving DHCP/WAN; only then run a separately committed trial.
+5. Prepare a staged, reversible migration from AirTies to Cudy as main router.
 
 Do not enable router-agent apply mode or move DHCP/WAN ownership to Cudy until
 fallback recovery and critical-service transport checks have passed.

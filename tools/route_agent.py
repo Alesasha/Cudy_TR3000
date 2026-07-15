@@ -1228,7 +1228,7 @@ def post_status(args: argparse.Namespace, plan: dict[str, Any] | None = None) ->
         "capabilities": {
             "can_probe": True,
             "can_route": True,
-            "can_manage_transports": is_windows(),
+            "can_manage_transports": bool(getattr(args, "can_manage_transports", False) or is_windows()),
         },
         "errors": [],
     }
@@ -1438,6 +1438,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--cached", action="store_true", help="Use cached config instead of fetching.")
     plan.add_argument("--interface-map", action="append", default=[], help="Map server id to local interface, e.g. cudy=amn0.")
     plan.add_argument("--post-status", action="store_true", help="Post a dry-run health status after planning.")
+    plan.add_argument("--can-manage-transports", action="store_true", help="Report that the calling platform wrapper can start transports from transport_plan.")
     plan.add_argument("--direct-baseline", action="store_true", help="Show commands that restore non-matched traffic to the physical default route.")
     plan.add_argument("--json", action="store_true")
 
@@ -1445,11 +1446,13 @@ def build_parser() -> argparse.ArgumentParser:
     apply.add_argument("--cached", action="store_true", help="Use cached config instead of fetching.")
     apply.add_argument("--interface-map", action="append", default=[], help="Map server id to local interface, e.g. aktau=amn0.")
     apply.add_argument("--post-status", action="store_true", help="Post apply status after changing routes.")
+    apply.add_argument("--can-manage-transports", action="store_true", help="Report that the calling platform wrapper can start transports from transport_plan.")
     apply.add_argument("--direct-baseline", action="store_true", help="Route non-matched IPv4 traffic through the physical default gateway using 0/1 and 128/1 routes.")
     apply.add_argument("--yes", action="store_true", help="Required confirmation for route changes.")
     apply.add_argument("--json", action="store_true")
 
     status = sub.add_parser("status", help="Post a minimal agent status.")
+    status.add_argument("--can-manage-transports", action="store_true", help="Report that the calling platform wrapper can start transports from transport_plan.")
     status.add_argument("--json", action="store_true")
 
     probe = sub.add_parser("probe", help="Probe a domain through candidate local interfaces.")

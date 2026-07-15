@@ -179,6 +179,8 @@ This is the current implementation order for the managed VPN control project.
 - Manual routes should not be required in the normal install path.
 - Check conflicts with Amnezia, Zapret, and UFW from real `./status.sh` output.
 - Move toward standalone agent behavior similar to Android/Windows.
+- The managed Linux wrapper explicitly advertises transport-management
+  capability, so provider probe assignment matches what the wrapper can start.
 
 ## 9. UI
 
@@ -200,8 +202,9 @@ This is the current implementation order for the managed VPN control project.
   first request route repair/Auto failover before a full emergency stop.
 - Important Services can optionally become routable dependency groups: their
   target hostnames share one candidate list, Auto cache key and winner. The
-  remaining work is staged production acceptance and one rendered/content
-  health result for JavaScript-only geo decisions.
+  production control-server has passed an isolated staging check with one
+  shared winner and complete cleanup. The remaining work is one
+  rendered/content health result for JavaScript-only geo decisions.
 
 ## 10. Cudy
 

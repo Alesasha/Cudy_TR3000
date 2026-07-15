@@ -130,10 +130,10 @@ PY
     status_args+=(--post-status)
   fi
   if [ "$(id -u)" -eq 0 ]; then
-    python3 ./route_agent.py apply "${cached_args[@]}" "${baseline_args[@]}" "${args[@]}" --yes "${status_args[@]}"
+    python3 ./route_agent.py apply "${cached_args[@]}" "${baseline_args[@]}" "${args[@]}" --yes --can-manage-transports "${status_args[@]}"
   else
     sudo env VPN_CONTROL_URL="$VPN_CONTROL_URL" VPN_AGENT_TOKEN="$VPN_AGENT_TOKEN" VPN_AGENT_DEVICE_ID="$VPN_AGENT_DEVICE_ID" \
-      python3 ./route_agent.py apply "${cached_args[@]}" "${baseline_args[@]}" "${args[@]}" --yes "${status_args[@]}"
+      python3 ./route_agent.py apply "${cached_args[@]}" "${baseline_args[@]}" "${args[@]}" --yes --can-manage-transports "${status_args[@]}"
   fi
   if [ "$control_online" = "1" ]; then
     python3 ./route_agent.py probe-jobs "${args[@]}" --limit 2 || true
