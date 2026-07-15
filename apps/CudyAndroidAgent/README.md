@@ -87,7 +87,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.20-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.21-YYYYMMDD.apk
 ```
 
 Manual smoke test:

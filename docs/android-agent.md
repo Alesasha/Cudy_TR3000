@@ -27,24 +27,23 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest verified smoke status for release `1.20 (21)`:
+Latest verified release: `1.21 (22)`.
 
 ```text
-ok ip=8 cleanup=0 transports=6 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0 config=19A5BD19F86F probe_jobs jobs=0 completed=0 failed=0
+ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
 ```
 
 Latest Release APK smoke on the physical phone:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.20-20260715.apk`;
-- SHA256: `07227e1fc9173c1ac977b85392dced3ac8c9f645e0ec984d2fd61146ab50c789`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.21-20260716.apk`;
+- SHA256: `2846b6385e4c0117e1cfdac050d925f56efa4643bdf46d3497bd556b998fc977`;
 - foreground service stayed running;
 - Android VPN was established on `tun2`;
 - control-server reported `isasha_X7Pro_Cudy-android` online and healthy;
-- debug probe for `ifconfig.me` over `proxyde,proxynl` selected `proxynl`.
-- production `tcp://91.108.16.2:443` probing succeeded through four candidate
-  exits and selected `proxyfr` at 7 ms;
-- Android kept one default-network callback after repeated policy/probe reloads
-  and logged zero interface lookup errors;
+- a production probe job tested `proxyde` and `proxynl` while active browser
+  traffic continued through the VPN;
+- probe jobs use persistent loopback-only mixed inbounds and do not reload or
+  interrupt the active TUN;
 - boot/reconnect receiver is registered for `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED`;
 - receiver start path was verified through the explicit test broadcast
@@ -57,25 +56,20 @@ Latest Release APK smoke on the physical phone:
 
 Real reboot check on the MIUI test phone:
 
-- after a normal phone reboot, `CudyVpnService` did not start automatically;
-- the package was still installed, enabled, not stopped, and
-  `RECEIVE_BOOT_COMPLETED` was granted;
-- sending `com.nashvpn.cudyagent.TEST_BOOT_START` through ADB immediately
-  started the receiver path, opened SSH control, fetched policy, opened Android
-  VPN TUN, and posted status;
-- conclusion: the app boot code works, but MIUI autostart/battery policy is
-  blocking delivery or execution of the normal boot receiver.
-- after enabling MIUI Autostart and No restrictions battery mode, the service
-  did start automatically after a real reboot and completed the first control
-  loop successfully.
+- `LOCKED_BOOT_COMPLETED` was handled without reading credential-encrypted
+  preferences;
+- `BOOT_COMPLETED` started the foreground service after the configured network
+  delay;
+- SSH control, policy fetch and TUN recovered automatically;
+- Android marked the VPN network `VALIDATED`.
 
-Latest full-TUN verification on 2026-07-15:
+Latest full-TUN verification on 2026-07-16:
 
 - Android VPN interface `tun0` owns `0.0.0.0/0` and DNS `172.40.0.2`;
 - Android reports the VPN network as `VALIDATED`;
-- `example.com` matched the final `Direct` outbound;
-- `chatgpt.com` matched `out-proxynl` by SNI;
-- Telegram `149.154.160.0/20` matched `out-proxynl` by CIDR;
+- `mail.ru` matched the final `Direct` outbound;
+- `chatgpt.com` matched `out-proxyde` by SNI;
+- Telegram `149.154.160.0/20` matched `out-proxyfr` by CIDR;
 - unchanged policy cycles logged the same config hash and did not reload
   libbox.
 
@@ -109,7 +103,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.20-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.21-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -245,10 +239,12 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 ## Remaining Work
 
-- Reboot-test `1.20 (21)` on the physical phone and verify automatic startup.
-- Verify autostart and traffic again after a real phone reboot.
+- Run a longer locked-screen/background soak and verify mobile-data/Wi-Fi
+  transitions.
+- Resolve or clearly explain the remaining Android Doze whitelist warning.
 - Add broader Android-device smoke coverage outside the current MIUI phone.
-- Add service dependency groups and optional rendered probes for services whose
-  geographic decision is made by JavaScript rather than the initial HTTP body.
+- Add optional rendered probes for services whose geographic decision is made
+  by JavaScript rather than the initial HTTP body.
+- Simplify the main UI and move technical diagnostics to a dedicated view.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).

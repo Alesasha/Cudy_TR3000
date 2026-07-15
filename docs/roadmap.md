@@ -1,254 +1,171 @@
 # Roadmap
 
-This is the current implementation order for the managed VPN control project.
+Updated: 2026-07-16.
 
-## 1. Repository Hygiene
+This roadmap contains remaining work only. The verified baseline is recorded
+in `docs/current-status.md` and frozen by tag
+`snapshot-2026-07-16-android-1.21`.
 
-- Keep `.gitignore` strict for `secrets/`, `backups/`, build outputs, APK/AAB,
-  local DBs, logs, and runtime artifacts.
-- Keep `apps/`, `tools/`, `deploy/`, `openwrt/`, and `docs/` separated by
-  responsibility.
-- Keep `README.md` focused on bootstrap commands and link deeper docs.
-- Commit every stable working point.
+## Execution Rules
 
-## 2. Control-Server Production
+- Keep `uswest` as the primary control-server and Cudy as fallback until a
+  separately tested migration says otherwise.
+- Change one routing layer at a time: control policy, platform agent, Cudy PBR,
+  then main-router ownership.
+- Every risky step needs a read-only preview, explicit health gates, an
+  independent rollback and a post-change connectivity test.
+- Keep the development workstation agent disabled unless its watchdog and
+  emergency stop are active.
+- Do not combine a provider refresh, agent upgrade and Cudy apply trial in one
+  maintenance window.
 
-- Keep `uswest` as primary control-server.
-- Verify `vpn-control.service`: autostart, restart policy, logs, and health.
-- Run provider refresh, Auto worker, stale probe cleanup, and backup as regular
-  jobs.
-- Maintain SQLite/config backups.
-- Add a clear health/status page with provider status, agents, last policy,
-  last probes, and backup age. Machine-readable endpoints are `/api/status`
-  for admins and public `/readyz` for production readiness checks.
+## Phase 1: Restore A Green Baseline
 
-## 3. Fallback Control Path
+Goal: make all read-only production checks explainable and repeatably green.
 
-- Keep Cudy as an emergency fallback control path.
-- Sync a lightweight endpoint manifest from primary to Cudy.
-- Sync a secret full control-state archive from primary to Cudy under `/root`,
-  with only a non-secret freshness status under `/www`.
-- Backup/fallback archive publishing has local regression coverage for pruning,
-  archive upload metadata, public `state.json`, public `endpoints.json`, and
-  current-state symlink behavior.
-- Agents should know a primary URL, optional direct fallback URLs, and static
-  endpoint manifest URLs.
-- If `uswest` is rebuilt or moved, update the Cudy manifest first; agents can
-  discover the new primary through Cudy.
-- Windows agent can already read the Cudy manifest and switch the SSH tunnel
-  host for the next control connection.
-- Later, replace the static manifest with a compact Go fallback service on Cudy
-  that can serve minimal policy, not only endpoint discovery.
-- The first Go fallback service now lives in `cmd/cudy-fallback`. It keeps the
-  current static artifact contract and serves `/healthz`, `/readyz`,
-  `/api/control/endpoints`, `/cudy-control/endpoints.json`, and
-  `/cudy-control/state.json`.
+1. Inspect the four recent failed probe jobs on `uswest` and classify each as
+   provider failure, semantic failure, timeout or stale assignment.
+2. Reproduce the Cudy ChatGPT timeout through `proxyde` outside the router
+   agent and compare DNS, TCP, TLS, content and provider egress.
+3. Reconcile the two Telegram CIDRs whose expected interfaces are absent.
+4. Reconcile why the observer wants `proxygb` restart and `proxykz` creation;
+   either make those transports healthy before the trial or remove them from
+   the effective plan.
+5. Keep provider refresh and Auto workers running while verifying that no new
+   stale assignment accumulates.
 
-## 4. Auto Mode
+Exit criteria:
 
-- Remove the separate `Auto Candidate Lists` UI concept.
-- In Global Domain Routes and per-user Domain Routes, use one ordered candidate
-  list format, for example `proxyde, proxynl, all-rest`.
-- Resolution priority:
-  1. user domain;
-  2. user default;
-  3. global domain;
-  4. global default.
-- Auto worker should first assign probe jobs to agents that actually used the
-  domain. If no live agent is available, test from the control-server.
-- Keep winner history and a TTL cache.
-- Show recent winners with latency and throughput near candidate-list editing.
-- Add service dependency groups. One logical service such as Gemini may need
-  several domains, and all of them must follow the same selected exit instead
-  of independently choosing different Auto winners.
-- Keep lightweight HTTP content checks for ordinary sites, but allow an
-  optional browser-rendered probe class for services whose geographic decision
-  is produced only after JavaScript runs.
-- Current implementation expands `all-rest` on the control-server and sends
-  bounded probe windows to agents (`8` candidates by default), so agents do not
-  start every provider transport at once.
-- Regression coverage now verifies that agent `transport_plan` contains only
-  transports needed by applied routes and pending probe jobs.
-- Regression coverage now verifies that Auto probe jobs prefer an active agent
-  that already reported the target domain.
-- Provider-transport probe jobs now require an agent that reports
-  `can_manage_transports=true`; this prevents the scheduler from assigning
-  LokVPN/VPNtype probe windows to a client that can route but cannot start those
-  exits.
+- production `/healthz` and `/readyz` are green;
+- no unexplained recent failed probe warning remains;
+- `check_cudy_go_fallback.py --strict` passes;
+- `check_cudy_router_agent.py --expected-mode observe --strict` passes three
+  times at least five minutes apart;
+- guarded Cudy preview contains no transport start/restart action and no unsafe
+  path.
 
-## 5. Provider Transports
+## Phase 2: Platform Agent Acceptance
 
-- Control-server is the normal source of fresh LokVPN/VPNtype transport data.
-- Agents receive ready `transport_plan` entries and should not regularly call
-  provider APIs.
-- Agent-side provider refresh remains only as fallback.
-- Start only needed LokVPN/VPNtype transports; stop unused slots immediately.
-- LokVPN profiles missing from the current subscription are marked as disabled
-  transport configs, so they stop participating in Auto until the subscription
-  returns them again.
+### Windows
 
-## 6. Windows Agent
+1. Rebuild the package from the current source and verify its manifest/hash.
+2. Run emergency-stop and watchdog tests before enabling the task.
+3. Enable the managed task in a controlled window with a direct recovery path.
+4. Reboot Windows and verify SSH self-heal, cached-policy fallback, selective
+   routes and update reporting.
+5. Test Direct, Telegram, ChatGPT, Gemini, Mail.ru and a download/speed target.
 
-- Production install/uninstall is implemented through scheduled task helpers.
-- Emergency rollback is implemented as `Emergency-Stop-Agent.cmd/.ps1`: it
-  stops and disables the scheduled task, kills managed child processes,
-  stops SSH/sing-box/AWG transports, removes their routes, and restores direct
-  IPv4 routing and DNS.
-- SSH tunnel self-heal is implemented through endpoint manifest/fallback logic.
-- Sing-box transport self-heal is implemented for control-server
-  `transport_plan`; unused exits are stopped automatically.
-- Route application uses one bounded PowerShell batch instead of one process
-  per route. A live production cycle on 2026-07-13 applied 74 commands without
-  losing connectivity.
-- Fresh policy is fetched once per cycle and the exact cached snapshot is then
-  applied. The same cache is the offline fallback input.
-- Cached fallback was exercised on 2026-07-13 with control deliberately marked
-  offline: 73 route commands were applied, status/probes were skipped, and
-  HTTPS connectivity remained available.
-- An independent Windows safety watchdog runs outside the agent. The agent
-  writes a heartbeat only after a successful route apply; the watchdog also
-  checks general internet and a local cached list of user-critical services.
-  Repeated failures are reported to the control-server and trigger the full
-  emergency direct-route restore. The Codex API check is configured only on
-  the development workstation, not as a production default for every user.
-- Control-server transports override legacy task arguments. Reinstall the
-  existing task with `-NoDirectTransports` to remove the obsolete argument
-  from Task Scheduler as well.
-- Temporary backend limitation: the current AmneziaWG service wrapper exposes
-  one `AmneziaVPN` interface. If `aktau` and `uswest` are both requested, the
-  agent selects the more-used exit for that shared interface and reports the
-  aliasing explicitly. Independent simultaneous own-server exits require the
-  deferred `cudy-awg-native` backend.
-- Clear logs and status command.
-- Smoke-test after Windows reboot.
-- Managed routing smoke now accepts any active managed exit for Auto-routed
-  targets, for example `proxyde` for `ifconfig.me` and `proxynl` for Telegram
-  CIDRs.
-- Verify Telegram, Gemini, ifconfig, speedtest, and direct traffic.
+Exit criteria: one reboot and a 24-hour run without lost LAN/internet, route
+leak, focus-stealing console or manual transport repair.
 
-## 7. Android Agent
+### Linux
 
-- Normal user instruction exists in `docs/android-agent.md`.
-- Real reboot on the MIUI test phone was verified after enabling Autostart and
-  unrestricted battery mode.
-- Battery/VPN/MIUI Autostart readiness is shown on the app main screen.
-- First-run setup now requests notification permission, Android VPN permission,
-  battery optimization exemption, and opens MIUI Autostart/app settings.
-- Battery restrictions and foreground service behavior are documented.
-- Production probe-job support is implemented through Android local mixed proxy
-  probes. HTTP(S) jobs use the proxy directly; `tcp://host:port` jobs use HTTP
-  `CONNECT`, which is verified against Telegram IP ranges through each exit.
-- Boot/reconnect receiver is implemented and verified through both explicit
-  test broadcast and a real reboot on the current test phone.
-- Real reboot smoke now verifies `BOOT_COMPLETED -> foreground service ->
-  policy fetch -> engine=running`; the boot path waits briefly for Android
-  networking before the first SSH control fetch.
-- Release `1.20 (21)` is built, published through the control-server update
-  manifest, and installed on the physical MIUI phone. One-time enrollment was
-  reissued without clearing app data; policy fetch, SSH control, status post,
-  foreground service and libbox engine passed.
-- The libbox platform now publishes actual Android interface inventory and
-  keeps one default-network callback across repeated config reloads. A live
-  multi-cycle check stayed at one callback with zero interface lookup errors.
-- Effective critical-service checks now run inside the foreground service.
-  Three consecutive failures post diagnostics and close the VPN so Android
-  returns to direct routing.
-- Full IPv4 TUN capture now uses the official SFA route-range contract, TUN DNS
-  hijacking and libbox `auto_detect_interface`. The agent package is excluded
-  from its own VPN so SSH control cannot recurse. A physical-phone smoke proved
-  direct egress, ChatGPT SNI routing and Telegram CIDR routing concurrently.
-- Config hashing suppresses unchanged libbox reloads and logs short old/new
-  hashes when policy really changes.
-- Publish this full-TUN build as the next version, then verify a real reboot and
-  a longer mobile-network/Wi-Fi soak before declaring Android production-ready.
+1. Confirm Dima receives Linux `1.20 (21)` through the control update path.
+2. Keep normal operation one-click from the UI; no manual Amnezia interface or
+   route commands should be required.
+3. Test suspend/resume, lid close, reboot and Wi-Fi roaming.
+4. Test with Zapret and UFW active, then capture one automatic diagnostic.
+5. Verify update, disable, enable and uninstall/restore-direct behavior.
 
-## 8. Linux Agent
+Exit criteria: a 24-48 hour real-world soak with no Wi-Fi loss, boot problem,
+DNS breakage or manual recovery.
 
-- The Dima scenario has a one-click wrapper: `./one_click_install.sh`.
-- The prod package can carry `runtime/sing-box`; use the `-IncludeRuntime`
-  package build when DNS/GitHub reachability on the target machine is uncertain.
-- DNS restore is covered by a regression test because `resolvectl dns` must
-  receive separate server arguments, not one space-separated string.
-- The prod bundle contains `QUICKSTART-RU.md` and `status.sh`; failed installs
-  automatically print a diagnostic snapshot.
-- Status and rollback helpers exist: `./status.sh`, `sudo ./uninstall_systemd.sh`,
-  and `sudo ./restore_direct.sh`.
-- The package installs an independent systemd watchdog timer that checks the
-  effective critical-service list and restores direct routing after repeated
-  failure.
-- Manual routes should not be required in the normal install path.
-- Check conflicts with Amnezia, Zapret, and UFW from real `./status.sh` output.
-- Move toward standalone agent behavior similar to Android/Windows.
-- The managed Linux wrapper explicitly advertises transport-management
-  capability, so provider probe assignment matches what the wrapper can start.
+### Android
 
-## 9. UI
+1. Run a longer Wi-Fi/background/locked-screen soak on `1.21 (22)`.
+2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
+3. Resolve or clearly explain the remaining Doze/battery warning.
+4. Redesign the main screen around a concise state indicator, current/latest
+   version, update action and user routing controls; move diagnostics behind a
+   dedicated view.
+5. Repeat reboot and route acceptance on at least one additional Android build
+   before broad rollout.
 
-- Admin UI: users, devices, routes, provider servers, probe history, status.
-- User UI: server choice, Auto, domain-to-candidate-list overrides.
-- User UI can save local Auto priority lists for default routing and
-  per-domain overrides.
-- User auth can be skipped when the user arrives through VPN/agent identity.
-- Admin keeps login/password.
-- Show statuses: applied, waiting for probe, Auto winner, agent offline.
-- Global route lookup aliases are admin-managed. They can also be managed
-  through `service-alias-list`, `service-alias-set`, and
-  `service-alias-delete`.
-- Per-user aliases are stored separately. A local alias overrides the global
-  alias with the same name only for its owner; deleting it restores the global
-  lookup shortcut. Users cannot modify the shared dictionary.
-- Add per-user critical-service health lists to user/admin UI. Agents cache the
-  list locally; watchdog failures must be visible as diagnostics and should
-  first request route repair/Auto failover before a full emergency stop.
-- Important Services can optionally become routable dependency groups: their
-  target hostnames share one candidate list, Auto cache key and winner. The
-  production control-server has passed an isolated staging check with one
-  shared winner and complete cleanup. The remaining work is one
-  rendered/content health result for JavaScript-only geo decisions.
+Exit criteria: no TUN interruption during policy/probe cycles, automatic reboot
+recovery, and a user-facing UI that does not expose raw engine internals.
 
-## 10. Cudy
+## Phase 3: Complete Auto And Domain Intelligence
 
-- Roles:
-  - LAN-wide agent for the home network;
-  - emergency fallback control path.
-- Gradually remove heavy business logic from Cudy.
-- Keep traffic-drop/load investigations separate from the main control plane.
-- First Go milestone: deploy `cudy-fallback` as a loopback-only OpenWrt service
-  beside the existing static fallback files, then compare its readiness output
-  with `python tools\check_cudy_fallback_status.py --strict`.
-- The Go milestone is live: Cudy maintains a dedicated restricted SSH tunnel,
-  refreshes the `cudy-home` policy every minute, and keeps a root-only 24-hour
-  last-known-good cache. `check_cudy_go_fallback.py --strict` validates both
-  services, observer freshness, policy source, routes, and transports.
-- The separate Go `cudy-router-agent` is deployed in `observe` mode on Cudy. It
-  pulls live/cached policy, renders required transport/dnsmasq/nft artifacts,
-  applies file changes transactionally when enabled, and rolls back files and
-  newly enabled transport services on failure. Connectivity gates and repeated
-  observe diffs remain mandatory before `apply` mode.
-- Keep `cudy-fallback` and `cudy-router-agent` as separate processes and failure
-  domains. They may share internal Go packages; a multicall binary is optional
-  later if OpenWrt flash size requires it.
-- Router-agent rollout modes are `disabled`, `observe`, and `apply`. Complete
-  an observe/diff phase behind AirTies before Cudy becomes the main DHCP/DNS/WAN
-  router.
+1. Add browser-rendered checks for JavaScript-only geographic decisions while
+   preserving existing regex/content checks for ordinary probes.
+2. Make probe history show why a candidate failed, not only latency/speed.
+3. Verify TTL refresh and approximately 300 recently active domains under real
+   traffic.
+4. Finish the reviewed daily domain/IP list update flow; unknown traffic stays
+   Direct until an admin-approved promotion.
+5. Verify global/user default and domain-specific candidate precedence through
+   one full production scenario.
+6. Keep control-server transport plans minimal so agents start only exits used
+   by routes or an active probe window.
 
-## 11. Final Verification
+Exit criteria: admin sets a global default, a user overrides one service,
+Auto selects a content-valid winner, all service dependencies share it, and a
+provider failure moves traffic to the next valid candidate.
 
-- Admin sets global default.
-- User sets local override.
-- Agent receives policy.
-- Auto chooses a winner.
-- Traffic goes through the expected provider.
-- Verify Windows, Android, and Cudy LAN.
-- Verify failures:
-  - `uswest` down -> Cudy fallback discovery;
-  - provider down -> next candidate.
+## Phase 4: Finish Admin And User Lifecycle
 
-## 12. Deferred Native AWG Backend
+1. Audit every current admin tab against the actual data model: users, devices,
+   enrollment codes, routes, services, aliases, transports, probes, updates and
+   system health.
+2. Replace ambiguous actions and dead controls; device enable/disable/delete
+   must be reversible and explicit.
+3. Keep user entry authenticated by agent identity and admin entry protected by
+   credentials.
+4. Show applied policy, pending probe, current Auto winner, offline agent,
+   diagnostics and update status in plain language.
+5. Make enrollment and update behavior consistent across Windows, Linux and
+   Android.
+6. Add rendered UI regression coverage for desktop and mobile widths.
 
-- Implement `cudy-awg-native` only after control-server, Windows, Android,
-  Linux, and Cudy fallback behavior is stable.
-- It must provide independently named concurrent AWG transports so `aktau`
-  and `uswest` can be active at the same time without sharing `AmneziaVPN`.
-- Replace the service-wrapper implementation behind the existing transport
-  abstraction; control-server policy and route semantics must not change.
+Exit criteria: a new user/device can be enrolled, configured, updated,
+disabled, re-enabled and deleted without CLI or database edits.
+
+## Phase 5: Guarded Cudy Apply
+
+Prerequisite: Phases 1 and the relevant Auto checks are green.
+
+1. Capture current PBR, dnsmasq, nft, transport and service state.
+2. Run the first uncommitted guarded apply trial without moving DHCP/WAN.
+3. Deliberately stop the controlling workstation path and prove the independent
+   on-router rollback restores previous files, PBR state and `observe` gate.
+4. Inspect counters and Direct/provider routes after rollback.
+5. Run a separately committed trial, then return to `observe` and compare the
+   resulting state.
+
+Exit criteria: both trials preserve LAN/internet access, critical services and
+fallback control, and automatic rollback works without Codex or the workstation.
+
+## Phase 6: Make Cudy The Main Router
+
+Prerequisite: guarded apply is accepted and stable.
+
+1. Keep the captured AirTies configuration as the migration source of truth.
+2. Reproduce WAN, LAN, DHCP reservations, DNS, Wi-Fi, port forwards and local
+   management access on Cudy.
+3. Prepare a physical cable and address rollback that does not depend on VPN or
+   the control-server.
+4. Add a router-level watchdog for WAN, LAN, control and user-critical services.
+5. Move one responsibility at a time, starting with a maintenance window and a
+   single test client before changing the whole LAN.
+6. Keep AirTies ready for immediate rollback until a multi-day soak passes.
+
+Exit criteria: Cudy survives reboot, provider/control outages and rollback
+tests as the LAN gateway without one-to-two-minute traffic stalls.
+
+## Phase 7: Disaster Recovery And Control Migration
+
+1. Verify scheduled SQLite/config backups and Cudy state freshness.
+2. Clone `uswest` to a disposable replacement VPS from a current backup.
+3. Change the endpoint manifest through Cudy and prove agents discover the new
+   primary without individual manual edits.
+4. Exercise primary-down operation and return to the restored primary.
+5. Document the one-click clone/restore timing and operator checklist.
+
+Exit criteria: a clean replacement server can restore control, UI, policy,
+providers and agent updates within one planned maintenance window.
+
+## Deferred: Native Multi-AWG Backend
+
+`cudy-awg-native` remains deferred until all higher-level policy and recovery
+work is stable. It should replace the shared Amnezia service wrapper behind the
+existing transport abstraction without changing control-server semantics.

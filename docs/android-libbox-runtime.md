@@ -21,18 +21,19 @@ Current repo status:
 - With `apps/CudyAndroidAgent/Libs/libbox.aar`, the smoke test can load
   `lib/arm64-v8a/libbox.so` and call `Libbox.checkConfig(...)` for the first
   stored config.
-- Current verified release status on the test phone:
-  `ok ip=8 cleanup=0 transports=2 prepared=1 stored=1 libbox=unknown config=ok engine=running server=android-unified iface=cudy0`.
+- Current verified release is Android `1.21 (22)` with the unified engine
+  running and the Android VPN network marked `VALIDATED`.
 - Android `VpnService.Builder` uses libbox `Inet4RouteRange` and captures
   `0.0.0.0/0`; DNS is sent to the TUN and hijacked by sing-box.
 - The agent package is excluded from the VPN, while libbox
   `auto_detect_interface` invokes the Android protect callback for direct and
   provider sockets. This prevents full-TUN recursion.
-- With the unified Android VPN running, Android reports a validated `tun0`.
-  Live logs prove `example.com -> direct`, `chatgpt.com -> out-proxynl`, and
-  Telegram CIDRs -> `out-proxynl`.
+- With the unified Android VPN running, live logs prove `mail.ru -> direct`,
+  `chatgpt.com -> out-proxyde`, and Telegram CIDRs -> `out-proxyfr`.
 - The engine hashes generated configs and skips reloads when the policy is
   unchanged.
+- Production probe jobs use persistent loopback-only mixed inbounds, so
+  testing candidates does not reload or interrupt the active TUN.
 
 Why the first iteration used a probe before a full runtime:
 
@@ -89,7 +90,8 @@ standard VPN connection dialog. The app now records
 
 Remaining implementation work:
 
-1. Publish and reboot-test the full-TUN build as a new release.
-2. Extend Android status with active config summary: route count, outbound tags,
-   and last probe result.
-3. Harden probe-job scheduling for mobile foreground/battery constraints.
+1. Run a longer locked/background and network-transition soak.
+2. Add rendered probes for JavaScript-only geographic decisions.
+3. Simplify the user-facing status/update UI and retain detailed diagnostics in
+   a separate view.
+4. Add physical-device coverage outside the current MIUI phone.
