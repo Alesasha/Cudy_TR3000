@@ -258,7 +258,13 @@ public class CudyVpnService : VpnService
                 var transportPlan = CudyTransportPlan.Parse(root);
                 transports = transportPlan.Count;
                 CudyPreparedTransport[] prepared = transportPlan.Count > 0
-                    ? new[] { CudySingBoxConfig.BuildAndroidUnified(root, transportPlan) }
+                    ? new[]
+                    {
+                        CudySingBoxConfig.BuildAndroidUnified(
+                            root,
+                            transportPlan,
+                            localProbes: CudyAndroidProbeRunner.BuildLocalProbes(transportPlan)),
+                    }
                     : Array.Empty<CudyPreparedTransport>();
                 preparedTransports = prepared.Length;
                 var stored = StorePreparedTransports(prepared);
@@ -270,11 +276,10 @@ public class CudyVpnService : VpnService
                     engineSummary = libboxEngine?.StartOrReload(stored[0]) ?? "engine=unavailable";
                     if (libboxEngine is not null)
                     {
-                        var probeRunner = new CudyAndroidProbeRunner(this, libboxEngine, deviceId);
+                        var probeRunner = new CudyAndroidProbeRunner(deviceId);
                         var probes = await probeRunner.RunAsync(
                             root,
                             transportPlan,
-                            stored[0],
                             (path, tokenArg) => GetControlStringAsync(client, controlUrl, token, path, tokenArg),
                             (path, json, tokenArg) => PostControlJsonAsync(client, controlUrl, token, path, json, tokenArg),
                             cancellationToken);
@@ -292,7 +297,6 @@ public class CudyVpnService : VpnService
                             SaveDebugProbeResult(debugJson);
                             Log.Info(LogTag, "Debug probe result: " + debugJson);
                             probeSummary += " debug_probe=done";
-                            engineSummary = libboxEngine.StartOrReload(stored[0]);
                         }
                     }
                 }
@@ -570,21 +574,6 @@ public class CudyVpnService : VpnService
     internal void RequestLibboxServiceStop()
     {
         StopAgent("libbox requested stop");
-    }
-
-    internal CudyStoredTransport WriteTemporaryTransport(CudyPreparedTransport prepared)
-    {
-        var filesPath = FilesDir?.AbsolutePath
-            ?? throw new InvalidOperationException("App private files directory is unavailable.");
-        var transportDir = Path.Combine(filesPath, "transports");
-        Directory.CreateDirectory(transportDir);
-        var path = Path.Combine(transportDir, "probe-" + prepared.InterfaceName + ".json");
-        File.WriteAllText(path, prepared.ConfigJson, Encoding.UTF8);
-        return new CudyStoredTransport(
-            prepared.ServerId,
-            prepared.InterfaceName,
-            prepared.TransportType,
-            path);
     }
 
     private static bool AddTunAddresses(Builder builder, IRoutePrefixIterator? iterator)

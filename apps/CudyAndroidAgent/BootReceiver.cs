@@ -130,26 +130,39 @@ public sealed class BootReceiver : BroadcastReceiver
 
     private static void StoreBootMarker(Context context, string action, string at, string result, string error)
     {
-        StoreBootMarker(context.GetSharedPreferences("cudy-agent", FileCreationMode.Private), action, at, result, error);
-
-        if ((int)Build.VERSION.SdkInt < 24)
+        if ((int)Build.VERSION.SdkInt >= 24)
         {
-            return;
+            try
+            {
+#pragma warning disable CA1416
+                var deviceContext = context.CreateDeviceProtectedStorageContext();
+#pragma warning restore CA1416
+                if (deviceContext is not null)
+                {
+                    StoreBootMarker(deviceContext.GetSharedPreferences("cudy-agent-boot", FileCreationMode.Private), action, at, result, error);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogTag, $"Failed to store direct-boot marker for {action}: {ex.Message}");
+            }
         }
 
         try
         {
-#pragma warning disable CA1416
-            var deviceContext = context.CreateDeviceProtectedStorageContext();
-#pragma warning restore CA1416
-            if (deviceContext is not null)
+            if ((int)Build.VERSION.SdkInt >= 24)
             {
-                StoreBootMarker(deviceContext.GetSharedPreferences("cudy-agent-boot", FileCreationMode.Private), action, at, result, error);
+                var userManager = context.GetSystemService(Context.UserService) as UserManager;
+                if (userManager?.IsUserUnlocked != true)
+                {
+                    return;
+                }
             }
+            StoreBootMarker(context.GetSharedPreferences("cudy-agent", FileCreationMode.Private), action, at, result, error);
         }
         catch (Exception ex)
         {
-            Log.Warn(LogTag, $"Failed to store direct-boot marker for {action}: {ex.Message}");
+            Log.Warn(LogTag, $"Failed to store credential boot marker for {action}: {ex.Message}");
         }
     }
 

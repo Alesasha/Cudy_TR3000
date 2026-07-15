@@ -15,6 +15,7 @@ BOOT_RECEIVER = ROOT / "apps" / "CudyAndroidAgent" / "BootReceiver.cs"
 VPN_SERVICE = ROOT / "apps" / "CudyAndroidAgent" / "CudyVpnService.cs"
 CRITICAL_MONITOR = ROOT / "apps" / "CudyAndroidAgent" / "CudyCriticalServiceMonitor.cs"
 SING_BOX_CONFIG = ROOT / "apps" / "CudyAndroidAgent" / "CudySingBoxConfig.cs"
+ANDROID_PROBE = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidProbe.cs"
 
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
@@ -102,6 +103,26 @@ def main() -> int:
             "AddTunDnsServers",
             "AddDisallowedApplication",
             "Added Android auto routes",
+            "CudyAndroidProbeRunner.BuildLocalProbes(transportPlan)",
+        ],
+    )
+    assert_contains(
+        ANDROID_PROBE,
+        [
+            "BuildLocalProbes(CudyTransportPlan transportPlan)",
+            "var probePorts = BuildLocalProbes(transportPlan)",
+            '"local_mixed_proxy"',
+        ],
+    )
+    probe_text = ANDROID_PROBE.read_text(encoding="utf-8")
+    if ".StartOrReload(" in probe_text:
+        raise AssertionError("Android probe runner must not reload the active VPN engine")
+    assert_contains(
+        BOOT_RECEIVER,
+        [
+            "CreateDeviceProtectedStorageContext",
+            "userManager?.IsUserUnlocked",
+            "waiting for user unlock before starting agent",
         ],
     )
     assert_contains(

@@ -38,8 +38,9 @@ Current MVP:
 - keeps `final=direct`, so only matching policy rules use provider exits;
 - adds control-server `ip_routes` into Android `VpnService.Builder`, so Android
   system routing sends those CIDRs into the app TUN.
-- claims and completes control-server probe jobs through local mixed proxy
-  inbounds;
+- claims and completes control-server probe jobs through persistent loopback-only
+  mixed proxy inbounds, without reloading the active TUN or interrupting user
+  traffic;
 - registers a boot/reconnect receiver for `LOCKED_BOOT_COMPLETED`,
   `BOOT_COMPLETED`, `USER_UNLOCKED`, `MY_PACKAGE_REPLACED`, and the smoke-test action
   `com.nashvpn.cudyagent.TEST_BOOT_START`.
@@ -53,16 +54,17 @@ Current MVP:
 
 Next implementation steps:
 
-- verify behavior after a real phone reboot on each target Android/MIUI build.
+- repeat the physical reboot acceptance on each additional target Android/MIUI
+  build before broad rollout.
 - add a simple uninstall/reset helper for test devices.
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current production build is `1.20 (21)`. It is published through the
+Current production build is `1.21 (22)`. It is published through the
 control-server agent-update manifest and has passed a physical-phone smoke:
 policy fetch, foreground service, libbox engine, selective routing, status
-post, HTTP/TCP probe jobs, and repeated config reloads with one stable Android
-default-network callback.
+post, non-disruptive HTTP/TCP probe jobs, direct and provider routes, and a real
+device reboot with automatic control-link and TUN recovery.
 
 Safety note:
 

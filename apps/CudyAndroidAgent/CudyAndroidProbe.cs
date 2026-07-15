@@ -24,21 +24,16 @@ public sealed class CudyAndroidProbeRunner
         "unsupported country",
     };
 
-    private readonly CudyVpnService service;
-    private readonly CudyAndroidLibboxEngine engine;
     private readonly string deviceId;
 
-    public CudyAndroidProbeRunner(CudyVpnService service, CudyAndroidLibboxEngine engine, string deviceId)
+    public CudyAndroidProbeRunner(string deviceId)
     {
-        this.service = service;
-        this.engine = engine;
         this.deviceId = deviceId;
     }
 
     public async Task<CudyProbeJobsSummary> RunAsync(
         JsonElement policyRoot,
         CudyTransportPlan transportPlan,
-        CudyStoredTransport activeConfig,
         Func<string, CancellationToken, Task<string>> getControlStringAsync,
         Func<string, string, CancellationToken, Task> postControlJsonAsync,
         CancellationToken cancellationToken)
@@ -95,12 +90,18 @@ public sealed class CudyAndroidProbeRunner
                     JsonSerializer.Serialize(new { job_id = jobId, result }),
                     cancellationToken);
             }
-            finally
-            {
-                engine.StartOrReload(activeConfig);
-            }
         }
         return new CudyProbeJobsSummary(jobs.Count, completed, failed);
+    }
+
+    public static IReadOnlyList<CudySingBoxLocalProbe> BuildLocalProbes(CudyTransportPlan transportPlan)
+    {
+        return transportPlan.Entries
+            .Select(entry => entry.ServerId)
+            .Where(serverId => !string.IsNullOrWhiteSpace(serverId))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select((serverId, index) => new CudySingBoxLocalProbe(serverId, 19080 + index))
+            .ToList();
     }
 
     public async Task<object> RunDebugAsync(
@@ -148,20 +149,11 @@ public sealed class CudyAndroidProbeRunner
         var runnableCandidates = candidates
             .Where(serverId => transportPlan.Find(serverId) is not null)
             .ToList();
-        var probePorts = runnableCandidates
-            .Select((serverId, index) => new CudySingBoxLocalProbe(serverId, 19080 + index))
+        var runnableSet = new HashSet<string>(runnableCandidates, StringComparer.OrdinalIgnoreCase);
+        var probePorts = BuildLocalProbes(transportPlan)
+            .Where(item => runnableSet.Contains(item.ServerId))
             .ToList();
         var probePortByServer = probePorts.ToDictionary(item => item.ServerId, item => item.ListenPort, StringComparer.OrdinalIgnoreCase);
-        if (runnableCandidates.Count > 0)
-        {
-            var probeConfig = CudySingBoxConfig.BuildAndroidUnified(
-                policyRoot,
-                transportPlan,
-                localProbes: probePorts);
-            var stored = service.WriteTemporaryTransport(probeConfig);
-            engine.StartOrReload(stored);
-            await Task.Delay(500, cancellationToken);
-        }
 
         for (var index = 0; index < candidates.Count; index++)
         {
