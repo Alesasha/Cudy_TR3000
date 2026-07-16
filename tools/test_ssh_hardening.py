@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "harden_control_ssh.py"
 CUDY_RECOVERY = ROOT / "tools" / "recover_uswest_ssh_via_cudy.py"
+PRIVATE_MANAGEMENT = ROOT / "tools" / "install_control_private_management.py"
 
 
 def assert_contains(text: str, needle: str, *, label: str) -> None:
@@ -60,6 +61,14 @@ def main() -> int:
     assert_contains(recovery_text, '"--private-host"', label="recover_uswest_ssh_via_cudy.py")
     assert_contains(recovery_text, "required=True", label="recover_uswest_ssh_via_cudy.py")
     assert_not_contains(recovery_text, 'default="10.8.1.1"', label="recover_uswest_ssh_via_cudy.py")
+
+    private_management_text = PRIVATE_MANAGEMENT.read_text(encoding="utf-8")
+    ast.parse(private_management_text)
+    assert_contains(private_management_text, "cudy-awg-private-management-route.timer", label="private management")
+    assert_contains(private_management_text, "docker inspect", label="private management")
+    assert_contains(private_management_text, "ip -4 route replace", label="private management")
+    assert_not_contains(private_management_text, "iptables", label="private management")
+    assert_not_contains(private_management_text, "RemainAfterExit=yes", label="private management timer")
 
     print("SSH hardening regression passed.")
     return 0

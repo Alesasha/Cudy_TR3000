@@ -41,6 +41,11 @@ Verified on 2026-07-16:
 - restricted tunnel-user deployment now has a sequential system OpenSSH mode;
   it completed a production code promotion despite intermittent public banner
   delays, without opening parallel SSH sessions;
+- uswest now has a verified private SSH recovery path through Cudy to the host
+  bridge address `172.29.172.1`; a one-minute systemd timer repairs the host
+  return route through the AmneziaWG container if Docker recreates it or the
+  route is removed. A deliberate route-deletion test recovered automatically
+  and private SSH then passed end to end;
 - the scheduled operator backup and Cudy fallback-sync tasks both have a zero
   last result; the latest pulled backup archive is dated 2026-07-16.
 
@@ -166,10 +171,12 @@ Remaining Android concerns:
   refresh counts, and labels the private Cudy check as unreachable from the VPS
   instead of incorrectly calling it stale. The independent Cudy checks remain
   authoritative for fallback health.
-- SSH recovery documentation no longer treats AWG peer `10.8.1.1` as a server
-  management address. A private recovery command now requires an explicitly
-  configured and verified uswest management IP; until one is provisioned, the
-  provider console and Cudy fallback are the valid no-public-SSH recovery paths.
+- SSH recovery no longer treats AWG peer `10.8.1.1` as a server management
+  address. The verified private uswest management address is the Docker host
+  bridge `172.29.172.1`; `cudy-awg-private-management-route.timer` maintains
+  its return path to the inbound AWG subnet. Public SSH, private SSH through
+  Cudy, provider-console recovery and the Cudy control fallback are now
+  independent recovery layers.
 - Full enrollment/update/device lifecycle usability still needs the remaining
   Phase 4 audit and automated rendered regression coverage.
 - The HTTP lifecycle regression now creates and deletes a user, revokes and

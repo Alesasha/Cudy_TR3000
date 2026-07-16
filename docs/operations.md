@@ -310,6 +310,24 @@ python tools\recover_uswest_ssh_via_cudy.py `
 Remove `--check-only` only after the private connectivity check succeeds. The
 tool adds one narrow `/32` route on Cudy and never assumes a management address.
 
+On the current uswest layout, AmneziaWG runs in Docker: host bridge `amn0` is
+`172.29.172.1`, container `amnezia-awg2` is attached to
+`amnezia-dns-net`, and its `awg0` client subnet is `10.8.1.0/24`. Install the
+idempotent host return-route and its one-minute repair timer with:
+
+```powershell
+python tools\install_control_private_management.py
+python tools\recover_uswest_ssh_via_cudy.py `
+  --private-host 172.29.172.1 `
+  --check-only
+```
+
+The installer discovers the container address from Docker on every run and
+does not modify firewall, NAT, SSH authentication, VPN keys or policy routes.
+If Amnezia recreates the Docker network with a different host bridge address,
+read the installer's `PRIVATE_MANAGEMENT_HOST` output and pass the new verified
+address explicitly.
+
 ## Autostart
 
 Cudy/OpenWrt services should come back after a Cudy reboot when their init scripts are enabled. On the current router, these services are enabled:
