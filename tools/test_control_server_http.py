@@ -237,7 +237,7 @@ def main() -> int:
             command,
             cwd=ROOT,
             text=True,
-            stdout=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
         )
         try:
@@ -302,6 +302,41 @@ def main() -> int:
                     raise AssertionError(f"/api/admin is missing {key!r}")
             if "agent_enrollment_codes" not in admin_payload:
                 raise AssertionError("/api/admin is missing 'agent_enrollment_codes'")
+            lifecycle_user = {
+                "id": "lifecycle-user",
+                "display_name": "Lifecycle User",
+                "role": "user",
+                "default_server_id": "auto",
+                "client_ip": "",
+                "password": "lifecycle-password",
+                "enabled": True,
+                "create_cudy_client": False,
+            }
+            created_user = post_json(opener, f"{base_url}/api/admin/users", lifecycle_user)
+            if created_user.get("ok") is not True:
+                raise AssertionError(f"admin user creation failed: {created_user!r}")
+            lifecycle_opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
+            lifecycle_login = post_json(
+                lifecycle_opener,
+                f"{base_url}/api/login",
+                {"username": "lifecycle-user", "password": "lifecycle-password"},
+            )
+            if lifecycle_login.get("ok") is not True:
+                raise AssertionError(f"new user login failed: {lifecycle_login!r}")
+            deleted_user = fetch_json_with_opener(
+                opener,
+                f"{base_url}/api/admin/users?id=lifecycle-user&revoke_cudy=0",
+                method="DELETE",
+            )
+            if deleted_user.get("ok") is not True:
+                raise AssertionError(f"admin user deletion failed: {deleted_user!r}")
+            expect_http_error(
+                lambda: post_json_public(
+                    f"{base_url}/api/login",
+                    {"username": "lifecycle-user", "password": "lifecycle-password"},
+                ),
+                401,
+            )
             gzip_request = urllib.request.Request(
                 f"{base_url}/api/admin",
                 headers={"accept-encoding": "gzip"},
@@ -423,6 +458,26 @@ def main() -> int:
             )
             if admin_code.get("ok") is not True or not admin_code.get("code"):
                 raise AssertionError(f"admin enrollment code creation failed: {admin_code!r}")
+            revoked_code = fetch_json_with_opener(
+                opener,
+                f"{base_url}/api/admin/enrollment-codes?id={admin_code['id']}",
+                method="DELETE",
+            )
+            if revoked_code.get("ok") is not True:
+                raise AssertionError(f"admin enrollment code revoke failed: {revoked_code!r}")
+            expect_http_error(
+                lambda: post_json_public(
+                    f"{base_url}/api/agent/enroll",
+                    {
+                        "code": admin_code["code"],
+                        "device_id": "phone-user-revoked-code",
+                        "display_name": "Revoked code device",
+                        "platform": "android",
+                    },
+                    timeout=15,
+                ),
+                401,
+            )
             winners = fetch_json_with_opener(opener, f"{base_url}/api/admin/auto-winners?target=telegram&limit=10")
             if "winners" not in winners:
                 raise AssertionError(f"auto winners payload is malformed: {winners!r}")
@@ -500,10 +555,24 @@ def main() -> int:
                     "display_name": "Phone enrolled",
                     "platform": "android",
                 },
+                timeout=15,
             )
             enrolled_token = enrollment.get("token")
             if enrollment.get("ok") is not True or not enrolled_token:
                 raise AssertionError(f"enrollment failed: {enrollment!r}")
+            expect_http_error(
+                lambda: post_json_public(
+                    f"{base_url}/api/agent/enroll",
+                    {
+                        "code": enrollment_code,
+                        "device_id": "phone-user-enrolled-again",
+                        "display_name": "Phone enrolled again",
+                        "platform": "android",
+                    },
+                    timeout=15,
+                ),
+                401,
+            )
             enrolled_bootstrap = fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", enrolled_token)
             if enrolled_bootstrap.get("user", {}).get("id") != "phone-user":
                 raise AssertionError(f"enrolled token returned the wrong user: {enrolled_bootstrap!r}")
@@ -514,6 +583,12 @@ def main() -> int:
             )
             if disabled_device.get("ok") is not True or disabled_device.get("enabled") is not False:
                 raise AssertionError(f"agent device disable failed: {disabled_device!r}")
+            if int(disabled_device.get("cached_tokens_invalidated") or 0) < 1:
+                raise AssertionError(f"agent device disable did not invalidate its cached token: {disabled_device!r}")
+            expect_http_error(
+                lambda: fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", enrolled_token, timeout=15),
+                401,
+            )
             enabled_device = post_json(
                 opener,
                 f"{base_url}/api/admin/agent-devices",
@@ -521,6 +596,9 @@ def main() -> int:
             )
             if enabled_device.get("ok") is not True or enabled_device.get("enabled") is not True:
                 raise AssertionError(f"agent device enable failed: {enabled_device!r}")
+            reenabled_bootstrap = fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", enrolled_token)
+            if reenabled_bootstrap.get("user", {}).get("id") != "phone-user":
+                raise AssertionError(f"re-enabled agent token did not recover: {reenabled_bootstrap!r}")
             deleted_device = fetch_json_with_opener(
                 opener,
                 f"{base_url}/api/admin/agent-devices?id=phone-user-enrolled&hard=1",
@@ -528,6 +606,10 @@ def main() -> int:
             )
             if deleted_device.get("ok") is not True or deleted_device.get("deleted") is not True:
                 raise AssertionError(f"agent device delete failed: {deleted_device!r}")
+            expect_http_error(
+                lambda: fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", enrolled_token, timeout=15),
+                401,
+            )
 
             status_raw = subprocess.check_output(
                 [
@@ -559,7 +641,6 @@ def main() -> int:
                 proc.kill()
                 output, _ = proc.communicate(timeout=10)
             if proc.returncode not in (0, -15, 1):
-                print(output or "")
                 raise RuntimeError(f"control server exited unexpectedly: {proc.returncode}")
 
     print("Control server HTTP smoke passed.")

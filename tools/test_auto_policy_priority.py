@@ -8,6 +8,7 @@ import sys
 import tempfile
 import gc
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -594,6 +595,148 @@ def run_auto_worker_suppresses_unresolvable_apex_check(tmp: Path) -> None:
     )
 
 
+def run_auto_worker_active_domain_window_check(tmp: Path) -> None:
+    db_path = tmp / "active-domain-window.db"
+    app.init_db(db_path, INVENTORY)
+    origin = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    with app.connect(db_path) as conn:
+        for index in range(305):
+            timestamp = (origin + timedelta(seconds=index)).isoformat()
+            conn.execute(
+                """
+                INSERT INTO global_domain_routes (domain, server_id, enabled, created_at, updated_at)
+                VALUES (?, 'auto', 1, ?, ?)
+                """,
+                (f"domain-{index:03d}.example", timestamp, timestamp),
+            )
+        conn.execute(
+            """
+            INSERT INTO domain_discovery_queue (
+              domain, status, source, first_seen_at, last_seen_at, hit_count,
+              user_ids_json, client_ips_json, note
+            ) VALUES (?, 'promoted', 'test', ?, ?, 2, '[]', '[]', '')
+            """,
+            (
+                "domain-000.example",
+                origin.isoformat(),
+                (origin + timedelta(days=3650)).isoformat(),
+            ),
+        )
+        selected = app.auto_probe_domain_rows(conn, active_domain_limit=300)
+
+    selected_domains = [item["domain"] for item in selected]
+    assert_equal(len(selected_domains), 300, "active Auto domain window size")
+    assert_true("domain-000.example" in selected_domains, "recently used promoted domain should stay in the active window")
+    assert_true("domain-001.example" not in selected_domains, "old inactive domain should fall outside the active window")
+    assert_equal(selected_domains[0], "domain-000.example", "most recently active domain should be scheduled first")
+
+
+def run_auto_worker_cache_ttl_check(tmp: Path) -> None:
+    db_path = tmp / "auto-cache-ttl.db"
+    app.init_db(db_path, INVENTORY)
+    create_test_user(db_path)
+    app.save_transport_config(
+        db_path,
+        INVENTORY,
+        server_id="proxyde",
+        transport_type="http-proxy-tun",
+        interface_name="proxyde",
+        config={"server": "127.0.0.1", "server_port": 19080},
+        enabled=True,
+        source="test",
+    )
+    app.save_global_domain_route(db_path, INVENTORY, domain="ttl-window.example", server_id="auto")
+    with app.connect(db_path) as conn:
+        conn.execute("DELETE FROM global_domain_routes WHERE domain != 'ttl-window.example'")
+        conn.execute("DELETE FROM user_domain_routes")
+        conn.execute("DELETE FROM global_ip_routes WHERE server_id = 'auto'")
+        conn.execute("DELETE FROM user_ip_routes WHERE server_id = 'auto'")
+        conn.execute("UPDATE critical_services SET routing_enabled = 0")
+    app.save_auto_candidate_policy(
+        db_path,
+        INVENTORY,
+        user_id="",
+        domain="ttl-window.example",
+        candidate_server_ids=["proxyde"],
+        enabled=True,
+    )
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id="ttl-probe-device",
+        display_name="TTL Probe Device",
+        platform="linux",
+    )
+    timestamp = app.now()
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE agent_devices SET last_seen_at = ?, updated_at = ? WHERE id = 'ttl-probe-device'
+            """,
+            (timestamp, timestamp),
+        )
+        conn.execute(
+            """
+            INSERT INTO agent_status (device_id, status_json, reported_at)
+            VALUES ('ttl-probe-device', ?, ?)
+            """,
+            (
+                json.dumps(
+                    {
+                        "platform": "linux",
+                        "capabilities": {"can_manage_transports": True, "can_probe": True},
+                        "domain_routes": [{"domain": "ttl-window.example"}],
+                    }
+                ),
+                timestamp,
+            ),
+        )
+    app.save_auto_cache_entry(
+        db_path,
+        INVENTORY,
+        domain="ttl-window.example",
+        selected_server_id="proxyde",
+        score_ms=100,
+        status="agent_probe",
+    )
+
+    fresh = app.create_auto_probe_jobs_once(
+        db_path,
+        INVENTORY,
+        cache_ttl_seconds=3600,
+        max_jobs=50,
+        active_domain_limit=300,
+    )
+    assert_equal(
+        [item for item in fresh["created"] if item.get("domain") == "ttl-window.example"],
+        [],
+        "fresh Auto cache must suppress a new probe for that domain",
+    )
+    fresh_skip = [item for item in fresh["skipped"] if item.get("domain") == "ttl-window.example"]
+    assert_equal(fresh_skip[0]["reason"], "cache_fresh", "fresh Auto cache skip reason")
+    assert_true(fresh["active_auto_domains"] <= 300, "active Auto domain telemetry respects the limit")
+    assert_true(
+        fresh["total_auto_domains"] >= fresh["active_auto_domains"],
+        "total Auto domain telemetry includes the active window",
+    )
+
+    with app.connect(db_path) as conn:
+        conn.execute(
+            "UPDATE domain_auto_cache SET checked_at = '2000-01-01T00:00:00+00:00' WHERE domain = 'ttl-window.example'"
+        )
+    stale = app.create_auto_probe_jobs_once(
+        db_path,
+        INVENTORY,
+        cache_ttl_seconds=3600,
+        max_jobs=50,
+        active_domain_limit=300,
+    )
+    matching = [item for item in stale["created"] if item.get("domain") == "ttl-window.example"]
+    assert_equal(len(matching), 1, "stale Auto cache must create a new probe")
+    assert_equal(matching[0]["assigned_device_id"], "ttl-probe-device", "stale probe agent assignment")
+
+
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     target_cidr = "203.0.113.0/24"
     cache_key = app.auto_cache_key_for_ip_route(target_cidr)
@@ -731,6 +874,8 @@ def main() -> int:
         run_probe_claim_requires_transport_capability_check(db_path)
         run_auto_worker_skips_without_capable_agent_check(tmp_path)
         run_auto_worker_suppresses_unresolvable_apex_check(tmp_path)
+        run_auto_worker_active_domain_window_check(tmp_path)
+        run_auto_worker_cache_ttl_check(tmp_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
         run_service_group_shares_auto_winner_check(db_path)
         gc.collect()

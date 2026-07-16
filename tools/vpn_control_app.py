@@ -5440,7 +5440,11 @@ def choose_probe_agent(
     return ""
 
 
-def auto_probe_domain_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def auto_probe_domain_rows(
+    conn: sqlite3.Connection,
+    *,
+    active_domain_limit: int = 0,
+) -> list[dict[str, Any]]:
     entries = rows(
         conn,
         """
@@ -5483,6 +5487,17 @@ def auto_probe_domain_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
                 "service_key": service["service_key"],
             }
         )
+    discovery_activity = {
+        item["domain"]: item.get("last_seen_at") or ""
+        for item in rows(
+            conn,
+            """
+            SELECT domain, last_seen_at
+            FROM domain_discovery_queue
+            WHERE status = 'promoted'
+            """,
+        )
+    }
     seen: set[tuple[str, str]] = set()
     result: list[dict[str, Any]] = []
     for entry in entries:
@@ -5494,7 +5509,22 @@ def auto_probe_domain_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         if key in seen:
             continue
         seen.add(key)
+        entry["last_activity_at"] = max(
+            str(entry.get("updated_at") or ""),
+            str(discovery_activity.get(str(entry.get("domain") or "")) or ""),
+        )
         result.append(entry)
+    result.sort(
+        key=lambda item: (
+            str(item.get("last_activity_at") or ""),
+            str(item.get("updated_at") or ""),
+            str(item.get("domain") or ""),
+            str(item.get("user_id") or ""),
+        ),
+        reverse=True,
+    )
+    if active_domain_limit > 0:
+        return result[: max(1, int(active_domain_limit))]
     return result
 
 
@@ -5589,6 +5619,7 @@ def create_auto_probe_jobs_once(
     connect_timeout: int = 5,
     max_time: int = 12,
     unresolvable_retry_seconds: int = 86400,
+    active_domain_limit: int = 300,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     reference = datetime.now(timezone.utc)
@@ -5599,6 +5630,8 @@ def create_auto_probe_jobs_once(
     job_requests: list[dict[str, Any]] = []
     invalid_assignments: list[dict[str, Any]] = []
     active_agent_count = 0
+    total_auto_domains = 0
+    active_auto_domains = 0
     planned_domains: set[str] = set()
     with connect(db_path) as conn:
         conn.execute(
@@ -5655,7 +5688,14 @@ def create_auto_probe_jobs_once(
                 }
             )
         cache = auto_cache_map(conn)
-        for spec in auto_probe_domain_rows(conn):
+        all_specs = auto_probe_domain_rows(conn)
+        total_auto_domains = len(all_specs)
+        if active_domain_limit > 0:
+            active_specs = all_specs[: max(1, int(active_domain_limit))]
+        else:
+            active_specs = all_specs
+        active_auto_domains = len(active_specs)
+        for spec in active_specs:
             if len(job_requests) >= max_jobs:
                 break
             domain = spec["domain"]
@@ -5789,6 +5829,9 @@ def create_auto_probe_jobs_once(
         "max_jobs": max_jobs,
         "max_candidates_per_job": max_candidates_per_job,
         "unresolvable_retry_seconds": int(unresolvable_retry_seconds),
+        "active_domain_limit": int(active_domain_limit),
+        "active_auto_domains": active_auto_domains,
+        "total_auto_domains": total_auto_domains,
         "invalid_assignments": invalid_assignments,
     }
 
@@ -5892,6 +5935,7 @@ def auto_probe_worker_loop(
     max_candidates_per_job: int,
     connect_timeout: int,
     max_time: int,
+    active_domain_limit: int,
 ) -> None:
     update_worker_status(
         "auto_probe",
@@ -5914,6 +5958,7 @@ def auto_probe_worker_loop(
                 max_candidates_per_job=max_candidates_per_job,
                 connect_timeout=connect_timeout,
                 max_time=max_time,
+                active_domain_limit=active_domain_limit,
             )
             created_count = len(result.get("created") or [])
             update_worker_status(
@@ -5925,6 +5970,9 @@ def auto_probe_worker_loop(
                     "created": created_count,
                     "skipped": len(result.get("skipped") or []),
                     "active_agents": result.get("active_agents"),
+                    "active_auto_domains": result.get("active_auto_domains"),
+                    "total_auto_domains": result.get("total_auto_domains"),
+                    "active_domain_limit": result.get("active_domain_limit"),
                 },
             )
             if created_count:
@@ -9685,6 +9733,7 @@ class App:
         self.db_path = db_path
         self.inventory_path = inventory_path
         self.agent_token_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self.agent_token_denied_cache: dict[str, tuple[float, str]] = {}
         self.agent_token_cache_lock = threading.RLock()
         init_db(db_path, inventory_path)
 
@@ -9703,9 +9752,48 @@ class App:
                 return None
             return dict(device)
 
+    def agent_token_is_denied(self, token: str) -> bool:
+        now_epoch = time.time()
+        with self.agent_token_cache_lock:
+            denied = self.agent_token_denied_cache.get(token)
+            if not denied:
+                return False
+            expires_at, _device_id = denied
+            if expires_at <= now_epoch:
+                self.agent_token_denied_cache.pop(token, None)
+                return False
+            return True
+
     def cache_agent(self, token: str, device: dict[str, Any]) -> None:
         with self.agent_token_cache_lock:
             self.agent_token_cache[token] = (time.time() + AGENT_TOKEN_CACHE_SECONDS, dict(device))
+
+    def invalidate_agent(self, device_id: str, *, deny_cached: bool) -> int:
+        normalized_device_id = str(device_id or "").strip()
+        if not normalized_device_id:
+            return 0
+        with self.agent_token_cache_lock:
+            stale_tokens = [
+                token
+                for token, (_expires_at, device) in self.agent_token_cache.items()
+                if str(device.get("id") or "") == normalized_device_id
+            ]
+            for token in stale_tokens:
+                self.agent_token_cache.pop(token, None)
+                if deny_cached:
+                    self.agent_token_denied_cache[token] = (
+                        time.time() + AGENT_TOKEN_CACHE_SECONDS,
+                        normalized_device_id,
+                    )
+            if not deny_cached:
+                denied_tokens = [
+                    token
+                    for token, (_expires_at, denied_device_id) in self.agent_token_denied_cache.items()
+                    if denied_device_id == normalized_device_id
+                ]
+                for token in denied_tokens:
+                    self.agent_token_denied_cache.pop(token, None)
+            return len(stale_tokens)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -9857,6 +9945,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def agent_from_token(self, token: str | None) -> dict[str, Any] | None:
         if not token:
+            return None
+        if self.app.agent_token_is_denied(token):
             return None
         cached = self.app.cached_agent(token)
         if cached is not None:
@@ -10213,14 +10303,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(self.api_admin_create_enrollment_code(data))
             elif parsed.path == "/api/admin/agent-devices":
                 self.require_admin()
-                self.send_json(
-                    set_agent_device_enabled(
-                        self.app.db_path,
-                        self.app.inventory_path,
-                        device_id=str(data.get("id") or ""),
-                        enabled=bool(data.get("enabled")),
-                    )
+                device_id = str(data.get("id") or "")
+                result = set_agent_device_enabled(
+                    self.app.db_path,
+                    self.app.inventory_path,
+                    device_id=device_id,
+                    enabled=bool(data.get("enabled")),
                 )
+                result["cached_tokens_invalidated"] = self.app.invalidate_agent(
+                    device_id,
+                    deny_cached=not bool(data.get("enabled")),
+                )
+                self.send_json(result)
             elif parsed.path == "/api/agent/enroll":
                 self.send_json(self.api_agent_enroll(data))
             elif parsed.path == "/api/agent/status":
@@ -10328,22 +10422,21 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/agent-devices":
                 self.require_admin()
                 query = parse_qs(parsed.query)
+                device_id = query.get("id", [""])[0]
                 if query.get("hard", ["0"])[0] in {"1", "true", "yes"}:
-                    self.send_json(
-                        delete_agent_device(
-                            self.app.db_path,
-                            self.app.inventory_path,
-                            device_id=query.get("id", [""])[0],
-                        )
+                    result = delete_agent_device(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        device_id=device_id,
                     )
                 else:
-                    self.send_json(
-                        revoke_agent_device(
-                            self.app.db_path,
-                            self.app.inventory_path,
-                            device_id=query.get("id", [""])[0],
-                        )
+                    result = revoke_agent_device(
+                        self.app.db_path,
+                        self.app.inventory_path,
+                        device_id=device_id,
                     )
+                result["cached_tokens_invalidated"] = self.app.invalidate_agent(device_id, deny_cached=True)
+                self.send_json(result)
             elif parsed.path == "/api/service-aliases":
                 self.require_admin()
                 query = parse_qs(parsed.query)
@@ -10890,6 +10983,7 @@ class Handler(BaseHTTPRequestHandler):
             max_candidates_per_job=max(1, min(int(data.get("max_candidates_per_job") or 4), 50)),
             connect_timeout=max(1, min(int(data.get("connect_timeout") or 5), 60)),
             max_time=max(1, min(int(data.get("max_time") or 12), 120)),
+            active_domain_limit=max(1, min(int(data.get("active_domain_limit") or 300), 5000)),
         )
 
     def api_admin_provider_refresh(self, data: dict[str, Any]) -> dict[str, Any]:
@@ -11293,6 +11387,7 @@ def build_parser() -> argparse.ArgumentParser:
     auto_worker_once_parser.add_argument("--max-candidates-per-job", type=int, default=4)
     auto_worker_once_parser.add_argument("--connect-timeout", type=int, default=5)
     auto_worker_once_parser.add_argument("--max-time", type=int, default=12)
+    auto_worker_once_parser.add_argument("--active-domain-limit", type=int, default=300)
     auto_worker_once_parser.add_argument("--json", action="store_true", help="Print JSON result.")
 
     export_parser = sub.add_parser(
@@ -11456,6 +11551,7 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser.add_argument("--auto-worker-max-candidates-per-job", type=int, default=4)
     serve_parser.add_argument("--auto-worker-connect-timeout", type=int, default=5)
     serve_parser.add_argument("--auto-worker-max-time", type=int, default=12)
+    serve_parser.add_argument("--auto-worker-active-domain-limit", type=int, default=300)
     serve_parser.add_argument("--no-provider-refresh-worker", action="store_true", help="Disable background VPNtype/LokVPN transport refresh.")
     serve_parser.add_argument("--provider-refresh-provider", choices=["vpntype", "lokvpn", "all"], default="all")
     serve_parser.add_argument("--provider-refresh-interval", type=int, default=900)
@@ -12131,6 +12227,7 @@ def main() -> int:
             max_candidates_per_job=args.max_candidates_per_job,
             connect_timeout=args.connect_timeout,
             max_time=args.max_time,
+            active_domain_limit=args.active_domain_limit,
         )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -12606,6 +12703,7 @@ def main() -> int:
                     max_candidates_per_job=args.auto_worker_max_candidates_per_job,
                     connect_timeout=args.auto_worker_connect_timeout,
                     max_time=args.auto_worker_max_time,
+                    active_domain_limit=args.auto_worker_active_domain_limit,
                 )
                 update_worker_status(
                     "auto_probe",
@@ -12617,6 +12715,9 @@ def main() -> int:
                         "created": len(initial.get("created") or []),
                         "skipped": len(initial.get("skipped") or []),
                         "active_agents": initial.get("active_agents"),
+                        "active_auto_domains": initial.get("active_auto_domains"),
+                        "total_auto_domains": initial.get("total_auto_domains"),
+                        "active_domain_limit": initial.get("active_domain_limit"),
                     },
                 )
                 if initial.get("created"):
@@ -12638,6 +12739,7 @@ def main() -> int:
                     "max_candidates_per_job": args.auto_worker_max_candidates_per_job,
                     "connect_timeout": args.auto_worker_connect_timeout,
                     "max_time": args.auto_worker_max_time,
+                    "active_domain_limit": args.auto_worker_active_domain_limit,
                 },
                 daemon=True,
             )

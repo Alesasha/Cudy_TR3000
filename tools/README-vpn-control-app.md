@@ -381,12 +381,12 @@ Run the scheduler once. It creates at most a small batch of due probe jobs for
 enabled `auto` domain routes when Auto cache is missing or stale:
 
 ```powershell
-python tools\vpn_control_app.py auto-worker-once --max-jobs 5 --cache-ttl-seconds 3600
+python tools\vpn_control_app.py auto-worker-once --max-jobs 5 --cache-ttl-seconds 3600 --active-domain-limit 300
 ```
 
 `serve` starts the scheduler by default. Use `--no-auto-worker` only for
 debugging:
 
 ```powershell
-python tools\vpn_control_app.py serve --host 127.0.0.1 --port 8765 --auto-worker-interval 300
+python tools\vpn_control_app.py serve --host 127.0.0.1 --port 8765 --auto-worker-interval 300 --auto-worker-active-domain-limit 300
 ```

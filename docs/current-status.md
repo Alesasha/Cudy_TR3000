@@ -134,6 +134,12 @@ Remaining Android concerns:
   bounded 24-hour negative cache. This supports suffix routes such as
   `oaiusercontent.com` whose apex intentionally has no address while keeping a
   periodic retry.
+- The background scheduler now considers at most 300 recently changed or
+  promoted Auto targets per cycle. Fresh winners are skipped until their TTL
+  expires; stale winners become probe-eligible again. Worker status reports the
+  selected window and total target counts. Regression tests cover a 305-domain
+  set and fresh/stale cache behavior; a production traffic soak is still needed
+  before calling the real-usage requirement complete.
 - Global and per-user aliases are isolated and tested.
 - Important Service dependency groups can share one cache key, candidate list
   and winner; an isolated production staging test passed and was cleaned up.
@@ -155,6 +161,12 @@ Remaining Android concerns:
   authoritative for fallback health.
 - Full enrollment/update/device lifecycle usability still needs the Phase 4
   audit and automated rendered regression coverage.
+- The HTTP lifecycle regression now creates and deletes a user, revokes and
+  consumes one-time enrollment codes, rejects code reuse, and verifies that
+  disabled/deleted device tokens fail immediately while Enable restores the
+  same token. Agent token caches are invalidated on every device state change.
+  Rendered confirmation/wording of destructive actions still needs the Phase 4
+  usability pass.
 
 ## Non-Negotiable Safety Gates
 

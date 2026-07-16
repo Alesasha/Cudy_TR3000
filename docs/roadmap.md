@@ -63,8 +63,9 @@ recovery, and a user-facing UI that does not expose raw engine internals.
 
 1. Add browser-rendered checks for JavaScript-only geographic decisions while
    preserving existing regex/content checks for ordinary probes.
-2. Verify TTL refresh and approximately 300 recently active domains under real
-   traffic.
+2. Soak the implemented TTL refresh and bounded 300-domain activity window
+   under real traffic. Local regressions cover 305 targets and fresh/stale
+   cache behavior; agent-side real-usage reporting remains to be validated.
 3. Finish the reviewed daily domain/IP list update flow; unknown traffic stays
    Direct until an admin-approved promotion.
 4. Verify global/user default and domain-specific candidate precedence through
@@ -83,6 +84,8 @@ provider failure moves traffic to the next valid candidate.
    system health.
 2. Replace ambiguous actions and dead controls; device enable/disable/delete
    must be reversible and explicit.
+   The API lifecycle and immediate token invalidation are regression-tested;
+   rendered destructive-action UX remains to be completed.
 3. Keep user entry authenticated by agent identity and admin entry protected by
    credentials.
 4. Show applied policy, pending probe, current Auto winner, offline agent,
