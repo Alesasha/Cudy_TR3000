@@ -123,10 +123,11 @@ function Set-EndpointRoute([int]$WifiIndex, [string]$WifiGateway, [string]$Endpo
         Where-Object NextHop -eq $WifiGateway |
         Sort-Object RouteMetric |
         Select-Object -First 1
-    if ($existing) { return }
+    if ($existing) { return $false }
     Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $prefix -InterfaceIndex $WifiIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
         Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
     New-NetRoute -AddressFamily IPv4 -DestinationPrefix $prefix -InterfaceIndex $WifiIndex -NextHop $WifiGateway -RouteMetric 1 -PolicyStore ActiveStore | Out-Null
+    return $true
 }
 
 function Test-Guard([int]$WifiIndex, [string]$Endpoint) {
@@ -144,8 +145,12 @@ function Test-Guard([int]$WifiIndex, [string]$Endpoint) {
     $tunnel = Get-NetAdapter -Name $TunnelAlias -ErrorAction Stop
     if ($tunnel.Status -ne "Up") { throw "Tunnel adapter '$TunnelAlias' is not Up." }
 
-    & curl.exe -4 --silent --show-error --connect-timeout 5 --max-time 12 $RequiredUrl | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "Required URL is not reachable through the maintenance tunnel: $RequiredUrl" }
+    foreach ($attempt in 1..3) {
+        & curl.exe -4 --silent --show-error --connect-timeout 5 --max-time 12 $RequiredUrl | Out-Null
+        if ($LASTEXITCODE -eq 0) { return }
+        Start-Sleep -Seconds 2
+    }
+    throw "Required URL is not reachable through the maintenance tunnel after 3 attempts: $RequiredUrl"
 }
 
 if (-not (Test-IsAdministrator)) {
@@ -166,6 +171,13 @@ if (-not (Test-IsAdministrator)) {
 }
 
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
+
+$hadExistingState = Test-Path -LiteralPath $statePath
+$previousMonitorPid = 0
+if (-not $Monitor -and (Test-Path -LiteralPath $pidPath)) {
+    $rawPreviousPid = (Get-Content -LiteralPath $pidPath -Raw -ErrorAction SilentlyContinue).Trim()
+    [void][int]::TryParse($rawPreviousPid, [ref]$previousMonitorPid)
+}
 
 if ($Monitor) {
     Write-GuardLog "monitor started pid=$PID endpoint=$TunnelEndpoint"
@@ -190,8 +202,7 @@ $routeAdded = $false
 try {
     $wifi = Enable-WifiPath
     $endpoint = Find-TunnelEndpoint
-    Set-EndpointRoute -WifiIndex $wifi.InterfaceIndex -WifiGateway $wifi.Gateway -Endpoint $endpoint
-    $routeAdded = $true
+    $routeAdded = Set-EndpointRoute -WifiIndex $wifi.InterfaceIndex -WifiGateway $wifi.Gateway -Endpoint $endpoint
     Start-Sleep -Seconds 2
     Test-Guard -WifiIndex $wifi.InterfaceIndex -Endpoint $endpoint
 
@@ -224,6 +235,9 @@ try {
     if ($WifiProfile) { $monitorArgs += @("-WifiProfile", (Quote-Argument $WifiProfile)) }
     $monitorProcess = Start-Process powershell.exe -WindowStyle Hidden -ArgumentList ($monitorArgs -join " ") -PassThru
     Set-Content -LiteralPath $pidPath -Value $monitorProcess.Id -Encoding ASCII
+    if ($previousMonitorPid -gt 0 -and $previousMonitorPid -ne $monitorProcess.Id) {
+        Stop-Process -Id $previousMonitorPid -Force -ErrorAction SilentlyContinue
+    }
 
     Write-GuardLog "armed wifi=$WifiAlias gateway=$($wifi.Gateway) endpoint=$endpoint monitor=$($monitorProcess.Id)"
     Write-Host "Cudy maintenance guard is ARMED." -ForegroundColor Green
@@ -237,7 +251,9 @@ try {
         Get-NetRoute -AddressFamily IPv4 -DestinationPrefix "$endpoint/32" -InterfaceIndex $wifi.InterfaceIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
             Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
     }
-    Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    if (-not $hadExistingState) {
+        Remove-Item -LiteralPath $statePath -Force -ErrorAction SilentlyContinue
+    }
     Write-GuardLog "arm failed: $($_.Exception.Message)"
     Write-Error "Cudy maintenance guard was not armed: $($_.Exception.Message)"
     exit 1

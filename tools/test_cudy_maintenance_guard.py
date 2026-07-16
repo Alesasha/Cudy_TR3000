@@ -21,6 +21,7 @@ def main() -> int:
         "arm failed:",
         "(?:Profile|Профиль)",
         "$script:WifiProfile",
+        "$previousMonitorPid",
     )
     required_stop = (
         "Remove-NetRoute",
@@ -33,6 +34,8 @@ def main() -> int:
         assert needle in STOP, f"stop guard is missing {needle!r}"
     assert "Remove-NetRoute" not in START.split("function Set-EndpointRoute", 1)[0]
     assert "$routeAdded" in START
+    assert "after 3 attempts" in START
+    assert "$hadExistingState" in START
     print("Cudy maintenance guard regression passed.")
     return 0
 
