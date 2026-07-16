@@ -63,14 +63,13 @@ recovery, and a user-facing UI that does not expose raw engine internals.
 
 1. Add browser-rendered checks for JavaScript-only geographic decisions while
    preserving existing regex/content checks for ordinary probes.
-2. Make probe history show why a candidate failed, not only latency/speed.
-3. Verify TTL refresh and approximately 300 recently active domains under real
+2. Verify TTL refresh and approximately 300 recently active domains under real
    traffic.
-4. Finish the reviewed daily domain/IP list update flow; unknown traffic stays
+3. Finish the reviewed daily domain/IP list update flow; unknown traffic stays
    Direct until an admin-approved promotion.
-5. Verify global/user default and domain-specific candidate precedence through
+4. Verify global/user default and domain-specific candidate precedence through
    one full production scenario.
-6. Keep control-server transport plans minimal so agents start only exits used
+5. Keep control-server transport plans minimal so agents start only exits used
    by routes or an active probe window.
 
 Exit criteria: admin sets a global default, a user overrides one service,

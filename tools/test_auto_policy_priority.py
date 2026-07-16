@@ -580,6 +580,18 @@ def run_auto_worker_suppresses_unresolvable_apex_check(tmp: Path) -> None:
         [],
         "unresolvable apex should not create another probe",
     )
+    history = app.recent_auto_winners(
+        db_path,
+        INVENTORY,
+        target="suffix-only.example",
+        limit=10,
+    )
+    assert_equal(len(history["failures"]), 1, "failed Auto history entry")
+    assert_equal(
+        [item["reason"] for item in history["failures"][0]["checks"]],
+        ["resolve_failed", "resolve_failed"],
+        "failed Auto history reasons",
+    )
 
 
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:

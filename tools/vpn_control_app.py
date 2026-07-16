@@ -1552,16 +1552,27 @@ ADMIN_HTML = r"""<!doctype html>
       const container = document.getElementById(`${prefix}AutoWinners`);
       if (!container) return;
       const winners = (data && data.winners) || [];
-      if (!winners.length) {
+      const failures = (data && data.failures) || [];
+      if (!winners.length && !failures.length) {
         container.textContent = "";
         return;
       }
-      container.innerHTML = "Last winners: " + winners.map(item => {
+      const winnerText = winners.map(item => {
         const latency = item.latency_ms == null ? "-" : `${item.latency_ms}ms`;
         const speed = item.speed_mbps == null ? "" : `, ${item.speed_mbps}Mbps`;
         const target = item.domain || "";
-        return `${item.winner_server_id} (${latency}${speed}, ${target})`;
+        return `${escapeHtml(item.winner_server_id || "-")} (${escapeHtml(latency + speed)}, ${escapeHtml(target)})`;
       }).join(" | ");
+      const failureText = failures.slice(0, 3).map(item => {
+        const checks = (item.checks || []).slice(0, 4).map(check =>
+          `${escapeHtml(check.server_id || "-")}: ${escapeHtml(check.reason || "failed")}`
+        ).join(", ");
+        return `${escapeHtml(item.domain || "-")} (${checks || escapeHtml(item.reason || "failed")})`;
+      }).join(" | ");
+      container.innerHTML = [
+        winnerText ? `Last winners: ${winnerText}` : "",
+        failureText ? `Recent failures: ${failureText}` : ""
+      ].filter(Boolean).join("<br>");
     }
     async function loadRecentWinners(prefix, target) {
       const container = document.getElementById(`${prefix}AutoWinners`);
@@ -9487,6 +9498,17 @@ def speed_mbps_from_check(check: dict[str, Any]) -> float | None:
     return None
 
 
+def probe_check_failure_reason(check: dict[str, Any]) -> str:
+    for key in ("semantic_status", "resolve_status", "error"):
+        value = str(check.get(key) or "").strip()
+        if value and value not in {"ok", "resolved"}:
+            return value
+    http_code = check.get("http_code")
+    if http_code not in (None, "", 0, "0"):
+        return f"http_{http_code}"
+    return "failed"
+
+
 def recent_auto_winners(db_path: Path, inventory_path: Path, *, target: str = "", limit: int = 10) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     limit = max(1, min(int(limit), 50))
@@ -9504,6 +9526,18 @@ def recent_auto_winners(db_path: Path, inventory_path: Path, *, target: str = ""
                    winner_server_id, score_ms, result_json, updated_at, finished_at
             FROM agent_probe_jobs
             WHERE {where}
+            ORDER BY COALESCE(finished_at, updated_at) DESC
+            LIMIT ?
+            """,
+            (*params, limit),
+        )
+        failed_entries = rows(
+            conn,
+            f"""
+            SELECT id, domain, user_id, candidate_server_ids, claimed_by_device_id,
+                   error, result_json, updated_at, finished_at
+            FROM agent_probe_jobs
+            WHERE {where.replace("status = 'done' AND winner_server_id IS NOT NULL", "status = 'failed'")}
             ORDER BY COALESCE(finished_at, updated_at) DESC
             LIMIT ?
             """,
@@ -9591,7 +9625,36 @@ def recent_auto_winners(db_path: Path, inventory_path: Path, *, target: str = ""
                 "status": item.get("status") or "",
             }
         )
-    return {"ok": True, "target": target, "cache_keys": keys, "winners": result}
+    failures: list[dict[str, Any]] = []
+    for item in failed_entries:
+        try:
+            payload = json.loads(item.pop("result_json") or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        try:
+            candidates = json.loads(item.get("candidate_server_ids") or "[]")
+        except json.JSONDecodeError:
+            candidates = []
+        checks = payload.get("checks") if isinstance(payload.get("checks"), list) else []
+        check_failures = [
+            {
+                "server_id": str(check.get("server_id") or ""),
+                "reason": probe_check_failure_reason(check),
+                "latency_ms": check.get("time_total_ms") or check.get("elapsed_ms"),
+                "http_code": check.get("http_code"),
+            }
+            for check in checks
+            if isinstance(check, dict) and not check.get("ok")
+        ]
+        failures.append(
+            {
+                **item,
+                "candidate_server_ids": candidates,
+                "reason": str(item.get("error") or payload.get("error") or "no working candidate"),
+                "checks": check_failures,
+            }
+        )
+    return {"ok": True, "target": target, "cache_keys": keys, "winners": result, "failures": failures}
 
 
 class App:

@@ -91,7 +91,9 @@ Verified acceptance:
 - a production probe job tested `proxyde` and `proxynl` while browser traffic
   stayed active;
 - probe jobs now use persistent loopback-only mixed inbounds and do not reload
-  or interrupt the active TUN.
+  or interrupt the active TUN;
+- a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
+  the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
 
 Remaining Android concerns:
 
@@ -134,6 +136,9 @@ Remaining Android concerns:
 - Important Service dependency groups can share one cache key, candidate list
   and winner; an isolated production staging test passed and was cleaned up.
 - Generic success/failure regexes and known geo-block content checks exist.
+- Recent Auto history now returns failed jobs with per-candidate reasons,
+  latency and HTTP status; the admin candidate editor displays up to three
+  recent failures next to the last ten winners.
 - Admin and user UI are operational, but need a focused end-to-end usability
   and lifecycle audit against the current model.
 
