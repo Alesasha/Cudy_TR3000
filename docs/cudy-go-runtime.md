@@ -241,7 +241,7 @@ forwarding state, so a failed or repeated rebuild can disconnect the LAN.
 The production boot path is therefore:
 
 ```text
-cudy-pbr-watchdog (START=97, fail-open only)
+cudy-pbr-watchdog (START=97, recover once then fail open)
 cudy-pbr-safe      (START=99, delayed serialized start)
 ```
 
@@ -263,8 +263,10 @@ interface-triggered reloads, enables the watchdog, and leaves IPv4 forwarding
 enabled. The bundled `cudy-cidr-collapse` tool normalizes downloaded and
 override IPv4 ranges before they enter an interval set; this avoids both
 overlap errors and the nftables auto-merge serialization crash. Any validation
-failure stops PBR and preserves direct WAN forwarding. The watchdog never
-starts PBR itself.
+failure stops PBR and preserves direct WAN forwarding. The watchdog first
+attempts one serialized safe restart when the real nft/ip-rule dataplane
+disappears; if recovery fails, it stops PBR and preserves direct WAN instead
+of entering a restart loop.
 
 ## Router Agent
 

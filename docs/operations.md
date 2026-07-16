@@ -330,6 +330,29 @@ address explicitly.
 
 ## Guarded Cudy Transport Bootstrap
 
+Before any live Cudy routing or transport change, move the operator/control
+path off Cudy. On the Windows development workstation, keep the AmneziaVPN APP
+connected, connect Wi-Fi directly to the main router, and arm the maintenance
+guard from an elevated PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Start-CudyMaintenanceGuard.ps1
+```
+
+The guard pins the active AmneziaVPN endpoint to the Wi-Fi gateway, verifies
+that OpenAI remains reachable through that tunnel, verifies that Cudy
+management still resolves over Ethernet, and runs a hidden repair loop. It
+refuses to arm if any prerequisite is missing. A specific saved Wi-Fi profile
+or tunnel endpoint can be supplied with `-WifiProfile` and `-TunnelEndpoint`.
+Disarm it after the maintenance window:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Stop-CudyMaintenanceGuard.ps1
+```
+
+This out-of-band guard protects the operator session only. It is not evidence
+that Cudy PBR works and must not be counted as a router acceptance check.
+
 The first router-agent apply trial is intentionally override-only. If its
 preview reports `transport_actions`, prepare those exits in a separate guarded
 transaction first:

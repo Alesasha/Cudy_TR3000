@@ -134,7 +134,7 @@ and cached policy preview. The separate Go `cudy-router-agent` renders desired
 OpenWrt artifacts. Its rollout states are `disabled`, `observe` and `apply`;
 apply is not enabled until repeated observe diffs and connectivity gates pass.
 
-PBR uses a delayed serialized boot wrapper and a fail-open watchdog. Validation
+PBR uses a delayed serialized boot wrapper and a recover-once/fail-open watchdog. Validation
 failure stops PBR while keeping IPv4 forwarding and direct WAN available.
 
 ## Failure Behaviour

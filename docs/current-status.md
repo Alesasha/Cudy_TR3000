@@ -68,6 +68,17 @@ Verified fallback state:
 The Go `cudy-router-agent` remains intentionally in `observe` mode. It does not
 own PBR, DHCP or WAN routing.
 
+Live PBR is currently stopped and Cudy LAN traffic is fail-open Direct. A
+physical-interface probe from `192.168.8.102` returned the home WAN address
+`195.170.35.108` for ChatGPT even though the `proxyde` nft set contained the
+resolved destination addresses. The exact cause is confirmed: the deployed
+watchdog incorrectly treated `/var/run/pbr.lock`, a transient rebuild lock, as
+a persistent running marker. When the lock disappeared it stopped PBR, removed
+all fwmark `ip rule` entries and emptied `pbr_prerouting`. AmneziaVPN APP is the
+temporary operator channel. The source fix validates the real nft/ip-rule
+dataplane and attempts one serialized recovery before failing open, but it has
+not been deployed live yet.
+
 The read-only router-agent gate is green:
 
 - critical health is 5/5 and policy blockers are zero;
@@ -205,6 +216,9 @@ Remaining Android concerns:
 
 - Do not enable `cudy-router-agent` apply outside the guarded trial with its
   independent timed rollback, even though observe checks are green.
+- Do not make another live Cudy PBR/transport change until the Windows
+  maintenance guard has pinned the independent AmneziaVPN endpoint to a Wi-Fi
+  path that bypasses Cudy and has verified OpenAI reachability.
 - Do not move DHCP or WAN ownership from AirTies to Cudy before both guarded
   apply trials pass.
 - Do not enable the Windows development task without the independent watchdog
@@ -215,7 +229,9 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Complete platform-agent acceptance, starting with a controlled Windows run
-behind the independent watchdog while Android continues its background soak.
-Linux acceptance remains dependent on Dima's next real-world session. The
-detailed order and exit criteria are in `docs/roadmap.md`.
+Arm the independent Wi-Fi maintenance path, deploy the corrected PBR safety
+scripts, and run one controlled PBR recovery with explicit physical-Ethernet
+checks for Direct, ChatGPT and Telegram. Only after that gate passes should the
+guarded transport bootstrap resume. Platform-agent acceptance follows while
+Android continues its background soak; Linux acceptance remains dependent on
+Dima's next real-world session.

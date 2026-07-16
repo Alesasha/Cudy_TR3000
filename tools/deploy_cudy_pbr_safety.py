@@ -113,8 +113,13 @@ printf 'auto_merge='
 uci -q get pbr.config.nft_set_auto_merge
 printf 'reload_delay='
 uci -q get pbr.config.procd_reload_delay
-printf 'pbr_marker='
-[ -e /var/run/pbr.lock ] && printf present || printf absent
+printf 'pbr_dataplane='
+if ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' && \
+   nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_'; then
+  printf ready
+else
+  printf missing
+fi
 printf '\nfailed_state='
 cat /var/run/cudy-pbr-safety/failed 2>/dev/null || printf none
 printf '\nfw4_check='
@@ -135,7 +140,7 @@ printf 'recent_logs_end\n'
             key, value = line.split("=", 1)
             if key in {
                 "watchdog", "pbr_enabled", "safe_enabled", "ip_forward",
-                "strict_enforcement", "reload_delay", "pbr_marker",
+                "strict_enforcement", "reload_delay", "pbr_dataplane",
                 "auto_merge", "failed_state", "fw4_check", "wan_ping",
             }:
                 fields[key] = value
@@ -151,7 +156,7 @@ printf 'recent_logs_end\n'
         and fields.get("wan_ping") == "ok"
     )
     if args.start_pbr:
-        ok = ok and fields.get("pbr_marker") == "present" and fields.get("failed_state") == "none"
+        ok = ok and fields.get("pbr_dataplane") == "ready" and fields.get("failed_state") == "none"
     return {"ok": ok, "host": args.host, "start_pbr": args.start_pbr, "fields": fields, "output": output}
 
 

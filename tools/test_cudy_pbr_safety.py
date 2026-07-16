@@ -6,18 +6,21 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class CudyPBRSafetyTests(unittest.TestCase):
-    def test_watchdog_is_fail_open_only(self) -> None:
+    def test_watchdog_recovers_once_then_fails_open(self) -> None:
         text = (ROOT / "openwrt" / "cudy-pbr-watchdog").read_text(encoding="utf-8")
         self.assertIn("echo 1 > /proc/sys/net/ipv4/ip_forward", text)
         self.assertIn("/etc/init.d/pbr stop", text)
-        self.assertNotIn("/etc/init.d/pbr start", text)
-        self.assertNotIn("/etc/init.d/pbr restart", text)
+        self.assertIn("/usr/bin/cudy-pbr-safe-restart restart", text)
+        self.assertIn("pbr_dataplane_ready", text)
+        self.assertNotIn("/var/run/pbr.lock", text)
 
     def test_safe_start_serializes_and_validates(self) -> None:
         text = (ROOT / "openwrt" / "cudy-pbr-safe-restart").read_text(encoding="utf-8")
         self.assertIn('mkdir "$LOCK_DIR"', text)
         self.assertIn("fw4 check", text)
-        self.assertIn("/var/run/pbr.lock", text)
+        self.assertIn("pbr_dataplane_ready", text)
+        self.assertIn("wait_for_dataplane", text)
+        self.assertNotIn("/var/run/pbr.lock", text)
         self.assertIn("fail_open", text)
 
     def test_router_agent_uses_safe_bootstrap(self) -> None:

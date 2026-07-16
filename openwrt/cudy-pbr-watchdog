@@ -1,6 +1,6 @@
 #!/bin/sh
 
-# Independent fail-open guard. It never starts PBR; it only restores forwarding.
+# Independent PBR guard. It attempts one serialized recovery, then fails open.
 set -u
 
 STATE_DIR="${STATE_DIR:-/var/run/cudy-pbr-safety}"
@@ -17,6 +17,24 @@ set_forwarding() {
     if [ -e /proc/sys/net/ipv6/conf/all/forwarding ]; then
         echo 1 > /proc/sys/net/ipv6/conf/all/forwarding 2>/dev/null || true
     fi
+}
+
+pbr_dataplane_ready() {
+    ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' || return 1
+    nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_' || return 1
+}
+
+recover_pbr() {
+    reason="$1"
+    log "$reason; attempting one serialized PBR recovery"
+    if /usr/bin/cudy-pbr-safe-restart restart >/tmp/cudy-pbr-watchdog-recover.log 2>&1; then
+        if pbr_dataplane_ready; then
+            log "PBR dataplane recovery succeeded"
+            return 0
+        fi
+    fi
+    fail_open "$reason; recovery failed"
+    return 1
 }
 
 fail_open() {
@@ -46,8 +64,8 @@ while true; do
         if [ $((now - started)) -gt "$START_MAX_AGE" ]; then
             fail_open "PBR rebuild exceeded ${START_MAX_AGE}s"
         fi
-    elif [ -e "$STATE_DIR/expected" ] && [ ! -e /var/run/pbr.lock ]; then
-        fail_open "PBR running marker disappeared"
+    elif [ -e "$STATE_DIR/expected" ] && ! pbr_dataplane_ready; then
+        recover_pbr "PBR dataplane disappeared" || true
     fi
 
     sleep "$INTERVAL"

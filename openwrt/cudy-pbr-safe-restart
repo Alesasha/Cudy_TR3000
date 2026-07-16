@@ -6,6 +6,7 @@ set -u
 LOCK_DIR="${LOCK_DIR:-/tmp/cudy-pbr-safe.lock}"
 STATE_DIR="${STATE_DIR:-/var/run/cudy-pbr-safety}"
 START_TIMEOUT="${START_TIMEOUT:-240}"
+READY_TIMEOUT="${READY_TIMEOUT:-15}"
 BOOT_DELAY="${BOOT_DELAY:-45}"
 TAG="cudy-pbr-safe"
 
@@ -27,6 +28,23 @@ run_with_timeout() {
     else
         "$@"
     fi
+}
+
+pbr_dataplane_ready() {
+    ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' || return 1
+    nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_' || return 1
+}
+
+wait_for_dataplane() {
+    elapsed=0
+    while [ "$elapsed" -lt "$READY_TIMEOUT" ]; do
+        if pbr_dataplane_ready; then
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+    return 1
 }
 
 fail_open() {
@@ -91,8 +109,8 @@ if ! run_with_timeout /etc/init.d/pbr start >/tmp/cudy-pbr-start.log 2>&1; then
 fi
 set_forwarding
 
-if [ ! -e /var/run/pbr.lock ]; then
-    fail_open "pbr did not publish its running marker"
+if ! wait_for_dataplane; then
+    fail_open "pbr dataplane did not become ready"
     exit $?
 fi
 if ! fw4 check >/tmp/cudy-pbr-fw4-check.log 2>&1; then
