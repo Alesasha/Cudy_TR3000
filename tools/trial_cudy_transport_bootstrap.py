@@ -146,7 +146,10 @@ for service in {service_words}; do
   /etc/init.d/$service enabled 2>/dev/null && touch "$trial/service-$service.enabled" || true
   /etc/init.d/$service status 2>/dev/null | grep -q running && touch "$trial/service-$service.running" || true
 done
-/etc/init.d/pbr status 2>/dev/null | grep -q running && touch "$trial/pbr.was-running" || true
+if ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' && \
+   nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_'; then
+  touch "$trial/pbr.was-running"
+fi
 cp /tmp/cudy-transport-trial-rollback.sh "$trial/rollback.sh"
 chmod 0700 "$trial/rollback.sh"
 test -x /sbin/start-stop-daemon

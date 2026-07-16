@@ -4,8 +4,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from trial_cudy_router_agent_apply import build_parser, rollback_script, validate_preflight
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def healthy_state() -> dict:
@@ -43,13 +47,19 @@ def main() -> int:
     assert any("refuses plans" in item for item in validate_preflight(transport, max_age_seconds=300))
 
     guard = rollback_script("/root/cudy-router-trials/test", 300)
-    assert "sleep 300" in guard
+    assert 'sleep "$delay"' in guard
+    assert 'touch "$trial/armed"' in guard
     assert "[ -f \"$trial/commit\" ] && exit 0" in guard
+    assert "[ -f \"$trial/rolled-back\" ] && exit 0" in guard
     assert "cudy-router-agent.main.mode='observe'" in guard
     assert "/usr/bin/cudy-pbr-safe-restart" in guard
     assert "/etc/init.d/pbr stop" in guard
     assert "managed-paths.next.json" in guard
     assert "pbr.was-running" in guard
+    source = (ROOT / "tools" / "trial_cudy_router_agent_apply.py").read_text(encoding="utf-8")
+    assert "/sbin/start-stop-daemon" in source
+    assert "test -f \"$trial/armed\"" in source
+    assert "/etc/init.d/pbr status" not in source
     print("Guarded Cudy apply trial regression passed.")
     return 0
 

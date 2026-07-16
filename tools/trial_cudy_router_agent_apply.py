@@ -118,8 +118,12 @@ def rollback_script(trial_path: str, trial_seconds: int) -> str:
     return f"""#!/bin/sh
 set -u
 trial={quoted}
-sleep {trial_seconds}
+delay="${{1:-{trial_seconds}}}"
+touch "$trial/armed"
+[ "$delay" = "0" ] || sleep "$delay"
+rm -f "$trial/rollback.pid"
 [ -f "$trial/commit" ] && exit 0
+[ -f "$trial/rolled-back" ] && exit 0
 /etc/init.d/cudy-router-agent stop 2>/dev/null || true
 while IFS='|' read -r existed index path; do
   [ -n "$path" ] || continue
@@ -172,7 +176,10 @@ for name in managed-paths.json managed-paths.next.json; do
     touch "$trial/state/$name.existed"
   fi
 done
-/etc/init.d/pbr status 2>/dev/null | grep -q running && touch "$trial/pbr.was-running" || true
+if ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' && \
+   nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_'; then
+  touch "$trial/pbr.was-running"
+fi
 : > "$trial/paths"
 index=0
 for path in {path_words}; do
@@ -186,15 +193,26 @@ for path in {path_words}; do
 done
 cp /tmp/cudy-router-trial-rollback.sh "$trial/rollback.sh"
 chmod 0700 "$trial/rollback.sh"
-nohup "$trial/rollback.sh" >"$trial/rollback.log" 2>&1 </dev/null &
-echo $! > "$trial/rollback.pid"
+test -x /sbin/start-stop-daemon
+/sbin/start-stop-daemon -S -b -m -p "$trial/rollback.pid" \
+  -x "$trial/rollback.sh" -O "$trial/rollback.log" -- {args.trial_seconds}
+i=0
+while [ "$i" -lt 5 ]; do
+  [ -f "$trial/armed" ] && break
+  sleep 1
+  i=$((i + 1))
+done
+test -f "$trial/armed"
 uci set cudy-router-agent.main.mode='apply'
 uci set cudy-router-agent.main.allow_apply='1'
 uci commit cudy-router-agent
-/etc/init.d/cudy-router-agent restart
+if ! /etc/init.d/cudy-router-agent restart; then
+  "$trial/rollback.sh" 0
+  exit 1
+fi
 printf '%s\n' "$trial"
 """.strip()
-    rc, output = ssh_exec(client, command, args.timeout)
+    rc, output = ssh_exec(client, command, max(args.timeout, 120))
     if rc != 0:
         raise RuntimeError(output)
     return output.splitlines()[-1].strip()

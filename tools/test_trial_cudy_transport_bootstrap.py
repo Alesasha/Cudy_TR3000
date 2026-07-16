@@ -13,6 +13,9 @@ from trial_cudy_transport_bootstrap import (
 )
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 def healthy_state() -> dict:
     return {
         "service": "running",
@@ -75,6 +78,8 @@ def main() -> int:
     assert "/sbin/start-stop-daemon -S -b -m" in source
     assert "test -f \"$trial/armed\"" in source
     assert "touch \"$trial/armed\"" in guard
+    source = (ROOT / "tools" / "trial_cudy_transport_bootstrap.py").read_text(encoding="utf-8")
+    assert "/etc/init.d/pbr status" not in source
     assert "nohup" not in source
     print("Guarded Cudy transport bootstrap regression passed.")
     return 0
