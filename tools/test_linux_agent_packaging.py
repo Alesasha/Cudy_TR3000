@@ -115,6 +115,9 @@ def main() -> int:
     assert_contains(agent_ui_py, "Canvas", label="cudy_agent_ui.py")
     assert_contains(agent_ui_py, "draw_indicator", label="cudy_agent_ui.py")
     assert_contains(agent_ui_py, "CONTROL_START_GRACE_SECONDS", label="cudy_agent_ui.py")
+    assert_contains(agent_ui_py, 'title = "STARTING"', label="cudy_agent_ui.py")
+    if 'title = "START"' in agent_ui_py:
+        raise AssertionError("Linux UI must label the transient state as STARTING, not START")
     assert_contains(agent_ui_py, "service_active_age_seconds", label="cudy_agent_ui.py")
     assert_contains(agent_ui_py, "ActiveEnterTimestampMonotonic", label="cudy_agent_ui.py")
     assert_contains(agent_ui_py, "Connecting...", label="cudy_agent_ui.py")

@@ -103,9 +103,11 @@ now uses a dedicated standalone `OpenAI-USWest` AWG service whose endpoint is
 pinned to the physical Wi-Fi path. It installs only current OpenAI `/32` routes,
 has no default or `/1` routes, and the OpenAI probe currently succeeds through
 `uswest`. The source now persists and self-heals the physical endpoint pin and
-refreshes OpenAI routes every two minutes. The live service still has the older
-state schema and its scheduled refresh task is absent; an elevated task-only
-repair and reboot test remain required before this is a verified recovery path.
+refreshes OpenAI routes every two minutes. The scheduled refresh task is
+installed and a two-reboot test passed: Windows changed the Wi-Fi index twice,
+the task reconnected profile `Sel23aw028`, selected the current adapter index,
+removed the stale endpoint route and restored OpenAI without a default or `/1`
+route on the AWG adapter.
 A manually connected AmneziaVPN application tunnel suspends the dedicated
 service to prevent nested VPN routing. Cudy management remains on Ethernet
 `192.168.8.102 -> 192.168.8.1`.
@@ -115,28 +117,8 @@ latest control-server Auto plan. The current control policy differs from two
 live override files. Policy/transport synchronization therefore remains a
 separate guarded apply step.
 
-The fallback gate is operational, but repeated strict checks are not yet
-stable enough to permit apply:
+The fallback and observer gates now satisfy the read-only preflight baseline:
 
-- a strict router-agent check can pass with critical health 5/5 and zero
-  blockers, while adjacent cycles still report preview or critical-service
-  timeouts;
-- 22 effective routes currently produce transport and override changes because
-  Auto winners moved while the Android/Auto soak was running;
-- the override-only trial correctly refuses to mix those two transport actions
-  with route changes;
-- a separate guarded transport-bootstrap preview passes and identifies exactly
-  five backup targets: `/etc/config/pbr`, two init scripts and two transport
-  configs. Live bootstrap still requires explicit `--apply --yes`, and keeping
-  it additionally requires `--commit`;
-- the first uncommitted live bootstrap exposed that OpenWrt has no `nohup`, so
-  the external rollback did not arm. The trial was manually rolled back; all
-  five files matched their backups byte-for-byte, the observer returned to
-  `running/observe`, PBR had no stale lock, and Direct plus four provider exits
-  passed explicit curl checks. The replacement uses BusyBox
-  `start-stop-daemon` and an `armed` handshake; a detached no-routing proof
-  survived SSH disconnect and completed. A second live bootstrap has not yet
-  been run;
 - the fallback observer now preserves the last successful cache metadata and
   retries one bounded failed fetch. Three consecutive strict fallback checks
   passed after aligning the external timeout with its 20-second preview budget;
@@ -144,11 +126,12 @@ stable enough to permit apply:
   only Gemini through `proxyde` and requested a transport refresh. After that
   refresh, three checks spanning multiple observer cycles passed with critical
   health 5/5, zero blockers, zero warnings and zero transport actions. This
-  clears the preview/probe flap for the checkpoint, but not the separate Windows
-  reboot gate required before any Cudy apply;
-- current control policy differs from two live override files and Gemini
-  preflight has intermittently timed out through `proxyde`;
-- no guarded Cudy apply may run until repeated strict observe checks are green.
+  clears the preview/probe flap for the checkpoint;
+- the guarded bootstrap and override tools retain explicit apply/commit gates,
+  independent timed rollback and BusyBox `start-stop-daemon` arming. Their next
+  previews must be regenerated from current policy before any live trial;
+- the Windows OpenAI recovery path now survives reboot independently of Cudy,
+  so a failed Cudy trial cannot strand the development session.
 
 Some router-local TUN diagnostics can produce false failures. For
 `http-proxy-tun` transports the observer now probes the upstream HTTP proxy

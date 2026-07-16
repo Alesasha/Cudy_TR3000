@@ -117,7 +117,7 @@ def service_info() -> dict[str, str | bool | float | None]:
         comment = "Connection is healthy"
     elif active_age is not None and active_age < CONTROL_START_GRACE_SECONDS:
         state = "warn"
-        title = "START"
+        title = "STARTING"
         comment = "Connecting..."
     else:
         state = "down"

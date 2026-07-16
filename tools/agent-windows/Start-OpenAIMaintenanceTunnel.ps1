@@ -5,6 +5,7 @@ param(
     [string]$StandaloneExe = "C:\Program Files\AmneziaWG\amneziawg.exe",
     [string]$EndpointInterfaceAlias = "",
     [string]$EndpointNextHop = "",
+    [string]$EndpointWiFiProfile = "",
     [string[]]$Domains = @(
         "chatgpt.com",
     "chat.openai.com",
@@ -214,6 +215,14 @@ $endpointRouteOwned = [bool](
     [int]$previous.endpoint_interface_index -eq [int]$endpointEgress.InterfaceIndex -and
     [string]$previous.endpoint_next_hop -eq [string]$endpointEgress.NextHop
 )
+$endpointWiFiProfile = $EndpointWiFiProfile
+$endpointPhysicalAdapter = Get-NetAdapter -InterfaceIndex $endpointEgress.InterfaceIndex -ErrorAction SilentlyContinue
+if (-not $endpointWiFiProfile -and
+    $endpointPhysicalAdapter.InterfaceDescription -match 'Wi-?Fi|Wireless') {
+    $wlanText = (& netsh.exe wlan show interfaces 2>$null | Out-String)
+    $profileMatch = [regex]::Match($wlanText, '(?im)^\s*Profile\s*:\s*(.+?)\s*$')
+    if ($profileMatch.Success) { $endpointWiFiProfile = $profileMatch.Groups[1].Value.Trim() }
+}
 if (-not $endpointRoute) {
     New-NetRoute -AddressFamily IPv4 -DestinationPrefix $endpointPrefix `
         -InterfaceIndex $endpointEgress.InterfaceIndex -NextHop $endpointEgress.NextHop `
@@ -349,6 +358,7 @@ $state = [ordered]@{
     endpoint_interface_index = [int]$endpointEgress.InterfaceIndex
     endpoint_next_hop = [string]$endpointEgress.NextHop
     endpoint_route_owned = $endpointRouteOwned
+    endpoint_wifi_profile = $endpointWiFiProfile
     domains = $Domains
     routes = $routes
 }

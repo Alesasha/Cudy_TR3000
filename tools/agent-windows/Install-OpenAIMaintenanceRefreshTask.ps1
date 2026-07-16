@@ -1,5 +1,6 @@
 param(
-    [string]$StatePath = "C:\ProgramData\CudyVPN\openai-maintenance\state.json"
+    [string]$StatePath = "C:\ProgramData\CudyVPN\openai-maintenance\state.json",
+    [string]$WiFiProfile = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -12,6 +13,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
 }
 if (-not (Test-Path -LiteralPath $StatePath)) {
     throw "OpenAI maintenance state not found: $StatePath"
+}
+if ($WiFiProfile) {
+    $state = Get-Content -LiteralPath $StatePath -Raw | ConvertFrom-Json
+    $state | Add-Member -NotePropertyName endpoint_wifi_profile -NotePropertyValue $WiFiProfile -Force
+    $state | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $StatePath -Encoding UTF8
 }
 
 $source = Join-Path $PSScriptRoot "Update-OpenAIMaintenanceRoutes.ps1"

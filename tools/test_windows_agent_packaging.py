@@ -90,6 +90,16 @@ def main() -> int:
         label="Update-OpenAIMaintenanceRoutes.ps1",
     )
     assert_contains(
+        maintenance_update,
+        "endpoint_wifi_profile",
+        label="Update-OpenAIMaintenanceRoutes.ps1",
+    )
+    assert_contains(
+        maintenance_update,
+        "$currentEndpointIndex",
+        label="Update-OpenAIMaintenanceRoutes.ps1",
+    )
+    assert_contains(
         maintenance_stop,
         "endpoint_route_owned",
         label="Stop-OpenAIMaintenanceTunnel.ps1",
@@ -102,6 +112,11 @@ def main() -> int:
     assert_contains(
         maintenance_installer,
         "LastTaskResult -ne 0",
+        label="Install-OpenAIMaintenanceRefreshTask.ps1",
+    )
+    assert_contains(
+        maintenance_installer,
+        '[string]$WiFiProfile',
         label="Install-OpenAIMaintenanceRefreshTask.ps1",
     )
     assert_contains(builder, '"Watch-AgentConnectivity.ps1"', label="Build-WindowsAgentPackage.ps1")

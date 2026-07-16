@@ -80,8 +80,36 @@ if (-not $endpointPrefix -or -not $state.endpoint_interface_index -or -not $stat
     $state | Add-Member -NotePropertyName endpoint_next_hop -NotePropertyValue ([string]$egress.NextHop) -Force
     $state | Add-Member -NotePropertyName endpoint_route_owned -NotePropertyValue $false -Force
 }
+$physicalAdapter = Get-NetAdapter -Name ([string]$state.endpoint_interface) -ErrorAction SilentlyContinue
+if ((-not $physicalAdapter -or $physicalAdapter.Status -ne "Up") -and $state.endpoint_wifi_profile) {
+    $wlanArgs = @(
+        "wlan",
+        "connect",
+        "name=$([string]$state.endpoint_wifi_profile)",
+        "interface=$([string]$state.endpoint_interface)"
+    )
+    & netsh.exe @wlanArgs | Out-Null
+    $wifiDeadline = [datetime]::UtcNow.AddSeconds(25)
+    do {
+        Start-Sleep -Milliseconds 500
+        $physicalAdapter = Get-NetAdapter -Name ([string]$state.endpoint_interface) -ErrorAction SilentlyContinue
+    } while ((-not $physicalAdapter -or $physicalAdapter.Status -ne "Up") -and
+             [datetime]::UtcNow -lt $wifiDeadline)
+}
+if (-not $physicalAdapter -or $physicalAdapter.Status -ne "Up") {
+    throw "Endpoint interface is not up: $($state.endpoint_interface)"
+}
+$oldEndpointIndex = [int]$state.endpoint_interface_index
+$currentEndpointIndex = [int]$physicalAdapter.ifIndex
+if ($state.endpoint_route_owned -and $oldEndpointIndex -ne $currentEndpointIndex) {
+    Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $endpointPrefix `
+        -InterfaceIndex $oldEndpointIndex -PolicyStore ActiveStore -ErrorAction SilentlyContinue |
+        Where-Object { $_.NextHop -eq [string]$state.endpoint_next_hop } |
+        Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue
+}
+$state.endpoint_interface_index = $currentEndpointIndex
 $endpointRoute = Get-NetRoute -AddressFamily IPv4 -DestinationPrefix $endpointPrefix `
-    -InterfaceIndex ([int]$state.endpoint_interface_index) -ErrorAction SilentlyContinue |
+    -InterfaceIndex $currentEndpointIndex -ErrorAction SilentlyContinue |
     Where-Object { $_.NextHop -eq [string]$state.endpoint_next_hop } |
     Select-Object -First 1
 if (-not $endpointRoute) {

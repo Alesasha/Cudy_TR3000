@@ -77,6 +77,13 @@ without reinstalling or interrupting the AWG service, run as Administrator:
 .\Install-OpenAIMaintenanceRefreshTask.ps1
 ```
 
+If the endpoint uses a reserve Wi-Fi network that Windows does not reconnect
+while Ethernet is active, persist its existing profile as part of the repair:
+
+```powershell
+.\Install-OpenAIMaintenanceRefreshTask.ps1 -WiFiProfile "Profile name"
+```
+
 Stop and remove this maintenance tunnel with:
 
 ```powershell
