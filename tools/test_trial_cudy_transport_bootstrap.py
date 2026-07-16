@@ -71,7 +71,9 @@ def main() -> int:
     assert "[ -f \"$trial/commit\" ] && exit 0" in guard
     assert "[ -f \"$trial/rolled-back\" ] && exit 0" in guard
     assert "/etc/init.d/cudy-router-agent stop" in guard
-    assert "/usr/bin/cudy-pbr-safe-restart" in guard
+    assert "/usr/bin/cudy-pbr-fast-apply" in guard
+    assert "/usr/bin/cudy-pbr-safe-restart restart" in guard
+    assert "rollback-pbr-failed" in guard
     assert "service-proxykz.running" not in guard
     assert "service-$service.running" in guard
     source = Path(__file__).with_name("trial_cudy_transport_bootstrap.py").read_text(encoding="utf-8")

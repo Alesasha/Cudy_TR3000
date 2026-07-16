@@ -492,6 +492,12 @@ python tools\sync_control_state_to_cudy.py
 Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD,Env:CUDY_SSH_PASSWORD
 ```
 
+By default the sync opens the source connection over the verified private
+management path `local PC -> Cudy -> awg2 -> 172.29.172.1:22`. Public SSH to
+`uswest` is used only if that path is unavailable. This avoids making fallback
+freshness depend on intermittent public SSH banner/KEX behavior. Use
+`--no-source-via-cudy` only for recovery diagnostics.
+
 The secret archive is stored as:
 
 ```text

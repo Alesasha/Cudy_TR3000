@@ -295,6 +295,47 @@ func TestAgentCacheRejectsStalePolicy(t *testing.T) {
 	}
 }
 
+func TestAgentObserverRetriesAndPreservesLastSuccess(t *testing.T) {
+	now := time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC)
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "agent.json")
+	cachePath := filepath.Join(dir, "agent-cache.json")
+	writeTestJSON(t, settingsPath, map[string]any{
+		"control_url": "http://127.0.0.1:1",
+		"device_id":   "cudy-home",
+		"token":       "test-token",
+		"cache_path":  cachePath,
+	})
+
+	attempts := 0
+	srv := &server{
+		agentConfigPath:  settingsPath,
+		agentCachePath:   cachePath,
+		maxAgentCacheAge: time.Hour,
+		now:              func() time.Time { return now },
+		fetchAgentConfig: func(context.Context, agentSettings) (map[string]any, error) {
+			attempts++
+			if attempts == 1 {
+				return nil, errors.New("transient control failure")
+			}
+			return map[string]any{"device": map[string]any{"id": "cudy-home"}}, nil
+		},
+	}
+	srv.refreshAgentCache(context.Background())
+	if attempts != 2 || srv.observer.LastError != "" || srv.observer.LastSuccessAt == "" {
+		t.Fatalf("unexpected observer after retry: attempts=%d status=%#v", attempts, srv.observer)
+	}
+	lastSuccess := srv.observer.LastSuccessAt
+
+	srv.fetchAgentConfig = func(context.Context, agentSettings) (map[string]any, error) {
+		return nil, errors.New("control still unavailable")
+	}
+	srv.refreshAgentCache(context.Background())
+	if srv.observer.LastError == "" || srv.observer.LastSuccessAt != lastSuccess {
+		t.Fatalf("observer did not preserve last success: %#v", srv.observer)
+	}
+}
+
 func writeTestJSON(t *testing.T, path string, payload any) {
 	t.Helper()
 	raw, err := json.Marshal(payload)

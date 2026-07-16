@@ -155,24 +155,6 @@ append_elements() {
   [ -z "$params" ] || echo "add element $TARGET_TABLE $set_name { $params }" >> "$batch"
 }
 
-append_delete_elements() {
-  set_name="$1"
-  file="$2"
-  n=0
-  params=""
-  while read -r value; do
-    [ -n "$value" ] || continue
-    params="${params:+$params, }$value"
-    n=$((n + 1))
-    if [ "$n" -ge 200 ]; then
-      echo "delete element $TARGET_TABLE $set_name { $params }" >> "$batch"
-      n=0
-      params=""
-    fi
-  done < "$file"
-  [ -z "$params" ] || echo "delete element $TARGET_TABLE $set_name { $params }" >> "$batch"
-}
-
 register_set() {
   iface="$1"
   file="$2"
@@ -183,24 +165,6 @@ register_set() {
   }
   echo "flush set $TARGET_TABLE $set_name" >> "$batch"
   append_elements "$set_name" "$file"
-}
-
-register_managed_delta() {
-  iface="$1"
-  current="$2"
-  set_name="pbr_${iface}_4_dst_ip_user"
-  previous="$STATE_DIR/$set_name.clean"
-  added="$work/$set_name.added"
-  removed="$work/$set_name.removed"
-  [ -e "$previous" ] || : > "$previous"
-  nft list set $TARGET_TABLE "$set_name" >/dev/null 2>&1 || {
-    echo "PBR nft set is missing for $iface: $set_name" >&2
-    exit 1
-  }
-  grep -vxF -f "$current" "$previous" > "$removed" || true
-  grep -vxF -f "$previous" "$current" > "$added" || true
-  append_delete_elements "$set_name" "$removed"
-  append_elements "$set_name" "$added"
 }
 
 interface_names() {
@@ -242,6 +206,23 @@ target_managed="$work/special-target.clean"
 } | sort -u | grep -vxF -f "$VPN_BASE" > "$target_managed" || true
 collapse_file "$target_managed"
 
+# Rebuild special sets from their complete base plus managed additions. Exact
+# line deltas are unsafe for nft interval sets: a newly added /32 may already
+# be covered by an existing broader CIDR and causes "interval overlaps".
+full_wan="$work/full-wan.clean"
+{
+  cat "$WAN_BASE"
+  cat "$work/special-wan.clean"
+} | sort -u > "$full_wan"
+collapse_file "$full_wan"
+
+full_target="$work/full-target.clean"
+{
+  cat "$VPN_BASE"
+  cat "$target_managed"
+} | sort -u > "$full_target"
+collapse_file "$full_target"
+
 sync_special_state() {
   cp "$work/special-wan.clean" "$STATE_DIR/pbr_wan_4_dst_ip_user.clean"
   cp "$target_managed" "$STATE_DIR/pbr_${target_interface}_4_dst_ip_user.clean"
@@ -257,11 +238,11 @@ if [ "${CUDY_PBR_STATE_SYNC:-0}" = "1" ]; then
 fi
 
 : > "$batch"
-register_managed_delta wan "$work/special-wan.clean"
-register_managed_delta "$target_interface" "$target_managed"
+register_set wan "$full_wan"
+register_set "$target_interface" "$full_target"
 
 if [ "$target_interface" != "awg2" ]; then
-  register_managed_delta awg2 "$work/managed-awg2.clean"
+  register_set awg2 "$work/managed-awg2.clean"
 fi
 
 for iface in $(interface_names); do

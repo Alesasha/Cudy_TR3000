@@ -107,7 +107,7 @@ curl -fsS --max-time 5 http://127.0.0.1:8765/readyz
 printf '\\nruntime='
 curl -fsS --max-time 10 http://127.0.0.1:8765/api/cudy/runtime
 printf '\\nagent_preview='
-curl -fsS --max-time 15 http://127.0.0.1:8765/api/cudy/agent-preview
+curl -fsS --max-time 25 http://127.0.0.1:8765/api/cudy/agent-preview
 printf '\\nagent_observer='
 curl -fsS --max-time 5 http://127.0.0.1:8765/api/cudy/agent-observer
 printf '\\n'
@@ -217,7 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--ssh-password")
-    parser.add_argument("--timeout", type=int, default=20)
+    parser.add_argument("--timeout", type=int, default=40)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--strict", action="store_true")
     return parser

@@ -259,8 +259,14 @@ MaxStartups 100:30:300
 UseDNS no
 fail2ban: filter=cudy-sshd-safe, banaction=iptables-multiport, maxretry=5, findtime=10m, bantime=1h
 cudy-sshd-watchdog: stale=120s, interval=60s
-cudy-ssh-firewall-guard: connlimit=32, recent=64 new connections / 60s / source IP
+cudy-ssh-firewall-guard: at most 32 concurrent SSH connections / source IP
 ```
+
+The firewall guard deliberately does not rate-limit new SSH connections over
+time. Multiple roaming agents can share one carrier or home NAT address and can
+legitimately reconnect together after a network interruption. Authentication
+failures are handled by the conservative fail2ban filter; global pre-auth load
+is bounded by OpenSSH `MaxStartups` and the stale-session watchdog.
 
 Do not run many direct root SSH checks or deploys in parallel. The control
 server accepts multiple sessions from the same source IP (`MaxSessions=100`,
@@ -458,3 +464,23 @@ python tools\check_cudy_router_agent.py --strict
 Both checks must pass before any router apply test. A router-agent warning about
 a missing interface is acceptable only when `desired.json` contains a matching
 validated `prepare-and-start` transport action and has no blockers.
+
+## Windows OpenAI-only recovery transport
+
+The operator workstation can keep the AmneziaVPN application disabled and use
+a dedicated standalone AmneziaWG service only for OpenAI. The start/stop and
+route refresh scripts are documented in `tools/agent-windows/README.md`.
+
+The expected dedicated-tunnel state is:
+
+- the AmneziaVPN GUI is disconnected and `AmneziaWGTunnel$AmneziaVPN` is absent;
+- `AmneziaVPN-service` may remain running so the GUI is available as a manual fallback;
+- `AmneziaWGTunnel$OpenAI-USWest` is running and starts automatically;
+- `Cudy OpenAI Route Refresh` runs at startup and every two minutes;
+- the AWG endpoint has a physical-gateway `/32` pin stored in maintenance state;
+- the AWG interface has OpenAI `/32` routes but no default or `/1` routes;
+- Direct destinations continue through the physical Ethernet default route.
+
+Connecting the AmneziaVPN GUI is treated as an explicit full-tunnel override:
+the scheduled refresh suspends `OpenAI-USWest` to avoid nesting one VPN inside
+the other, then resumes it after the application tunnel is disconnected.

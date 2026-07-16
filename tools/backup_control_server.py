@@ -48,7 +48,15 @@ def ssh_password(explicit: str | None, *, host: str) -> str:
     return getpass.getpass(f"SSH password for {host}: ")
 
 
-def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+def connect(
+    host: str,
+    user: str,
+    password: str,
+    timeout: int,
+    *,
+    attempts: int,
+    sock: object | None = None,
+) -> paramiko.SSHClient:
     last_error: Exception | None = None
     for attempt in range(1, max(1, attempts) + 1):
         client = paramiko.SSHClient()
@@ -63,12 +71,13 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
                 auth_timeout=timeout,
                 look_for_keys=False,
                 allow_agent=False,
+                sock=sock,
             )
             return client
         except Exception as exc:
             last_error = exc
             client.close()
-            if attempt >= attempts:
+            if attempt >= attempts or sock is not None:
                 break
             time.sleep(min(20, 2 * attempt))
     raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error

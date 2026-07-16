@@ -153,6 +153,11 @@ def run_backup_timeout_contract_check() -> None:
     assert_true("DEFAULT_PASSWORD_FILE" in tunnel_source, "tunnel backup should support unattended password file")
     assert_true("sys.stdin.isatty()" in tunnel_source, "tunnel backup should not prompt in non-interactive runs")
 
+    sync_source = (ROOT / "tools" / "sync_control_state_to_cudy.py").read_text(encoding="utf-8")
+    assert_true("DEFAULT_SOURCE_PRIVATE_HOST" in sync_source, "fallback sync should prefer private source management")
+    assert_true("direct-tcpip" in sync_source, "fallback sync should tunnel source SSH through Cudy")
+    assert_true("--allow-public-source-fallback" in sync_source, "fallback sync should retain a public emergency path")
+
 
 def run_cudy_publish_artifact_check() -> None:
     with tempfile.TemporaryDirectory(prefix="cudy-fallback-publish-") as tmp:

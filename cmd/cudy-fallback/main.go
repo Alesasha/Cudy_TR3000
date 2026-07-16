@@ -507,7 +507,17 @@ func (s *server) runAgentObserver(ctx context.Context, interval time.Duration) {
 }
 
 func (s *server) refreshAgentCache(parent context.Context) {
-	status := agentObserverStatus{Enabled: true, LastAttemptAt: s.now().UTC().Format(time.RFC3339), CachePath: s.agentCachePath}
+	s.observerMu.RLock()
+	previous := s.observer
+	s.observerMu.RUnlock()
+	status := agentObserverStatus{
+		Enabled:        true,
+		LastAttemptAt:  s.now().UTC().Format(time.RFC3339),
+		LastSuccessAt:  previous.LastSuccessAt,
+		LastError:      "",
+		CachePath:      s.agentCachePath,
+		CacheUpdatedAt: previous.CacheUpdatedAt,
+	}
 	settings, err := readAgentSettings(s.agentConfigPath)
 	if err == nil {
 		ctx, cancel := context.WithTimeout(parent, 20*time.Second)
@@ -517,7 +527,20 @@ func (s *server) refreshAgentCache(parent context.Context) {
 			fetch = s.fetchAgentConfigHTTP
 		}
 		var config map[string]any
-		config, err = fetch(ctx, settings)
+		for attempt := 0; attempt < 2; attempt++ {
+			attemptCtx, attemptCancel := context.WithTimeout(ctx, 9*time.Second)
+			config, err = fetch(attemptCtx, settings)
+			attemptCancel()
+			if err == nil || attempt == 1 {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+				break
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
 		if err == nil {
 			cachePath := s.cachePath(settings)
 			status.CachePath = cachePath

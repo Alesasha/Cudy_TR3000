@@ -50,6 +50,43 @@ until it is deliberately enabled or reinstalled.
 `Restore-Direct.ps1` remains available for a narrower route reset that does not
 disable the scheduled task.
 
+## OpenAI-only maintenance AWG
+
+For development recovery, OpenAI can use a dedicated AWG peer without enabling
+the AmneziaVPN application or changing the Windows default route. Run the
+following from an elevated PowerShell prompt with the dedicated client config:
+
+```powershell
+.\Start-OpenAIMaintenanceTunnel.ps1 `
+  -ConfigPath "C:\path\to\isasha_R7_OpenAI.conf" `
+  -TunnelName "OpenAI-USWest"
+```
+
+The script installs the standalone AmneziaWG tunnel service with `Table = off`
+and adds only current `/32` routes resolved for the configured OpenAI domains.
+`Cudy OpenAI Route Refresh` refreshes those routes every two minutes and at
+Windows startup. The default route remains on the physical LAN interface.
+If the user explicitly connects the AmneziaVPN application, the refresh task
+suspends this dedicated tunnel to prevent nested VPN routing. It resumes the
+dedicated tunnel after the application tunnel is disconnected.
+
+To repair only the refresh task for an already running maintenance tunnel,
+without reinstalling or interrupting the AWG service, run as Administrator:
+
+```powershell
+.\Install-OpenAIMaintenanceRefreshTask.ps1
+```
+
+Stop and remove this maintenance tunnel with:
+
+```powershell
+.\Stop-OpenAIMaintenanceTunnel.ps1 -TunnelName "OpenAI-USWest"
+```
+
+This is IP routing. A CDN address shared by OpenAI and another hostname follows
+the same `/32` route until the next refresh; domain-exclusive routing requires
+an application-aware proxy or WFP implementation.
+
 ## Managed Transport PoC
 
 This mode bypasses the Amnezia UI. It starts the AmneziaWG tunnel daemon with

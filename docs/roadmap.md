@@ -19,16 +19,36 @@ in `docs/current-status.md` and frozen by tag
 - Do not combine a provider refresh, agent upgrade and Cudy apply trial in one
   maintenance window.
 
+## Phase 1: Finish Recovery Independence
+
+The reviewed recovery checkpoint, local regression suite and repeated Cudy
+observe checks are complete. Remaining work:
+
+1. Install the Windows OpenAI refresh task from the current source without
+   interrupting the running dedicated tunnel.
+2. Reboot and confirm the endpoint `/32` is recreated over physical Wi-Fi before
+   OpenAI routes are refreshed.
+3. Confirm that the operator workstation keeps Cudy LAN access and OpenAI while
+   public SSH, the restricted Cudy tunnel and Cudy routing are tested alone.
+4. Continue sampled public-SSH checks; treat isolated pre-auth timeouts as a
+   reliability signal, not proof that a shared-NAT agent address is attacking.
+
+Exit criteria: the repository checkpoint is pushed, direct and restricted SSH
+checks complete repeatedly, current backups are restorable, and losing any one
+control path does not interrupt OpenAI or Cudy management.
+
 ## Phase 2: Platform Agent Acceptance
 
 ### Windows
 
 1. Rebuild the package from the current source and verify its manifest/hash.
-2. Run emergency-stop and watchdog tests before enabling the task.
-3. Enable the managed task in a controlled window with a direct recovery path.
-4. Reboot Windows and verify SSH self-heal, cached-policy fallback, selective
+2. Reboot-test and soak the dedicated fail-open `OpenAI-USWest` recovery path;
+   prove the AmneziaVPN application override cannot create nested routing.
+3. Run emergency-stop and watchdog tests before enabling the task.
+4. Enable the managed task in a controlled window with the independent recovery path.
+5. Reboot Windows and verify SSH self-heal, cached-policy fallback, selective
    routes and update reporting.
-5. Test Direct, Telegram, ChatGPT, Gemini, Mail.ru and a download/speed target.
+6. Test Direct, Telegram, ChatGPT, Gemini, Mail.ru and a download/speed target.
 
 Exit criteria: one reboot and a 24-hour run without lost LAN/internet, route
 leak, focus-stealing console or manual transport repair.
@@ -107,20 +127,26 @@ disabled, re-enabled and deleted without CLI or database edits.
 
 Prerequisite: Phases 1 and the relevant Auto checks are green.
 
-1. Capture current PBR, dnsmasq, nft, transport and service state.
-2. If the live policy requires missing or refreshed transports, run the
+1. Keep the router-agent in `observe` and eliminate fallback-preview timeouts
+   and critical-service probe flaps; require repeated strict checks to pass.
+2. Capture current PBR, dnsmasq, nft, transport and service state.
+3. If the live policy requires missing or refreshed transports, run the
    separate guarded transport bootstrap first: one automatic-rollback trial,
    then one committed trial. It must not write the new route overrides.
-3. Run the first uncommitted override-only guarded apply trial without moving
+4. Run the first uncommitted override-only guarded apply trial without moving
    DHCP/WAN.
-4. Deliberately stop the controlling workstation path and prove the independent
+5. Deliberately stop the controlling workstation path and prove the independent
    on-router rollback restores previous files, PBR state and `observe` gate.
-5. Inspect counters and Direct/provider routes after rollback.
-6. Run a separately committed trial, then return to `observe` and compare the
+6. Inspect counters and Direct/provider routes after rollback.
+7. Run a separately committed trial, then return to `observe` and compare the
    resulting state.
 
 Exit criteria: both trials preserve LAN/internet access, critical services and
 fallback control, and automatic rollback works without Codex or the workstation.
+
+Direct SSH to `uswest` must also complete reliably before this phase. An open
+TCP/22 socket alone is not sufficient; the SSH banner/session, restricted Cudy
+tunnel and fallback control path must be verified independently.
 
 ## Phase 6: Make Cudy The Main Router
 

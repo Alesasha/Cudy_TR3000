@@ -32,7 +32,7 @@ import re
 import shlex
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -137,6 +137,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ssh-user", help="Override SSH user from the registry")
     parser.add_argument("--ssh-timeout", type=int, default=60)
     parser.add_argument("--ssh-retries", type=int, default=3)
+    parser.add_argument(
+        "--via-cudy-private-host",
+        help="Reach the server's private SSH address through Cudy instead of public SSH",
+    )
+    parser.add_argument("--cudy-host", default="192.168.8.1")
+    parser.add_argument("--cudy-user", default="root")
+    parser.add_argument("--cudy-awg-interface", default="awg2")
+    parser.add_argument("--cudy-password-file", type=Path, default=DEFAULT_CUDY_PASSWORD_FILE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--address", help="Use an explicit client address, e.g. 10.8.1.12/32")
     parser.add_argument("--allowed-ips", default="0.0.0.0/0")
@@ -194,7 +202,7 @@ def server_password(server_name: str, explicit_password: str | None) -> str | No
 
 
 class Remote:
-    def __init__(self, server: Server, password: str, *, timeout: int, retries: int):
+    def __init__(self, server: Server, password: str, *, timeout: int, retries: int, sock: object | None = None):
         self.server = server
         self.client = paramiko.SSHClient()
         self.client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -210,6 +218,7 @@ class Remote:
                     auth_timeout=timeout,
                     look_for_keys=False,
                     allow_agent=False,
+                    sock=sock,
                 )
                 return
             except Exception as exc:
@@ -235,6 +244,55 @@ class Remote:
         if rc:
             raise RuntimeError(f"Remote command failed rc={rc}: {command}\nSTDOUT:\n{out}\nSTDERR:\n{err}")
         return out
+
+
+def connect_cudy_jump(args: argparse.Namespace) -> tuple[paramiko.SSHClient, object]:
+    try:
+        private_ip = str(ipaddress.ip_address(args.via_cudy_private_host))
+    except ValueError as exc:
+        raise RuntimeError("--via-cudy-private-host must be an IP address") from exc
+    if not args.cudy_password_file.exists():
+        raise RuntimeError(f"Cudy password file not found: {args.cudy_password_file}")
+    password = args.cudy_password_file.read_text(encoding="utf-8-sig").strip()
+    if not password:
+        raise RuntimeError(f"Cudy password file is empty: {args.cudy_password_file}")
+
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        args.cudy_host,
+        username=args.cudy_user,
+        password=password,
+        timeout=args.ssh_timeout,
+        banner_timeout=args.ssh_timeout,
+        auth_timeout=args.ssh_timeout,
+        look_for_keys=False,
+        allow_agent=False,
+    )
+    transport = client.get_transport()
+    if transport is None or not transport.is_active():
+        client.close()
+        raise RuntimeError("Cudy SSH transport is not active")
+
+    command = (
+        f"ip -4 route replace {shlex.quote(private_ip)}/32 "
+        f"dev {shlex.quote(args.cudy_awg_interface)}"
+    )
+    stdin, stdout, stderr = client.exec_command(command, timeout=args.ssh_timeout)
+    out = stdout.read().decode("utf-8", "replace")
+    err = stderr.read().decode("utf-8", "replace")
+    rc = stdout.channel.recv_exit_status()
+    if rc:
+        client.close()
+        raise RuntimeError(f"Could not install Cudy private route rc={rc}: {out}{err}")
+
+    channel = transport.open_channel(
+        "direct-tcpip",
+        (private_ip, 22),
+        ("127.0.0.1", 0),
+        timeout=args.ssh_timeout,
+    )
+    return client, channel
 
 
 def docker_exec(server: Server, command: str) -> str:
@@ -693,8 +751,21 @@ def main() -> int:
     if output_path and output_path.exists() and not args.force:
         raise SystemExit(f"Output already exists: {output_path}. Use --force to overwrite.")
 
-    remote = Remote(server, password, timeout=args.ssh_timeout, retries=args.ssh_retries)
+    jump_client: paramiko.SSHClient | None = None
+    jump_channel: object | None = None
+    remote: Remote | None = None
     try:
+        if args.via_cudy_private_host:
+            jump_client, jump_channel = connect_cudy_jump(args)
+            server = replace(server, ssh_host=args.via_cudy_private_host)
+
+        remote = Remote(
+            server,
+            password,
+            timeout=args.ssh_timeout,
+            retries=1 if jump_channel is not None else args.ssh_retries,
+            sock=jump_channel,
+        )
         if args.stats:
             print_peer_stats(remote, server)
             return 0
@@ -782,7 +853,10 @@ def main() -> int:
         print(f"address={client_address}")
         return 0
     finally:
-        remote.close()
+        if remote is not None:
+            remote.close()
+        if jump_client is not None:
+            jump_client.close()
 
 
 if __name__ == "__main__":

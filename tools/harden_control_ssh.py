@@ -182,9 +182,6 @@ def remote_script(args: argparse.Namespace) -> str:
 
         chain="CUDY-SSH-GUARD"
         port="${CUDY_SSH_GUARD_PORT:-22}"
-        recent_name="${CUDY_SSH_GUARD_RECENT_NAME:-CUDYSSH}"
-        hitcount="${CUDY_SSH_GUARD_HITCOUNT:-64}"
-        seconds="${CUDY_SSH_GUARD_SECONDS:-60}"
         connlimit="${CUDY_SSH_GUARD_CONNLIMIT:-32}"
 
         iptables -N "$chain" 2>/dev/null || true
@@ -201,11 +198,12 @@ def remote_script(args: argparse.Namespace) -> str:
         iptables -A "$chain" -s 192.168.0.0/16 -j RETURN
 
         # Several agents and admin checks can share one carrier/home NAT IP.
-        # Keep the per-source ceiling high enough for that legitimate burst;
+        # Limit concurrent sockets only. A rate limit on successful NEW
+        # connections caused false positives during legitimate reconnect
+        # storms and cannot distinguish agents from scanners before SSH auth.
         # MaxStartups and the stale-preauth watchdog provide the global guard.
         iptables -A "$chain" -m connlimit --connlimit-above "$connlimit" --connlimit-mask 32 -j DROP
-        iptables -A "$chain" -m recent --name "$recent_name" --rcheck --seconds "$seconds" --hitcount "$hitcount" --rsource -j DROP
-        iptables -A "$chain" -m recent --name "$recent_name" --set --rsource -j RETURN
+        iptables -A "$chain" -j RETURN
 
         iptables -I INPUT 1 -p tcp --dport "$port" -m conntrack --ctstate NEW -j "$chain"
         """

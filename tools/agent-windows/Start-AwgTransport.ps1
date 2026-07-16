@@ -107,7 +107,9 @@ if (-not $NoPeer) {
 
 $interfaceLines = New-Object System.Collections.Generic.List[string]
 $interfaceLines.Add("[Interface]")
-foreach ($key in @("PrivateKey", "Address", "MTU", "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5")) {
+# AmneziaVPN stores Jmin/Jmax in exported profiles but does not pass them to
+# tunneldaemon. Passing them through creates an interface that never handshakes.
+foreach ($key in @("PrivateKey", "Address", "MTU", "Jc", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "I1", "I2", "I3", "I4", "I5")) {
     if ($iface.Contains($key) -and $iface[$key] -ne "") {
         $interfaceLines.Add("$key = $($iface[$key])")
     }

@@ -52,7 +52,9 @@ def main() -> int:
     assert "[ -f \"$trial/commit\" ] && exit 0" in guard
     assert "[ -f \"$trial/rolled-back\" ] && exit 0" in guard
     assert "cudy-router-agent.main.mode='observe'" in guard
-    assert "/usr/bin/cudy-pbr-safe-restart" in guard
+    assert "/usr/bin/cudy-pbr-fast-apply" in guard
+    assert "/usr/bin/cudy-pbr-safe-restart restart" in guard
+    assert "rollback-pbr-failed" in guard
     assert "/etc/init.d/pbr stop" in guard
     assert "managed-paths.next.json" in guard
     assert "pbr.was-running" in guard

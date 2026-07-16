@@ -218,7 +218,7 @@ func main() {
 
 	a := &agent{
 		opts:       opts,
-		httpClient: &http.Client{Timeout: 15 * time.Second},
+		httpClient: newAgentHTTPClient(),
 		runCommand: shellCommand,
 		now:        func() time.Time { return time.Now().UTC() },
 	}
@@ -237,6 +237,12 @@ func main() {
 		}
 		time.Sleep(opts.PollInterval)
 	}
+}
+
+func newAgentHTTPClient() *http.Client {
+	// The local fallback preview has a 20-second server-side deadline because
+	// it may fall back from a stalled live control request to cached policy.
+	return &http.Client{Timeout: 25 * time.Second}
 }
 
 func (a *agent) validate() error {
@@ -1347,7 +1353,7 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 	for path := range updates {
 		pathSet[path] = true
 	}
-	bootstrapRequired := transportBootstrapRequired(transports)
+	bootstrapRequired := transportBootstrapRequired(transports) || !a.pbrDataplaneReady(ctx)
 	if bootstrapRequired {
 		pathSet["/etc/config/pbr"] = true
 	}
@@ -1401,7 +1407,11 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 				}
 			}
 		}
-		rollbackCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		rollbackTimeout := 45 * time.Second
+		if bootstrapRequired {
+			rollbackTimeout = 210 * time.Second
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
 		defer cancel()
 		rollbackCommand := a.opts.ApplyCommand
 		if bootstrapRequired {
@@ -1452,6 +1462,16 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 		_ = os.Remove(next)
 	}
 	return false, nil
+}
+
+func (a *agent) pbrDataplaneReady(ctx context.Context) bool {
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return a.runCommand(
+		checkCtx,
+		"ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' && "+
+			"nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_'",
+	) == nil
 }
 
 func transportBootstrapRequired(transports []transportAction) bool {
@@ -1514,6 +1534,14 @@ func (a *agent) checkCriticalServices(ctx context.Context, services []criticalSe
 		for _, target := range service.Targets {
 			iface := targetInterface(target, groups)
 			probe := a.probeTarget(ctx, target, iface, 5*time.Second, 12*time.Second, service.SuccessPattern, service.FailurePattern)
+			if shouldRetryNetworkProbe(probe) {
+				select {
+				case <-ctx.Done():
+					probe["error"] = ctx.Err().Error()
+				case <-time.After(500 * time.Millisecond):
+					probe = a.probeTarget(ctx, target, iface, 5*time.Second, 12*time.Second, service.SuccessPattern, service.FailurePattern)
+				}
+			}
 			if probe["ok"] == true {
 				passed = true
 				break
@@ -1529,6 +1557,22 @@ func (a *agent) checkCriticalServices(ctx context.Context, services []criticalSe
 		}
 	}
 	return failures
+}
+
+func shouldRetryNetworkProbe(probe map[string]any) bool {
+	if probe["ok"] == true {
+		return false
+	}
+	message := strings.ToLower(anyString(probe["error"]))
+	for _, marker := range []string{
+		"timeout", "connection reset", "connection refused", "network is unreachable",
+		"no route to host", "temporary", "unexpected eof", "tls handshake",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return message == "eof"
 }
 
 func viaInterface(iface string) string {

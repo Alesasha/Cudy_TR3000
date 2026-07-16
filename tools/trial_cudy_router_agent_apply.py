@@ -144,7 +144,14 @@ for name in managed-paths.json managed-paths.next.json; do
   fi
 done
 if [ -f "$trial/pbr.was-running" ]; then
-  /usr/bin/cudy-pbr-safe-restart >/dev/null 2>&1 || /etc/init.d/pbr stop >/dev/null 2>&1 || true
+  pbr_failed=0
+  /usr/bin/cudy-pbr-fast-apply \
+    || /usr/bin/cudy-pbr-safe-restart restart \
+    || pbr_failed=1
+  if [ "$pbr_failed" = "1" ]; then
+    /etc/init.d/pbr stop >/dev/null 2>&1 || true
+    date -u +%Y-%m-%dT%H:%M:%SZ > "$trial/rollback-pbr-failed"
+  fi
 else
   /etc/init.d/pbr stop >/dev/null 2>&1 || true
 fi

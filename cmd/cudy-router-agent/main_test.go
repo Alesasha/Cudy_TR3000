@@ -16,6 +16,34 @@ import (
 	"time"
 )
 
+func TestAgentHTTPClientOutlivesFallbackPreviewDeadline(t *testing.T) {
+	client := newAgentHTTPClient()
+	if client.Timeout <= 20*time.Second {
+		t.Fatalf("HTTP timeout=%s must exceed fallback preview deadline", client.Timeout)
+	}
+}
+
+func TestRetryOnlyTransientNetworkProbeFailures(t *testing.T) {
+	for _, message := range []string{
+		`Get "https://example.com": net/http: TLS handshake timeout`,
+		"read: connection reset by peer",
+		"unexpected EOF",
+	} {
+		if !shouldRetryNetworkProbe(map[string]any{"error": message}) {
+			t.Fatalf("transient failure was not retryable: %s", message)
+		}
+	}
+	for _, probe := range []map[string]any{
+		{"ok": true},
+		{"semantic_status": "geo_blocked"},
+		{"error": "failure pattern matched"},
+	} {
+		if shouldRetryNetworkProbe(probe) {
+			t.Fatalf("non-network result became retryable: %#v", probe)
+		}
+	}
+}
+
 func TestBuildDesiredMapsDirectAndRejectsUnavailable(t *testing.T) {
 	preview := previewResponse{OK: true, Configured: true, Source: "live", Routes: []routePreview{
 		{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true},

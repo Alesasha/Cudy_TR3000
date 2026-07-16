@@ -22,12 +22,16 @@ class CudyPBRSafetyTests(unittest.TestCase):
         self.assertIn("wait_for_dataplane", text)
         self.assertNotIn("/var/run/pbr.lock", text)
         self.assertIn("fail_open", text)
+        self.assertIn("fw4 validation failed after PBR stop", text)
+        self.assertNotIn("fw4 validation failed before PBR start", text)
 
     def test_router_agent_uses_safe_bootstrap(self) -> None:
         main = (ROOT / "cmd" / "cudy-router-agent" / "main.go").read_text(encoding="utf-8")
         init = (ROOT / "openwrt" / "cudy-router-agent.init").read_text(encoding="utf-8")
         self.assertIn('/usr/bin/cudy-pbr-safe-restart", "command used', main)
         self.assertIn("-bootstrap-command /usr/bin/cudy-pbr-safe-restart", init)
+        self.assertIn("!a.pbrDataplaneReady(ctx)", main)
+        self.assertIn("rollbackTimeout = 210 * time.Second", main)
 
     def test_pbr_paths_collapse_cidrs(self) -> None:
         full = (ROOT / "openwrt" / "pbr.user.opencck-merged-vpn").read_text(encoding="utf-8")
@@ -37,6 +41,13 @@ class CudyPBRSafetyTests(unittest.TestCase):
         self.assertIn("collapse_file", fast)
         self.assertIn('printf "%010.0f %010.0f', collapse)
         self.assertIn("sort -k1,1 -k2,2r", collapse)
+
+    def test_fast_apply_rebuilds_interval_sets_from_complete_inputs(self) -> None:
+        fast = (ROOT / "openwrt" / "cudy-pbr-fast-apply").read_text(encoding="utf-8")
+        self.assertIn('register_set wan "$full_wan"', fast)
+        self.assertIn('register_set "$target_interface" "$full_target"', fast)
+        self.assertNotIn("register_managed_delta wan", fast)
+        self.assertNotIn("append_delete_elements", fast)
 
 
 if __name__ == "__main__":

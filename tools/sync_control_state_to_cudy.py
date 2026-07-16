@@ -50,6 +50,8 @@ def cudy_static_control_endpoints_manifest() -> dict[str, Any]:
 
 DEFAULT_CUDY_STATE_DIR = "/root/cudy-control-fallback"
 DEFAULT_CUDY_WEB_DIR = "/www/cudy-control"
+DEFAULT_SOURCE_PRIVATE_HOST = "172.29.172.1"
+DEFAULT_CUDY_AWG_INTERFACE = "awg2"
 
 
 def source_password(explicit: str | None, *, host: str) -> str:
@@ -182,6 +184,53 @@ def publish_to_cudy(
     return status
 
 
+def connect_source_via_cudy(
+    cudy_client: paramiko.SSHClient,
+    *,
+    private_host: str,
+    private_port: int,
+    cudy_awg_interface: str,
+    source_user: str,
+    source_password_value: str,
+    timeout: int,
+    attempts: int,
+) -> paramiko.SSHClient:
+    ssh_exec(
+        cudy_client,
+        f"ip -4 route replace {shlex.quote(private_host)}/32 dev {shlex.quote(cudy_awg_interface)}",
+        timeout,
+    )
+    transport = cudy_client.get_transport()
+    if transport is None or not transport.is_active():
+        raise RuntimeError("Cudy SSH transport is not active")
+
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        channel = None
+        try:
+            channel = transport.open_channel(
+                "direct-tcpip",
+                (private_host, private_port),
+                ("127.0.0.1", 0),
+                timeout=timeout,
+            )
+            return connect(
+                private_host,
+                source_user,
+                source_password_value,
+                timeout,
+                attempts=1,
+                sock=channel,
+            )
+        except Exception as exc:
+            last_error = exc
+            if channel is not None:
+                channel.close()
+            if attempt < attempts:
+                time.sleep(min(10, 2 * attempt))
+    raise RuntimeError(f"private source SSH through Cudy failed: {last_error}") from last_error
+
+
 def sync(args: argparse.Namespace) -> dict[str, Any]:
     src_password = source_password(args.source_password, host=args.source_host)
     dst_password = cudy_password(args.cudy_password, host=args.cudy_host)
@@ -190,7 +239,39 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
     source_client: paramiko.SSHClient | None = None
     cudy_client: paramiko.SSHClient | None = None
     try:
-        source_client = connect(args.source_host, args.source_user, src_password, args.timeout, attempts=args.connect_attempts)
+        cudy_client = connect(args.cudy_host, args.cudy_user, dst_password, args.timeout, attempts=args.connect_attempts)
+        source_transport = "public-direct"
+        if args.source_via_cudy:
+            try:
+                source_client = connect_source_via_cudy(
+                    cudy_client,
+                    private_host=args.source_private_host,
+                    private_port=args.source_private_port,
+                    cudy_awg_interface=args.cudy_awg_interface,
+                    source_user=args.source_user,
+                    source_password_value=src_password,
+                    timeout=args.timeout,
+                    attempts=args.connect_attempts,
+                )
+                source_transport = f"cudy-private:{args.source_private_host}:{args.source_private_port}"
+            except Exception:
+                if not args.allow_public_source_fallback:
+                    raise
+                source_client = connect(
+                    args.source_host,
+                    args.source_user,
+                    src_password,
+                    args.timeout,
+                    attempts=args.connect_attempts,
+                )
+        else:
+            source_client = connect(
+                args.source_host,
+                args.source_user,
+                src_password,
+                args.timeout,
+                attempts=args.connect_attempts,
+            )
         download_source_archive(
             source_client,
             source_host=args.source_host,
@@ -199,7 +280,6 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             output_path=local_archive,
         )
-        cudy_client = connect(args.cudy_host, args.cudy_user, dst_password, args.timeout, attempts=args.connect_attempts)
         status = publish_to_cudy(
             cudy_client,
             archive_path=local_archive,
@@ -210,6 +290,7 @@ def sync(args: argparse.Namespace) -> dict[str, Any]:
             timeout=args.timeout,
             keep_remote=args.keep_remote,
         )
+        status["source_transport"] = source_transport
         return status
     finally:
         if source_client is not None:
@@ -230,6 +311,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-user", default=DEFAULT_SOURCE_USER)
     parser.add_argument("--source-password")
     parser.add_argument("--source-remote-dir", default=DEFAULT_SOURCE_REMOTE_DIR)
+    parser.add_argument("--source-private-host", default=DEFAULT_SOURCE_PRIVATE_HOST)
+    parser.add_argument("--source-private-port", type=int, default=22)
+    parser.add_argument("--cudy-awg-interface", default=DEFAULT_CUDY_AWG_INTERFACE)
+    parser.add_argument(
+        "--source-via-cudy",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Reach the primary control server over Cudy's private AWG management path.",
+    )
+    parser.add_argument(
+        "--allow-public-source-fallback",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Try public SSH if the private Cudy management path is unavailable.",
+    )
     parser.add_argument("--connect-attempts", type=int, default=5)
     parser.add_argument("--cudy-host", default=DEFAULT_CUDY_HOST)
     parser.add_argument("--cudy-user", default=DEFAULT_CUDY_USER)

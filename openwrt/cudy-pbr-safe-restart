@@ -94,13 +94,16 @@ printf '%s\n' "$(date +%s)" > "$STATE_DIR/starting"
 rm -f "$STATE_DIR/failed" "$STATE_DIR/expected"
 set_forwarding
 
-if ! fw4 check >/tmp/cudy-pbr-fw4-check.log 2>&1; then
-    fail_open "fw4 validation failed before PBR start"
-    exit $?
-fi
-
 run_with_timeout /etc/init.d/pbr stop >/tmp/cudy-pbr-stop.log 2>&1 || true
 set_forwarding
+
+# pbr may have left an invalid generated include behind after an interrupted
+# update. Stop removes that include; validate the fail-open base firewall only
+# after cleanup so stale PBR data cannot prevent recovery.
+if ! fw4 check >/tmp/cudy-pbr-fw4-check.log 2>&1; then
+    fail_open "fw4 validation failed after PBR stop"
+    exit $?
+fi
 
 log "starting one serialized PBR rebuild"
 if ! run_with_timeout /etc/init.d/pbr start >/tmp/cudy-pbr-start.log 2>&1; then

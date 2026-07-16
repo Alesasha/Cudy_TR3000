@@ -9,7 +9,9 @@ This document records the verified live state. Planned work belongs in
 
 ## Repository Baseline
 
-- Branch `main` is clean and pushed to GitHub.
+- The tagged snapshot is pushed to GitHub. The current recovery checkpoint
+  consolidates the post-snapshot safety work without tracking local secrets or
+  runtime artifacts.
 - Android `1.21 (22)` is committed in `4c97412`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current published artifacts:
@@ -19,6 +21,8 @@ This document records the verified live state. Planned work belongs in
     `5ac2bf679cdef44e3b6c9db2a7ae0d4fc5703f5efe44aaec3077e452a2f898a2`;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
+- The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
+  access, bounded fallback retries and the Windows OpenAI-maintenance source.
 
 ## Primary Control Server
 
@@ -52,6 +56,17 @@ Verified on 2026-07-16:
 The control-server remains authoritative for policy, provider transport plans,
 Auto cache, probe jobs, enrollment, agent updates and admin/user UI.
 
+A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
+banner/session. The Cudy restricted control tunnel and live fallback policy
+continued to work. A subsequent audit received three banners, completed five
+authenticated sessions and passed the full strict production check. Effective
+limits are `MaxStartups 100:30:300`, `PerSourceMaxStartups 20`; the watchdog,
+firewall guard and fail2ban are active, with no stale pre-auth children at the
+time of inspection. Because the failure is intermittent, no control-server
+maintenance should depend on a single fresh public SSH session. Timeout entries
+from the home/Cudy public IP must be treated as possible agent reconnects, not
+automatically as an attack.
+
 ## Cudy Fallback And Router Agent
 
 The Cudy router is currently reachable from the primary LAN at
@@ -62,11 +77,14 @@ Verified fallback state:
 - `cudy-fallback` is running;
 - the restricted control tunnel is running;
 - fallback readiness has zero warnings;
-- policy source is live with 22 routes and 5 transports;
+- policy source is live with 22 routes; the active transport plan is dynamic
+  and contained 7 transports in the latest strict check;
 - the observer is enabled and continues reporting fresh state.
 
-The Go `cudy-router-agent` remains intentionally in `observe` mode. It does not
-own PBR, DHCP or WAN routing.
+The Go `cudy-router-agent` is intentionally back in `observe` mode with
+`allow_apply=0`. It does not own PBR, DHCP or WAN routing. A stale production
+configuration had left it in unguarded `apply`; the 2026-07-16 audit returned
+it to observe without changing the current PBR files.
 
 Live PBR is running again. The incident cause is confirmed: the previous
 watchdog incorrectly treated `/var/run/pbr.lock`, a transient rebuild lock, as
@@ -80,19 +98,29 @@ restored all 22 rules in 112 seconds. Final state has 69 prerouting mark rules,
 probe confirmed Direct via `195.170.35.108`/RU for a neutral target and tunneled
 ChatGPT via `45.136.59.135`/KZ.
 
-The Windows maintenance guard is currently armed. Its independent operator
-path is Wi-Fi `192.168.1.201` through the main router and AmneziaVPN/Aktau;
-Cudy management remains on Ethernet `192.168.8.102 -> 192.168.8.1`. This kept
-the Codex/OpenAI path alive throughout the forced PBR recovery test.
+The old AmneziaVPN/Aktau maintenance guard is disarmed. The operator workstation
+now uses a dedicated standalone `OpenAI-USWest` AWG service whose endpoint is
+pinned to the physical Wi-Fi path. It installs only current OpenAI `/32` routes,
+has no default or `/1` routes, and the OpenAI probe currently succeeds through
+`uswest`. The source now persists and self-heals the physical endpoint pin and
+refreshes OpenAI routes every two minutes. The live service still has the older
+state schema and its scheduled refresh task is absent; an elevated task-only
+repair and reboot test remain required before this is a verified recovery path.
+A manually connected AmneziaVPN application tunnel suspends the dedicated
+service to prevent nested VPN routing. Cudy management remains on Ethernet
+`192.168.8.102 -> 192.168.8.1`.
 
 PBR currently reflects the restored legacy Cudy override policy, not the
-latest control-server Auto plan. In particular, ChatGPT uses the old Aktau
-rule while the recent control plan may select another winner. Policy/transport
-synchronization therefore remains a separate guarded apply step.
+latest control-server Auto plan. The current control policy differs from two
+live override files. Policy/transport synchronization therefore remains a
+separate guarded apply step.
 
-The read-only router-agent gate is green:
+The fallback gate is operational, but repeated strict checks are not yet
+stable enough to permit apply:
 
-- critical health is 5/5 and policy blockers are zero;
+- a strict router-agent check can pass with critical health 5/5 and zero
+  blockers, while adjacent cycles still report preview or critical-service
+  timeouts;
 - 22 effective routes currently produce transport and override changes because
   Auto winners moved while the Android/Auto soak was running;
 - the override-only trial correctly refuses to mix those two transport actions
@@ -109,12 +137,25 @@ The read-only router-agent gate is green:
   `start-stop-daemon` and an `armed` handshake; a detached no-routing proof
   survived SSH disconnect and completed. A second live bootstrap has not yet
   been run;
-- `check_cudy_router_agent.py --expected-mode observe --strict` remains green.
+- the fallback observer now preserves the last successful cache metadata and
+  retries one bounded failed fetch. Three consecutive strict fallback checks
+  passed after aligning the external timeout with its 20-second preview budget;
+- an earlier router-observer series passed two of three checks; the third failed
+  only Gemini through `proxyde` and requested a transport refresh. After that
+  refresh, three checks spanning multiple observer cycles passed with critical
+  health 5/5, zero blockers, zero warnings and zero transport actions. This
+  clears the preview/probe flap for the checkpoint, but not the separate Windows
+  reboot gate required before any Cudy apply;
+- current control policy differs from two live override files and Gemini
+  preflight has intermittently timed out through `proxyde`;
+- no guarded Cudy apply may run until repeated strict observe checks are green.
 
-The previous ChatGPT timeout was a router-local TUN diagnostic artifact, not a
-provider outage. For `http-proxy-tun` transports the observer now probes the
-upstream HTTP proxy from the root-only cached transport plan. User traffic and
-live PBR remain unchanged. The agent is still in `observe` mode.
+Some router-local TUN diagnostics can produce false failures. For
+`http-proxy-tun` transports the observer now probes the upstream HTTP proxy
+from the root-only cached transport plan. The remaining intermittent preview
+and TLS timeouts still require investigation before they can be classified as
+probe artifacts or real provider failures. User traffic and live PBR remain
+unchanged. The agent is still in `observe` mode.
 
 ## Android Agent
 
@@ -159,6 +200,10 @@ Remaining Android concerns:
 - The development workstation scheduled task is intentionally disabled.
 - Normal traffic on this workstation must not depend on an unaccepted agent
   build while Codex development is active.
+- A dedicated standalone `OpenAI-USWest` recovery transport is active and
+  fail-open. The AmneziaVPN background service remains available for manual
+  fallback, but its GUI/full-tunnel service must stay disconnected during
+  normal development.
 - A controlled reboot and connectivity acceptance remains outstanding.
 
 ## Linux Agent
@@ -226,10 +271,12 @@ Remaining Android concerns:
 ## Non-Negotiable Safety Gates
 
 - Do not enable `cudy-router-agent` apply outside the guarded trial with its
-  independent timed rollback, even though observe checks are green.
-- Do not make another live Cudy PBR/transport change until the Windows
-  maintenance guard has pinned the independent AmneziaVPN endpoint to a Wi-Fi
-  path that bypasses Cudy and has verified OpenAI reachability.
+  independent timed rollback. Repeated observe checks are not yet green.
+- Do not make another live Cudy PBR/transport change until `OpenAI-USWest` has
+  passed a reboot/soak check, its endpoint still bypasses Cudy over Wi-Fi, and
+  the AmneziaVPN application tunnel is absent.
+- Do not run a guarded Cudy apply while the strict observe check reports preview
+  timeouts or critical-service failures.
 - Do not move DHCP or WAN ownership from AirTies to Cudy before both guarded
   apply trials pass.
 - Do not enable the Windows development task without the independent watchdog
@@ -240,8 +287,8 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-While the independent Wi-Fi maintenance path remains armed, run the guarded
-transport bootstrap and then the override-only router-agent trial so Cudy uses
-the current control-server Auto policy instead of restored legacy overrides.
+First consolidate and push the current workspace checkpoint. Then repair and
+reboot-test the dedicated Windows OpenAI recovery transport before returning to
+the guarded transport bootstrap and override-only router-agent trials.
 Platform-agent acceptance follows while Android continues its background soak;
 Linux acceptance remains dependent on Dima's next real-world session.
