@@ -212,6 +212,21 @@ func TestValidateRequiresExplicitApplyGate(t *testing.T) {
 	}
 }
 
+func TestValidateRequiresOneShotTransportPrepareGate(t *testing.T) {
+	a := &agent{opts: options{Mode: "prepare", PollInterval: time.Minute}}
+	if err := a.validate(); err == nil {
+		t.Fatal("expected prepare gate failure")
+	}
+	a.opts.AllowTransportPrepare = true
+	if err := a.validate(); err == nil {
+		t.Fatal("continuous prepare mode must be rejected")
+	}
+	a.opts.Once = true
+	if err := a.validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestObserveDoesNotAdvertiseTransportManagement(t *testing.T) {
 	if canManageTransports("observe") || canManageTransports("disabled") {
 		t.Fatal("non-apply modes must not advertise transport management")

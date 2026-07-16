@@ -328,6 +328,38 @@ If Amnezia recreates the Docker network with a different host bridge address,
 read the installer's `PRIVATE_MANAGEMENT_HOST` output and pass the new verified
 address explicitly.
 
+## Guarded Cudy Transport Bootstrap
+
+The first router-agent apply trial is intentionally override-only. If its
+preview reports `transport_actions`, prepare those exits in a separate guarded
+transaction first:
+
+```powershell
+python tools\trial_cudy_transport_bootstrap.py --host 192.168.8.1
+```
+
+The preview is read-only. An actual trial requires `--apply --yes`; retaining a
+successful trial additionally requires `--commit`. The tool backs up the
+transport configs, init scripts, service state and `/etc/config/pbr` on Cudy,
+then arms an on-router rollback before stopping the observer. The Go binary's
+`prepare` mode is one-shot only and requires `-allow-transport-prepare`; it
+starts the required exits, registers their PBR interfaces, rebuilds the current
+PBR state and verifies every provider through its upstream proxy. It does not
+write the new domain/IP override files.
+
+The rollback is detached with OpenWrt's BusyBox `start-stop-daemon`; the tool
+waits for an `armed` marker written by the rollback process before it is allowed
+to stop the observer. Do not replace this with `nohup`: that command is absent
+on the current Cudy firmware.
+
+For the first live exercise, omit `--commit` and wait for automatic rollback.
+Only after checking restored service/PBR state should a second, separately
+committed transport bootstrap be run. Then repeat the override-only preview:
+
+```powershell
+python tools\trial_cudy_router_agent_apply.py --host 192.168.8.1
+```
+
 ## Autostart
 
 Cudy/OpenWrt services should come back after a Cudy reboot when their init scripts are enabled. On the current router, these services are enabled:

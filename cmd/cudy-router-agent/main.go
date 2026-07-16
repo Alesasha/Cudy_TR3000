@@ -138,21 +138,22 @@ type statusFile struct {
 }
 
 type options struct {
-	Mode             string
-	PreviewURL       string
-	StateDir         string
-	OverrideDir      string
-	ApplyCommand     string
-	BootstrapCommand string
-	HealthURL        string
-	PolicyCache      string
-	SingBoxDir       string
-	ControlURL       string
-	TokenFile        string
-	ProbeLimit       int
-	AllowApply       bool
-	Once             bool
-	PollInterval     time.Duration
+	Mode                  string
+	PreviewURL            string
+	StateDir              string
+	OverrideDir           string
+	ApplyCommand          string
+	BootstrapCommand      string
+	HealthURL             string
+	PolicyCache           string
+	SingBoxDir            string
+	ControlURL            string
+	TokenFile             string
+	ProbeLimit            int
+	AllowApply            bool
+	AllowTransportPrepare bool
+	Once                  bool
+	PollInterval          time.Duration
 }
 
 type agent struct {
@@ -195,7 +196,7 @@ var geoBlockPatterns = []string{
 
 func main() {
 	var opts options
-	flag.StringVar(&opts.Mode, "mode", "disabled", "disabled, observe, or apply")
+	flag.StringVar(&opts.Mode, "mode", "disabled", "disabled, observe, prepare, or apply")
 	flag.StringVar(&opts.PreviewURL, "preview-url", "http://127.0.0.1:8765/api/cudy/agent-preview", "sanitized Cudy policy preview URL")
 	flag.StringVar(&opts.StateDir, "state-dir", "/var/lib/cudy-router-agent", "root-only state and transaction directory")
 	flag.StringVar(&opts.OverrideDir, "override-dir", "/etc/pbr-overrides", "PBR override directory")
@@ -208,6 +209,7 @@ func main() {
 	flag.StringVar(&opts.TokenFile, "token-file", "/etc/cudy-fallback/agent.token", "root-only agent token file")
 	flag.IntVar(&opts.ProbeLimit, "probe-limit", 2, "maximum probe jobs claimed per cycle; zero disables probing")
 	flag.BoolVar(&opts.AllowApply, "allow-apply", false, "required safety gate for apply mode")
+	flag.BoolVar(&opts.AllowTransportPrepare, "allow-transport-prepare", false, "required safety gate for one-shot transport preparation")
 	flag.BoolVar(&opts.Once, "once", false, "run one cycle and exit")
 	flag.DurationVar(&opts.PollInterval, "poll-interval", time.Minute, "policy poll interval")
 	flag.Parse()
@@ -238,6 +240,10 @@ func main() {
 func (a *agent) validate() error {
 	switch a.opts.Mode {
 	case "disabled", "observe":
+	case "prepare":
+		if !a.opts.AllowTransportPrepare || !a.opts.Once {
+			return errors.New("prepare mode requires --allow-transport-prepare and --once")
+		}
 	case "apply":
 		if !a.opts.AllowApply {
 			return errors.New("apply mode requires --allow-apply")
@@ -335,10 +341,22 @@ func (a *agent) cycle(ctx context.Context) error {
 		return a.persistStatus(ctx, status, desired)
 	}
 	if len(desired.Blockers) > 0 {
-		err := errors.New("refusing apply while policy has blockers: " + strings.Join(desired.Blockers, "; "))
+		err := fmt.Errorf("refusing %s while policy has blockers: %s", a.opts.Mode, strings.Join(desired.Blockers, "; "))
 		status.Error = err.Error()
 		_ = a.persistStatus(ctx, status, desired)
 		return err
+	}
+	if a.opts.Mode == "prepare" {
+		rolledBack, prepareErr := a.prepareTransportTransaction(ctx, transportUpdates, desired.Transports)
+		status.Applied = prepareErr == nil
+		status.RolledBack = rolledBack
+		status.OK = prepareErr == nil
+		status.CriticalServicesOK = prepareErr == nil
+		if prepareErr != nil {
+			status.Error = prepareErr.Error()
+		}
+		_ = a.persistStatus(ctx, status, desired)
+		return prepareErr
 	}
 	if len(updates) == 0 {
 		if err := a.healthCheck(ctx, desired.CriticalServices, desired.Groups); err != nil {
@@ -1171,6 +1189,128 @@ func (a *agent) planUpdates(desired desiredState) ([]diffEntry, map[string][]byt
 	return diffs, updates, nil
 }
 
+func (a *agent) prepareTransportTransaction(ctx context.Context, updates map[string][]byte, transports []transportAction) (bool, error) {
+	if len(transports) == 0 {
+		return false, nil
+	}
+	txDir := filepath.Join(a.opts.StateDir, "transport-transactions", a.now().Format("20060102T150405.000000000Z"))
+	if err := os.MkdirAll(txDir, 0o700); err != nil {
+		return false, err
+	}
+	type backup struct {
+		Path, Backup string
+		Existed      bool
+		Mode         os.FileMode
+	}
+	pathSet := map[string]bool{"/etc/config/pbr": true}
+	for path := range updates {
+		pathSet[path] = true
+	}
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	backups := make([]backup, 0, len(paths))
+	for index, path := range paths {
+		old, err := os.ReadFile(path)
+		existed := err == nil
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return false, err
+		}
+		backupPath := filepath.Join(txDir, fmt.Sprintf("%03d.backup", index))
+		if existed {
+			if err := os.WriteFile(backupPath, old, 0o600); err != nil {
+				return false, err
+			}
+		}
+		mode := managedFileMode(path)
+		if existed {
+			if info, statErr := os.Stat(path); statErr == nil {
+				mode = info.Mode().Perm()
+			}
+		}
+		backups = append(backups, backup{Path: path, Backup: backupPath, Existed: existed, Mode: mode})
+	}
+
+	rollback := func(cause error) (bool, error) {
+		for _, transport := range transports {
+			_ = a.runCommand(context.Background(), fmt.Sprintf(
+				"/etc/init.d/%[1]s stop 2>/dev/null || true; /etc/init.d/%[1]s disable 2>/dev/null || true",
+				transport.Service,
+			))
+		}
+		for _, item := range backups {
+			if item.Existed {
+				data, _ := os.ReadFile(item.Backup)
+				_ = writeFileAtomic(item.Path, data, item.Mode)
+			} else {
+				_ = os.Remove(item.Path)
+			}
+		}
+		for _, transport := range transports {
+			for _, item := range backups {
+				if item.Path == filepath.Join("/etc/init.d", transport.Service) && item.Existed {
+					_ = a.runCommand(context.Background(), fmt.Sprintf(
+						"chmod 0755 /etc/init.d/%[1]s && /etc/init.d/%[1]s enable && /etc/init.d/%[1]s restart",
+						transport.Service,
+					))
+				}
+			}
+		}
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		defer cancel()
+		_ = a.runCommand(rollbackCtx, a.opts.BootstrapCommand)
+		return true, cause
+	}
+
+	for path, data := range updates {
+		if err := writeFileAtomic(path, data, managedFileMode(path)); err != nil {
+			return rollback(fmt.Errorf("write %s failed: %w", path, err))
+		}
+	}
+	for _, transport := range transports {
+		command := fmt.Sprintf(
+			"chmod 0755 /etc/init.d/%[1]s && /etc/init.d/%[1]s enable && /etc/init.d/%[1]s restart && "+
+				"uci -q get pbr.config.supported_interface | tr ' ' '\\n' | grep -qxF '%[2]s' || uci add_list pbr.config.supported_interface='%[2]s'; "+
+				"i=0; while [ ! -d /sys/class/net/%[2]s ] && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done; test -d /sys/class/net/%[2]s",
+			transport.Service, transport.Interface,
+		)
+		transportCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
+		err := a.runCommand(transportCtx, command)
+		cancel()
+		if err != nil {
+			return rollback(fmt.Errorf("transport %s failed: %w", transport.ServerID, err))
+		}
+	}
+	if err := a.runCommand(ctx, "uci commit pbr"); err != nil {
+		return rollback(fmt.Errorf("commit PBR transport interfaces: %w", err))
+	}
+	bootstrapCtx, cancel := context.WithTimeout(ctx, 180*time.Second)
+	err := a.runCommand(bootstrapCtx, a.opts.BootstrapCommand)
+	cancel()
+	if err != nil {
+		return rollback(fmt.Errorf("transport PBR bootstrap failed: %w", err))
+	}
+	if err := a.controlHealthCheck(ctx); err != nil {
+		return rollback(fmt.Errorf("post-bootstrap control health failed: %w", err))
+	}
+	for _, transport := range transports {
+		probe := a.probeTarget(ctx, "https://ifconfig.me/ip", transport.Interface, 5*time.Second, 15*time.Second, "", "")
+		if probe["ok"] != true {
+			return rollback(fmt.Errorf("transport %s health failed: %s", transport.ServerID, probeFailure(probe)))
+		}
+	}
+	return false, nil
+}
+
+func probeFailure(probe map[string]any) string {
+	if value := anyString(probe["error"]); value != "" {
+		return value
+	}
+	return fmt.Sprintf("HTTP %v semantic=%s", probe["http_code"], anyString(probe["semantic_status"]))
+}
+
 func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte, transports []transportAction, criticalServices []criticalService, groups map[string]routeSet) (bool, error) {
 	txDir := filepath.Join(a.opts.StateDir, "transactions", a.now().Format("20060102T150405.000000000Z"))
 	if err := os.MkdirAll(txDir, 0o700); err != nil {
@@ -1314,6 +1454,19 @@ func managedFileMode(path string) os.FileMode {
 }
 
 func (a *agent) healthCheck(ctx context.Context, criticalServices []criticalService, groups map[string]routeSet) error {
+	if err := a.controlHealthCheck(ctx); err != nil {
+		return err
+	}
+	if len(criticalServices) == 0 {
+		return errors.New("critical service health checks are not configured")
+	}
+	if failures := a.checkCriticalServices(ctx, criticalServices, groups); len(failures) > 0 {
+		return fmt.Errorf("critical services failed: %s", strings.Join(failures, "; "))
+	}
+	return nil
+}
+
+func (a *agent) controlHealthCheck(ctx context.Context) error {
 	healthCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(healthCtx, http.MethodGet, a.opts.HealthURL, nil)
@@ -1327,12 +1480,6 @@ func (a *agent) healthCheck(ctx context.Context, criticalServices []criticalServ
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("health returned HTTP %d", resp.StatusCode)
-	}
-	if len(criticalServices) == 0 {
-		return errors.New("critical service health checks are not configured")
-	}
-	if failures := a.checkCriticalServices(ctx, criticalServices, groups); len(failures) > 0 {
-		return fmt.Errorf("critical services failed: %s", strings.Join(failures, "; "))
 	}
 	return nil
 }

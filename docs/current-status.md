@@ -70,12 +70,24 @@ own PBR, DHCP or WAN routing.
 
 The read-only router-agent gate is green:
 
-- critical health is 5/5, including ChatGPT through `proxyde`;
-- blockers, warnings and transport actions are zero;
-- 22 effective routes produce eight PBR override file changes only;
-- `check_cudy_router_agent.py --expected-mode observe --strict` passed three
-  times at least five minutes apart;
-- guarded apply preflight passes and still requires explicit `--apply --yes`.
+- critical health is 5/5 and policy blockers are zero;
+- 22 effective routes currently produce transport and override changes because
+  Auto winners moved while the Android/Auto soak was running;
+- the override-only trial correctly refuses to mix those two transport actions
+  with route changes;
+- a separate guarded transport-bootstrap preview passes and identifies exactly
+  five backup targets: `/etc/config/pbr`, two init scripts and two transport
+  configs. Live bootstrap still requires explicit `--apply --yes`, and keeping
+  it additionally requires `--commit`;
+- the first uncommitted live bootstrap exposed that OpenWrt has no `nohup`, so
+  the external rollback did not arm. The trial was manually rolled back; all
+  five files matched their backups byte-for-byte, the observer returned to
+  `running/observe`, PBR had no stale lock, and Direct plus four provider exits
+  passed explicit curl checks. The replacement uses BusyBox
+  `start-stop-daemon` and an `armed` handshake; a detached no-routing proof
+  survived SSH disconnect and completed. A second live bootstrap has not yet
+  been run;
+- `check_cudy_router_agent.py --expected-mode observe --strict` remains green.
 
 The previous ChatGPT timeout was a router-local TUN diagnostic artifact, not a
 provider outage. For `http-proxy-tun` transports the observer now probes the

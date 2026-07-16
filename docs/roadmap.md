@@ -108,11 +108,15 @@ disabled, re-enabled and deleted without CLI or database edits.
 Prerequisite: Phases 1 and the relevant Auto checks are green.
 
 1. Capture current PBR, dnsmasq, nft, transport and service state.
-2. Run the first uncommitted guarded apply trial without moving DHCP/WAN.
-3. Deliberately stop the controlling workstation path and prove the independent
+2. If the live policy requires missing or refreshed transports, run the
+   separate guarded transport bootstrap first: one automatic-rollback trial,
+   then one committed trial. It must not write the new route overrides.
+3. Run the first uncommitted override-only guarded apply trial without moving
+   DHCP/WAN.
+4. Deliberately stop the controlling workstation path and prove the independent
    on-router rollback restores previous files, PBR state and `observe` gate.
-4. Inspect counters and Direct/provider routes after rollback.
-5. Run a separately committed trial, then return to `observe` and compare the
+5. Inspect counters and Direct/provider routes after rollback.
+6. Run a separately committed trial, then return to `observe` and compare the
    resulting state.
 
 Exit criteria: both trials preserve LAN/internet access, critical services and
