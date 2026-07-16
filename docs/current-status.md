@@ -68,16 +68,27 @@ Verified fallback state:
 The Go `cudy-router-agent` remains intentionally in `observe` mode. It does not
 own PBR, DHCP or WAN routing.
 
-Live PBR is currently stopped and Cudy LAN traffic is fail-open Direct. A
-physical-interface probe from `192.168.8.102` returned the home WAN address
-`195.170.35.108` for ChatGPT even though the `proxyde` nft set contained the
-resolved destination addresses. The exact cause is confirmed: the deployed
+Live PBR is running again. The incident cause is confirmed: the previous
 watchdog incorrectly treated `/var/run/pbr.lock`, a transient rebuild lock, as
 a persistent running marker. When the lock disappeared it stopped PBR, removed
-all fwmark `ip rule` entries and emptied `pbr_prerouting`. AmneziaVPN APP is the
-temporary operator channel. The source fix validates the real nft/ip-rule
-dataplane and attempts one serialized recovery before failing open, but it has
-not been deployed live yet.
+all fwmark `ip rule` entries and emptied `pbr_prerouting`. The corrected safety
+scripts are deployed: they validate the real nft/ip-rule dataplane, attempt one
+serialized recovery, and fail open only if recovery fails. A deliberate live
+test removed all 22 PBR `ip rule` entries; the watchdog detected the loss and
+restored all 22 rules in 112 seconds. Final state has 69 prerouting mark rules,
+`expected=yes`, `failed=none`, and forwarding enabled. A physical Ethernet
+probe confirmed Direct via `195.170.35.108`/RU for a neutral target and tunneled
+ChatGPT via `45.136.59.135`/KZ.
+
+The Windows maintenance guard is currently armed. Its independent operator
+path is Wi-Fi `192.168.1.201` through the main router and AmneziaVPN/Aktau;
+Cudy management remains on Ethernet `192.168.8.102 -> 192.168.8.1`. This kept
+the Codex/OpenAI path alive throughout the forced PBR recovery test.
+
+PBR currently reflects the restored legacy Cudy override policy, not the
+latest control-server Auto plan. In particular, ChatGPT uses the old Aktau
+rule while the recent control plan may select another winner. Policy/transport
+synchronization therefore remains a separate guarded apply step.
 
 The read-only router-agent gate is green:
 
@@ -229,9 +240,8 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Arm the independent Wi-Fi maintenance path, deploy the corrected PBR safety
-scripts, and run one controlled PBR recovery with explicit physical-Ethernet
-checks for Direct, ChatGPT and Telegram. Only after that gate passes should the
-guarded transport bootstrap resume. Platform-agent acceptance follows while
-Android continues its background soak; Linux acceptance remains dependent on
-Dima's next real-world session.
+While the independent Wi-Fi maintenance path remains armed, run the guarded
+transport bootstrap and then the override-only router-agent trial so Cudy uses
+the current control-server Auto policy instead of restored legacy overrides.
+Platform-agent acceptance follows while Android continues its background soak;
+Linux acceptance remains dependent on Dima's next real-world session.
