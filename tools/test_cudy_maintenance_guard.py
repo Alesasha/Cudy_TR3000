@@ -19,6 +19,8 @@ def main() -> int:
         "-WindowStyle Hidden",
         "maintenance-guard",
         "arm failed:",
+        "(?:Profile|Профиль)",
+        "$script:WifiProfile",
     )
     required_stop = (
         "Remove-NetRoute",

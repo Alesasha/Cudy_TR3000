@@ -29,6 +29,8 @@ def main() -> int:
     apply = parser.parse_args(["--enable-apply", "--dry-run"])
     assert apply.enable_apply
     assert not apply.disable_apply
+    init = (ROOT / "openwrt" / "cudy-router-agent.init").read_text(encoding="utf-8")
+    assert "-authoritative-overrides" in init
     print("Cudy router-agent deploy defaults regression passed.")
     return 0
 

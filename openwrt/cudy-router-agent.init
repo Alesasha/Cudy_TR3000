@@ -25,6 +25,7 @@ start_service() {
         -probe-limit 2 \
         -state-dir /var/lib/cudy-router-agent \
         -override-dir /etc/pbr-overrides \
+        -authoritative-overrides \
         -bootstrap-command /usr/bin/cudy-pbr-safe-restart \
         -poll-interval 1m
     procd_set_param respawn 30 5 5

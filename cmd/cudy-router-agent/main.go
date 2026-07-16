@@ -138,22 +138,23 @@ type statusFile struct {
 }
 
 type options struct {
-	Mode                  string
-	PreviewURL            string
-	StateDir              string
-	OverrideDir           string
-	ApplyCommand          string
-	BootstrapCommand      string
-	HealthURL             string
-	PolicyCache           string
-	SingBoxDir            string
-	ControlURL            string
-	TokenFile             string
-	ProbeLimit            int
-	AllowApply            bool
-	AllowTransportPrepare bool
-	Once                  bool
-	PollInterval          time.Duration
+	Mode                   string
+	PreviewURL             string
+	StateDir               string
+	OverrideDir            string
+	ApplyCommand           string
+	BootstrapCommand       string
+	HealthURL              string
+	PolicyCache            string
+	SingBoxDir             string
+	ControlURL             string
+	TokenFile              string
+	ProbeLimit             int
+	AllowApply             bool
+	AuthoritativeOverrides bool
+	AllowTransportPrepare  bool
+	Once                   bool
+	PollInterval           time.Duration
 }
 
 type agent struct {
@@ -209,6 +210,7 @@ func main() {
 	flag.StringVar(&opts.TokenFile, "token-file", "/etc/cudy-fallback/agent.token", "root-only agent token file")
 	flag.IntVar(&opts.ProbeLimit, "probe-limit", 2, "maximum probe jobs claimed per cycle; zero disables probing")
 	flag.BoolVar(&opts.AllowApply, "allow-apply", false, "required safety gate for apply mode")
+	flag.BoolVar(&opts.AuthoritativeOverrides, "authoritative-overrides", false, "replace all safe force-*.domains/ips files with the control-server plan")
 	flag.BoolVar(&opts.AllowTransportPrepare, "allow-transport-prepare", false, "required safety gate for one-shot transport preparation")
 	flag.BoolVar(&opts.Once, "once", false, "run one cycle and exit")
 	flag.DurationVar(&opts.PollInterval, "poll-interval", time.Minute, "policy poll interval")
@@ -1148,6 +1150,17 @@ func (a *agent) planUpdates(desired desiredState) ([]diffEntry, map[string][]byt
 		managed[filepath.Join(a.opts.OverrideDir, "force-"+iface+".domains")] = set.Domains
 		managed[filepath.Join(a.opts.OverrideDir, "force-"+iface+".ips")] = set.IPs
 	}
+	if a.opts.AuthoritativeOverrides {
+		existing, err := authoritativeOverridePaths(a.opts.OverrideDir)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, path := range existing {
+			if _, ok := managed[path]; !ok {
+				managed[path] = nil
+			}
+		}
+	}
 	previous, _ := readManagedPaths(filepath.Join(a.opts.StateDir, "managed-paths.json"))
 	for _, path := range previous {
 		if _, ok := managed[path]; !ok {
@@ -1169,6 +1182,10 @@ func (a *agent) planUpdates(desired desiredState) ([]diffEntry, map[string][]byt
 		oldManaged := extractManagedLines(string(old))
 		newManaged := uniqueSorted(managed[path])
 		merged := replaceManagedBlock(string(old), newManaged)
+		if a.opts.AuthoritativeOverrides {
+			oldManaged = extractOverrideLines(string(old))
+			merged = renderManagedBlock(newManaged)
+		}
 		if !bytes.Equal(old, []byte(merged)) {
 			updates[path] = []byte(merged)
 			diffs = append(diffs, diffEntry{
@@ -1176,11 +1193,15 @@ func (a *agent) planUpdates(desired desiredState) ([]diffEntry, map[string][]byt
 			})
 		}
 	}
-	currentPaths := make([]string, 0, len(desired.Groups)*2)
-	for iface := range desired.Groups {
-		currentPaths = append(currentPaths,
-			filepath.Join(a.opts.OverrideDir, "force-"+iface+".domains"),
-			filepath.Join(a.opts.OverrideDir, "force-"+iface+".ips"))
+	currentPaths := make([]string, 0, len(managed))
+	if a.opts.AuthoritativeOverrides {
+		currentPaths = append(currentPaths, paths...)
+	} else {
+		for iface := range desired.Groups {
+			currentPaths = append(currentPaths,
+				filepath.Join(a.opts.OverrideDir, "force-"+iface+".domains"),
+				filepath.Join(a.opts.OverrideDir, "force-"+iface+".ips"))
+		}
 	}
 	sort.Strings(currentPaths)
 	if err := writeJSONAtomic(filepath.Join(a.opts.StateDir, "managed-paths.next.json"), currentPaths, 0o600); err != nil {
@@ -1587,6 +1608,60 @@ func replaceManagedBlock(content string, lines []string) string {
 		return block
 	}
 	return content + "\n" + block
+}
+
+func renderManagedBlock(lines []string) string {
+	lines = uniqueSorted(lines)
+	if len(lines) == 0 {
+		return ""
+	}
+	return beginMarker + "\n" + strings.Join(lines, "\n") + "\n" + endMarker + "\n"
+}
+
+func extractOverrideLines(content string) []string {
+	result := []string{}
+	for _, line := range strings.Split(strings.ReplaceAll(content, "\r\n", "\n"), "\n") {
+		line = normalizeLine(line)
+		if line != "" {
+			result = append(result, line)
+		}
+	}
+	return uniqueSorted(result)
+}
+
+func authoritativeOverridePaths(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	paths := []string{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasPrefix(name, "force-") {
+			continue
+		}
+		var iface string
+		switch {
+		case strings.HasSuffix(name, ".domains"):
+			iface = strings.TrimSuffix(strings.TrimPrefix(name, "force-"), ".domains")
+		case strings.HasSuffix(name, ".ips"):
+			iface = strings.TrimSuffix(strings.TrimPrefix(name, "force-"), ".ips")
+		default:
+			continue
+		}
+		if !safeName(iface) {
+			continue
+		}
+		paths = append(paths, filepath.Join(dir, name))
+	}
+	sort.Strings(paths)
+	return paths, nil
 }
 
 func extractManagedLines(content string) []string {

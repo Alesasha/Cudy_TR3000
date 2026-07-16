@@ -179,6 +179,41 @@ func TestManagedBlockPreservesManualLines(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeOverridesRetireLegacyManualLines(t *testing.T) {
+	stateDir := t.TempDir()
+	overrideDir := t.TempDir()
+	legacy := filepath.Join(overrideDir, "force-awg1.domains")
+	desiredPath := filepath.Join(overrideDir, "force-proxyde.domains")
+	if err := os.WriteFile(legacy, []byte("chatgpt.com\nold.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(desiredPath, []byte("manual.example\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{opts: options{
+		Mode: "observe", StateDir: stateDir, OverrideDir: overrideDir, AuthoritativeOverrides: true,
+	}}
+	desired := desiredState{Groups: map[string]routeSet{"proxyde": {Domains: []string{"chatgpt.com"}}}}
+	diff, updates, err := a.planUpdates(desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(diff) != 2 {
+		t.Fatalf("diff=%v", diff)
+	}
+	if string(updates[legacy]) != "" {
+		t.Fatalf("legacy override was not retired: %q", updates[legacy])
+	}
+	want := beginMarker + "\nchatgpt.com\n" + endMarker + "\n"
+	if string(updates[desiredPath]) != want {
+		t.Fatalf("desired override=%q want=%q", updates[desiredPath], want)
+	}
+	managed, readErr := readManagedPaths(filepath.Join(stateDir, "managed-paths.next.json"))
+	if readErr != nil || len(managed) != 3 {
+		t.Fatalf("managed=%v err=%v", managed, readErr)
+	}
+}
+
 func TestObserveWritesDesiredAndDiffWithoutChangingOverrides(t *testing.T) {
 	stateDir := t.TempDir()
 	overrideDir := t.TempDir()

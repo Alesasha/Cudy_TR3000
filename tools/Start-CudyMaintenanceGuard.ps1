@@ -60,6 +60,13 @@ function Enable-WifiPath {
         Enable-NetAdapter -Name $WifiAlias -Confirm:$false
         Start-Sleep -Seconds 2
     }
+    if (-not $WifiProfile -and $adapter.Status -eq "Up") {
+        $interfaceDetails = (& netsh.exe wlan show interfaces) -join "`n"
+        $profileMatch = [regex]::Match($interfaceDetails, '(?im)^\s*(?:Profile|Профиль)\s*:\s*(.+?)\s*$')
+        if ($profileMatch.Success) {
+            $script:WifiProfile = $profileMatch.Groups[1].Value.Trim()
+        }
+    }
     if ($WifiProfile) {
         & netsh.exe wlan connect name="$WifiProfile" interface="$WifiAlias" | Out-Null
     }
