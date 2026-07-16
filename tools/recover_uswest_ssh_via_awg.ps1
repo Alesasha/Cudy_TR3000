@@ -2,7 +2,8 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$AwgConfig = "",
     [string]$TunnelName = "UswestAdmin",
-    [string]$PrivateSshHost = "10.8.1.1",
+    [Parameter(Mandatory = $true)]
+    [string]$PrivateSshHost,
     [string]$PasswordFile = "",
     [int]$ConnectAttempts = 6,
     [int]$TimeoutSeconds = 30
@@ -19,6 +20,10 @@ function Assert-Admin {
 }
 
 Assert-Admin
+
+if ($PrivateSshHost -eq "10.8.1.1") {
+    throw "10.8.1.1 is an AWG client peer, not a verified uswest management address. Pass the private SSH address configured on uswest."
+}
 
 if (-not $AwgConfig) {
     $AwgConfig = Join-Path $RepoRoot "secrets\agents\isasha_R7_Cudy-windows\uswest-awg.conf"

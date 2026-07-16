@@ -38,6 +38,9 @@ Verified on 2026-07-16:
   for 24 hours or degrade readiness;
 - direct SSH audit, restricted tunnel-user deployment and agent update
   downloads work.
+- restricted tunnel-user deployment now has a sequential system OpenSSH mode;
+  it completed a production code promotion despite intermittent public banner
+  delays, without opening parallel SSH sessions;
 - the scheduled operator backup and Cudy fallback-sync tasks both have a zero
   last result; the latest pulled backup archive is dated 2026-07-16.
 
@@ -94,6 +97,10 @@ Verified acceptance:
   stayed active;
 - probe jobs now use persistent loopback-only mixed inbounds and do not reload
   or interrupt the active TUN;
+- recently probed libbox-compatible transports remain in a six-hour warm set
+  bounded above the current inventory size. After the pending probe queue was
+  drained, a new production probe completed with config hash
+  `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
 
@@ -159,6 +166,10 @@ Remaining Android concerns:
   refresh counts, and labels the private Cudy check as unreachable from the VPS
   instead of incorrectly calling it stale. The independent Cudy checks remain
   authoritative for fallback health.
+- SSH recovery documentation no longer treats AWG peer `10.8.1.1` as a server
+  management address. A private recovery command now requires an explicitly
+  configured and verified uswest management IP; until one is provisioned, the
+  provider console and Cudy fallback are the valid no-public-SSH recovery paths.
 - Full enrollment/update/device lifecycle usability still needs the remaining
   Phase 4 audit and automated rendered regression coverage.
 - The HTTP lifecycle regression now creates and deletes a user, revokes and

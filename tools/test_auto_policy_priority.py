@@ -236,7 +236,7 @@ def run_cached_winner_respects_effective_policy_check() -> None:
 
 
 def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
-    for port, server_id in enumerate(["proxyde", "proxynl", "proxyus"], start=18080):
+    for port, server_id in enumerate(["proxyde", "proxynl", "proxyus", "proxyfr"], start=18080):
         app.save_transport_config(
             db_path,
             INVENTORY,
@@ -247,6 +247,16 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
             enabled=True,
             source="test",
         )
+    app.save_transport_config(
+        db_path,
+        INVENTORY,
+        server_id="aktau",
+        transport_type="amneziawg-conf",
+        interface_name="awg1",
+        config={"config": "[Interface]\nAddress = 10.8.1.9/32\n"},
+        enabled=True,
+        source="test",
+    )
     app.create_agent_device(
         db_path,
         INVENTORY,
@@ -299,6 +309,63 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
         ["proxyde", "proxynl", "proxyus"],
         "agent transport_plan should include only applied route and pending probe transports",
     )
+
+    android_device_id = "smoke-auto-priority-android"
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id=android_device_id,
+        display_name="Smoke Auto Priority Android",
+        platform="android",
+    )
+    recent_job = app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="recent-android-probe.example",
+        candidate_server_ids=["proxyus", "aktau"],
+        user_id=TEST_USER_ID,
+        assigned_device_id=android_device_id,
+    )
+    old_job = app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="old-android-probe.example",
+        candidate_server_ids=["proxyfr"],
+        user_id=TEST_USER_ID,
+        assigned_device_id=android_device_id,
+    )
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=7)).replace(microsecond=0).isoformat()
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE agent_probe_jobs
+            SET status = 'done', claimed_by_device_id = ?, finished_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (android_device_id, app.now(), app.now(), recent_job["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE agent_probe_jobs
+            SET status = 'done', claimed_by_device_id = ?, finished_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (android_device_id, old_timestamp, old_timestamp, old_job["id"]),
+        )
+        android_config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={
+                "id": android_device_id,
+                "display_name": "Smoke Auto Priority Android",
+                "platform": "android",
+            },
+        )
+    android_transport_ids = sorted(item["server_id"] for item in android_config["transport_plan"])
+    assert_true("proxyus" in android_transport_ids, "Android should retain a recently probed transport")
+    assert_true("aktau" not in android_transport_ids, "Android should not warm an unsupported AWG transport")
+    assert_true("proxyfr" not in android_transport_ids, "Android should prune an expired probe transport")
 
 
 def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:

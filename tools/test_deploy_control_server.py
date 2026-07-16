@@ -34,6 +34,21 @@ def main() -> int:
     assert fallback_deploy.AGENT_UPDATE_DIR in fallback_with_updates
     fallback_selected = fallback_deploy.build_parser().parse_args(["--skip-agent-updates"])
     assert fallback_selected.skip_agent_updates
+    fallback_openssh = fallback_deploy.build_parser().parse_args(["--openssh"])
+    assert fallback_openssh.openssh
+    options = fallback_deploy.openssh_options(fallback_openssh)
+    assert "BatchMode=yes" in options
+    assert "ConnectionAttempts=1" in options
+    script = fallback_deploy.promotion_script(
+        fallback_openssh,
+        remote_archive="/tmp/control.tar",
+        remote_script="/tmp/promote.sh",
+    )
+    assert "systemctl restart vpn-control" in script
+    assert "rm -f /tmp/control.tar /tmp/promote.sh" in script
+    source = (TOOLS / "deploy_control_server_via_tunnel_user.py").read_text(encoding="utf-8")
+    assert 'script -qec' in source
+    assert '["ssh", "-tt"' not in source
     print("Control-server deploy payload regression passed.")
     return 0
 

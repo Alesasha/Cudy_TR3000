@@ -9,6 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools" / "harden_control_ssh.py"
+CUDY_RECOVERY = ROOT / "tools" / "recover_uswest_ssh_via_cudy.py"
 
 
 def assert_contains(text: str, needle: str, *, label: str) -> None:
@@ -53,6 +54,12 @@ def main() -> int:
     assert_contains(text, "banaction = iptables-multiport", label="harden_control_ssh.py")
     assert_not_contains(text, "sshd: root [priv]", label="harden_control_ssh.py")
     assert_not_contains(text, "user@pts", label="harden_control_ssh.py")
+
+    recovery_text = CUDY_RECOVERY.read_text(encoding="utf-8")
+    ast.parse(recovery_text)
+    assert_contains(recovery_text, '"--private-host"', label="recover_uswest_ssh_via_cudy.py")
+    assert_contains(recovery_text, "required=True", label="recover_uswest_ssh_via_cudy.py")
+    assert_not_contains(recovery_text, 'default="10.8.1.1"', label="recover_uswest_ssh_via_cudy.py")
 
     print("SSH hardening regression passed.")
     return 0

@@ -280,18 +280,35 @@ ss -Htn sport = :22 | wc -l
 ```
 
 If public SSH is reachable at TCP level but new sessions fail before the SSH
-banner while an existing control tunnel still works, use the uswest AWG private
-management path from an elevated PowerShell window:
+banner while an existing control tunnel still works, a private management path
+may be used only after a dedicated private SSH address has been configured and
+verified on uswest. Run this from an elevated PowerShell window and pass that
+address explicitly:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\recover_uswest_ssh_via_awg.ps1
+powershell -ExecutionPolicy Bypass -File tools\recover_uswest_ssh_via_awg.ps1 `
+  -PrivateSshHost <verified-private-management-ip>
 ```
 
 The script starts a temporary `UswestAdmin` AWG tunnel from
-`secrets\agents\isasha_R7_Cudy-windows\uswest-awg.conf`, connects to SSH on
-`10.8.1.1`, installs the same hardening/watchdog profile, and then rechecks
-public SSH. This bypasses public-IP fail2ban mistakes and gives us a way to
-recover before resorting to a provider reboot.
+`secrets\agents\isasha_R7_Cudy-windows\uswest-awg.conf`, connects to the
+explicit management address, installs the same hardening/watchdog profile, and
+then rechecks public SSH. AWG peer `10.8.1.1` belongs to a client and must not be
+used as a server management address. Until a dedicated address is provisioned,
+the valid recovery paths are the provider console/reboot and the current Cudy
+fallback control state.
+
+Once that management address exists, the same path can be used through Cudy's
+already-running `awg2` interface without starting a Windows AWG tunnel:
+
+```powershell
+python tools\recover_uswest_ssh_via_cudy.py `
+  --private-host <verified-private-management-ip> `
+  --check-only
+```
+
+Remove `--check-only` only after the private connectivity check succeeds. The
+tool adds one narrow `/32` route on Cudy and never assumes a management address.
 
 ## Autostart
 

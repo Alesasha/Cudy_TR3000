@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import getpass
 import os
+import subprocess
 import stat
+import sys
 import tarfile
 import tempfile
 import time
@@ -140,22 +142,8 @@ def run_su_script(client: paramiko.SSHClient, *, password: str, script_path: str
     return out + err
 
 
-def deploy(args: argparse.Namespace) -> dict[str, object]:
-    password = root_password(args.root_password)
-    with tempfile.TemporaryDirectory(prefix="cudy-control-deploy-") as temp_dir:
-        archive = Path(temp_dir) / "cudy-control-deploy.tar"
-        count = build_archive(archive, include_agent_updates=not args.skip_agent_updates)
-        print(f"Built archive: {archive} ({archive.stat().st_size} bytes, {count} files)", flush=True)
-        client = connect(args)
-        try:
-            remote_archive = f"/tmp/cudy-control-deploy-{int(time.time())}.tar"
-            remote_script = f"/tmp/cudy-control-promote-{int(time.time())}.sh"
-            sftp = client.open_sftp()
-            sftp.get_channel().settimeout(args.timeout)
-            try:
-                print(f"Uploading archive to {remote_archive}...", flush=True)
-                sftp.put(str(archive), remote_archive)
-                script = f"""set -eu
+def promotion_script(args: argparse.Namespace, *, remote_archive: str, remote_script: str) -> str:
+    return f"""set -eu
 mkdir -p {args.remote_dir} {args.remote_dir}/data
 cd {args.remote_dir}
 tar -xf {remote_archive}
@@ -171,6 +159,123 @@ done
 python3 {args.remote_dir}/tools/vpn_control_app.py --db {args.remote_dir}/data/vpn_control.db --inventory {args.remote_dir}/config/vpn_inventory.json system-status
 rm -f {remote_archive} {remote_script}
 """
+
+
+def openssh_options(args: argparse.Namespace) -> list[str]:
+    return [
+        "-i",
+        str(args.key),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "PasswordAuthentication=no",
+        "-o",
+        "KbdInteractiveAuthentication=no",
+        "-o",
+        "StrictHostKeyChecking=accept-new",
+        "-o",
+        f"ConnectTimeout={args.timeout}",
+        "-o",
+        "ConnectionAttempts=1",
+        "-o",
+        "ServerAliveInterval=15",
+        "-o",
+        "ServerAliveCountMax=2",
+    ]
+
+
+def run_openssh(
+    command: list[str],
+    *,
+    attempts: int,
+    timeout: int,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    last_result: subprocess.CompletedProcess[str] | None = None
+    last_error: Exception | None = None
+    for attempt in range(1, max(1, attempts) + 1):
+        try:
+            result = subprocess.run(
+                command,
+                input=input_text,
+                text=True,
+                capture_output=True,
+                timeout=timeout,
+                check=False,
+            )
+            last_result = result
+            if result.returncode == 0:
+                return result
+            last_error = RuntimeError(result.stderr.strip() or result.stdout.strip() or f"rc={result.returncode}")
+        except subprocess.TimeoutExpired as exc:
+            last_error = exc
+        if attempt < attempts:
+            print(f"OpenSSH attempt {attempt}/{attempts} failed: {last_error}", file=sys.stderr, flush=True)
+            time.sleep(min(15, 2 * attempt))
+    if last_result is not None:
+        raise RuntimeError(
+            f"OpenSSH command failed rc={last_result.returncode}\nSTDOUT:\n{last_result.stdout}\nSTDERR:\n{last_result.stderr}"
+        )
+    raise RuntimeError(f"OpenSSH command failed: {last_error}") from last_error
+
+
+def deploy_openssh(args: argparse.Namespace, *, archive: Path, password: str, count: int, temp_dir: Path) -> dict[str, object]:
+    timestamp = int(time.time())
+    remote_archive = f"/tmp/cudy-control-deploy-{timestamp}.tar"
+    remote_script = f"/tmp/cudy-control-promote-{timestamp}.sh"
+    local_script = temp_dir / "cudy-control-promote.sh"
+    local_script.write_text(
+        promotion_script(args, remote_archive=remote_archive, remote_script=remote_script),
+        encoding="utf-8",
+        newline="\n",
+    )
+    destination = f"{args.tunnel_user}@{args.host}"
+    options = openssh_options(args)
+    print(f"Uploading archive to {remote_archive} with system OpenSSH...", flush=True)
+    run_openssh(
+        ["scp", *options, str(archive), f"{destination}:{remote_archive}"],
+        attempts=args.connect_attempts,
+        timeout=max(args.timeout * 4, 120),
+    )
+    run_openssh(
+        ["scp", *options, str(local_script), f"{destination}:{remote_script}"],
+        attempts=args.connect_attempts,
+        timeout=max(args.timeout * 3, 90),
+    )
+    print("Promoting archive as root and restarting service with system OpenSSH...", flush=True)
+    su_command = f"script -qec \"su -c 'bash {remote_script}' root\" /dev/null"
+    result = run_openssh(
+        ["ssh", *options, destination, su_command],
+        attempts=args.connect_attempts,
+        timeout=max(args.timeout * 8, 300),
+        input_text=password + "\n",
+    )
+    print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr, flush=True)
+    return {"host": args.host, "remote_dir": args.remote_dir, "uploaded_files": count}
+
+
+def deploy(args: argparse.Namespace) -> dict[str, object]:
+    password = root_password(args.root_password)
+    with tempfile.TemporaryDirectory(prefix="cudy-control-deploy-") as temp_dir:
+        archive = Path(temp_dir) / "cudy-control-deploy.tar"
+        count = build_archive(archive, include_agent_updates=not args.skip_agent_updates)
+        print(f"Built archive: {archive} ({archive.stat().st_size} bytes, {count} files)", flush=True)
+        if args.openssh:
+            return deploy_openssh(args, archive=archive, password=password, count=count, temp_dir=Path(temp_dir))
+        client = connect(args)
+        try:
+            remote_archive = f"/tmp/cudy-control-deploy-{int(time.time())}.tar"
+            remote_script = f"/tmp/cudy-control-promote-{int(time.time())}.sh"
+            sftp = client.open_sftp()
+            sftp.get_channel().settimeout(args.timeout)
+            try:
+                print(f"Uploading archive to {remote_archive}...", flush=True)
+                sftp.put(str(archive), remote_archive)
+                script = promotion_script(args, remote_archive=remote_archive, remote_script=remote_script)
                 info = paramiko.SFTPAttributes()
                 info.st_mode = stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR | stat.S_IRGRP | stat.S_IROTH
                 with sftp.file(remote_script, "w") as remote_fh:
@@ -195,6 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=30)
     parser.add_argument("--skip-agent-updates", action="store_true", help="Deploy code without re-uploading agent release artifacts.")
+    parser.add_argument("--openssh", action="store_true", help="Use system ssh/scp instead of Paramiko for banner-sensitive deployments.")
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
     parser.add_argument("--service-name", default=DEFAULT_SERVICE)
     parser.add_argument("--service-user", default="cudy-control")

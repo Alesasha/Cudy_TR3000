@@ -47,6 +47,10 @@ DNS breakage or manual recovery.
 
 ### Android
 
+The production agent now keeps recent compatible probe transports warm for six
+hours. A live cycle accepted a new probe job without changing the unified
+config hash or reloading libbox; the longer soak below remains required.
+
 1. Run a longer Wi-Fi/background/locked-screen soak on `1.21 (22)`.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
 3. Resolve or clearly explain the remaining Doze/battery warning.

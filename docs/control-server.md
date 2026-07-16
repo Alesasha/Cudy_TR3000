@@ -311,6 +311,20 @@ python tools\deploy_control_server_via_tunnel_user.py
 Remove-Item Env:USWEST_ROOT_PASSWORD
 ```
 
+If Paramiko repeatedly fails during SSH banner exchange but the system OpenSSH
+client can connect, use sequential `ssh`/`scp` attempts instead:
+
+```powershell
+$env:USWEST_ROOT_PASSWORD = "<root password>"
+python tools\deploy_control_server_via_tunnel_user.py --openssh --connect-attempts 5
+Remove-Item Env:USWEST_ROOT_PASSWORD
+```
+
+The fallback deliberately runs one connection attempt at a time. It does not
+open parallel sessions that could add more pre-auth load to `sshd`. The
+restricted tunnel user is not allowed to request an SSH PTY, so promotion uses
+server-side `script(1)` to provide the terminal required by `su`.
+
 This path intentionally does not upload the local SQLite database or local
 `secrets/` tree.
 

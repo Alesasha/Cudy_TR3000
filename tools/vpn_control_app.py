@@ -78,6 +78,11 @@ CONTROL_BACKUP_STATUS_WARN = os.environ.get("CONTROL_BACKUP_STATUS_WARN", "").st
 LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 TRANSPORT_STALE_WARN_SECONDS = int(os.environ.get("TRANSPORT_STALE_WARN_SECONDS", str(24 * 60 * 60)))
 PROBE_FAILED_WARN_SECONDS = int(os.environ.get("PROBE_FAILED_WARN_SECONDS", str(60 * 60)))
+ANDROID_PROBE_TRANSPORT_WARM_SECONDS = int(
+    os.environ.get("ANDROID_PROBE_TRANSPORT_WARM_SECONDS", str(6 * 60 * 60))
+)
+ANDROID_PROBE_TRANSPORT_WARM_LIMIT = int(os.environ.get("ANDROID_PROBE_TRANSPORT_WARM_LIMIT", "64"))
+ANDROID_SUPPORTED_TRANSPORT_TYPES = {"http-proxy-tun", "vless-reality-tun", "sing-box-json"}
 WORKER_STATUS_LOCK = threading.Lock()
 FALLBACK_STATUS_CACHE_LOCK = threading.Lock()
 FALLBACK_STATUS_CACHE: dict[str, Any] = {"checked_at": 0.0, "value": None}
@@ -7251,6 +7256,49 @@ def build_readiness_status(db_path: Path, inventory_path: Path) -> dict[str, Any
     }
 
 
+def recent_probe_transport_ids(
+    conn: sqlite3.Connection,
+    *,
+    device_id: str,
+    warm_seconds: int = ANDROID_PROBE_TRANSPORT_WARM_SECONDS,
+    max_ids: int = ANDROID_PROBE_TRANSPORT_WARM_LIMIT,
+) -> list[str]:
+    if not device_id or warm_seconds <= 0 or max_ids <= 0:
+        return []
+    cutoff = (datetime.now(timezone.utc).replace(microsecond=0) - timedelta(seconds=warm_seconds)).isoformat()
+    recent_jobs = rows(
+        conn,
+        """
+        SELECT candidate_server_ids
+        FROM agent_probe_jobs
+        WHERE claimed_by_device_id = ?
+          AND status IN ('running', 'done', 'failed')
+          AND COALESCE(finished_at, updated_at, started_at, created_at) >= ?
+        ORDER BY COALESCE(finished_at, updated_at, started_at, created_at) DESC
+        LIMIT 100
+        """,
+        (device_id, cutoff),
+    )
+    result: list[str] = []
+    seen: set[str] = set()
+    for job in recent_jobs:
+        try:
+            candidates = json.loads(job.get("candidate_server_ids") or "[]")
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(candidates, list):
+            continue
+        for value in candidates:
+            server_id = str(value or "").strip()
+            if not server_id or server_id in seen:
+                continue
+            seen.add(server_id)
+            result.append(server_id)
+            if len(result) >= max_ids:
+                return result
+    return result
+
+
 def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[str, Any]) -> dict[str, Any]:
     servers = server_map(conn)
     cached_auto = auto_cache_map(conn)
@@ -7439,6 +7487,18 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
             candidates = []
         for server_id in candidates:
             if server_id in servers:
+                referenced_server_ids.add(server_id)
+
+    if str(device.get("platform") or "").strip().lower() == "android":
+        android_transport_types = {
+            item["server_id"]: item["transport_type"]
+            for item in transport_config_rows(conn, enabled_only=True)
+        }
+        for server_id in recent_probe_transport_ids(conn, device_id=str(device.get("id") or "")):
+            if (
+                server_id in servers
+                and android_transport_types.get(server_id) in ANDROID_SUPPORTED_TRANSPORT_TYPES
+            ):
                 referenced_server_ids.add(server_id)
 
     transport_plan = build_transport_plan(conn, server_ids=referenced_server_ids, warnings=warnings)

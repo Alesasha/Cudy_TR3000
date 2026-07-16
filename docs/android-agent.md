@@ -44,6 +44,11 @@ Latest Release APK smoke on the physical phone:
   traffic continued through the VPN;
 - probe jobs use persistent loopback-only mixed inbounds and do not reload or
   interrupt the active TUN;
+- transports used by recent Android probe jobs stay warm for six hours (up to
+  64 logical servers), so completing one probe and starting another does not
+  continuously change the unified config or recreate the Android VPN; only
+  libbox-compatible transport types are retained, while native AWG remains a
+  separate final project phase;
 - boot/reconnect receiver is registered for `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED`;
 - receiver start path was verified through the explicit test broadcast
