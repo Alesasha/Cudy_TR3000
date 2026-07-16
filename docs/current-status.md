@@ -133,6 +133,17 @@ The fallback and observer gates now satisfy the read-only preflight baseline:
 - the Windows OpenAI recovery path now survives reboot independently of Cudy,
   so a failed Cudy trial cannot strand the development session.
 
+A guarded `lokvpn-de1` transport bootstrap then completed both required stages:
+the first trial rolled back automatically and restored `observe`; the second was
+committed and left only the transport/PBR bootstrap in place. Five critical
+services remained healthy. The subsequent provider refresh exposed a separate
+control-server defect: LokVPN returns a different valid Reality `short_id` every
+15 minutes while endpoint, UUID, public key, SNI and flow remain unchanged.
+This creates a false perpetual `refresh-and-restart` action. The source now
+selects list-valued IDs deterministically and retains the active ID when every
+other transport identity field is unchanged. That control-server change must be
+deployed and pass one natural provider refresh before the route trial.
+
 Some router-local TUN diagnostics can produce false failures. For
 `http-proxy-tun` transports the observer now probes the upstream HTTP proxy
 from the root-only cached transport plan. The remaining intermittent preview

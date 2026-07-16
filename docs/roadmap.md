@@ -109,10 +109,9 @@ Prerequisite: Phases 1 and the relevant Auto checks are green.
 
 1. Keep the router-agent in `observe` and eliminate fallback-preview timeouts
    and critical-service probe flaps; require repeated strict checks to pass.
-2. Capture current PBR, dnsmasq, nft, transport and service state.
-3. If the live policy requires missing or refreshed transports, run the
-   separate guarded transport bootstrap first: one automatic-rollback trial,
-   then one committed trial. It must not write the new route overrides.
+2. Deploy the LokVPN Reality `short_id` stabilization separately, allow one
+   natural provider refresh, and require zero recurring transport actions.
+3. Capture current PBR, dnsmasq, nft, transport and service state.
 4. Run the first uncommitted override-only guarded apply trial without moving
    DHCP/WAN.
 5. Deliberately stop the controlling workstation path and prove the independent

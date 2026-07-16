@@ -4463,10 +4463,33 @@ def parse_lokvpn_outbound(profile: str, outbound: dict[str, Any]) -> dict[str, A
     except (KeyError, IndexError, TypeError, ValueError) as exc:
         raise ValueError(f"Could not parse LokVPN profile {profile}") from exc
     if isinstance(parsed["short_id"], list):
-        parsed["short_id"] = parsed["short_id"][0] if parsed["short_id"] else ""
+        short_ids = sorted({str(item).strip() for item in parsed["short_id"] if str(item).strip()})
+        parsed["short_id"] = short_ids[0] if short_ids else ""
     if any(not parsed[key] for key in ("server", "server_port", "uuid", "flow", "sni", "public_key", "short_id")):
         raise ValueError(f"Could not parse LokVPN profile {profile}")
     return parsed
+
+
+def stabilize_lokvpn_short_id(existing: dict[str, Any] | None, refreshed: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(existing, dict):
+        return refreshed
+    try:
+        old_short_id = str(existing["tls"]["reality"]["short_id"] or "")
+        new_short_id = str(refreshed["tls"]["reality"]["short_id"] or "")
+    except (KeyError, TypeError):
+        return refreshed
+    if not old_short_id or old_short_id == new_short_id:
+        return refreshed
+
+    def identity(config: dict[str, Any]) -> dict[str, Any]:
+        normalized = json.loads(json.dumps(config, ensure_ascii=False, sort_keys=True))
+        reality = ((normalized.get("tls") or {}).get("reality") or {})
+        reality.pop("short_id", None)
+        return normalized
+
+    if identity(existing) == identity(refreshed):
+        refreshed["tls"]["reality"]["short_id"] = old_short_id
+    return refreshed
 
 
 def refresh_lokvpn_transport(
@@ -4502,6 +4525,26 @@ def refresh_lokvpn_transport(
             },
         },
     }
+    with connect(db_path) as conn:
+        existing = row(
+            conn,
+            "SELECT transport_type, config_json, enabled, source FROM transport_configs WHERE server_id = ?",
+            (server_id,),
+        )
+    existing_config: dict[str, Any] | None = None
+    if (
+        existing
+        and existing.get("transport_type") == "vless-reality-tun"
+        and existing.get("source") == "lokvpn-subscription"
+        and existing.get("enabled")
+    ):
+        try:
+            parsed_existing = json.loads(existing.get("config_json") or "{}")
+            if isinstance(parsed_existing, dict):
+                existing_config = parsed_existing
+        except json.JSONDecodeError:
+            pass
+    config = stabilize_lokvpn_short_id(existing_config, config)
     saved = save_transport_config(
         db_path,
         inventory_path,
