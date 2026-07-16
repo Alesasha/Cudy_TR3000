@@ -85,14 +85,16 @@ provider failure moves traffic to the next valid candidate.
 2. Replace ambiguous actions and dead controls; device enable/disable/delete
    must be reversible and explicit.
    The API lifecycle and immediate token invalidation are regression-tested;
-   rendered destructive-action UX remains to be completed.
+   destructive user/device actions now have explicit wording, confirmations
+   and a production desktop/mobile render check.
 3. Keep user entry authenticated by agent identity and admin entry protected by
    credentials.
 4. Show applied policy, pending probe, current Auto winner, offline agent,
    diagnostics and update status in plain language.
 5. Make enrollment and update behavior consistent across Windows, Linux and
    Android.
-6. Add rendered UI regression coverage for desktop and mobile widths.
+6. Add automated rendered UI regression coverage for desktop and mobile
+   widths; the current production UI has passed the equivalent manual check.
 
 Exit criteria: a new user/device can be enrolled, configured, updated,
 disabled, re-enabled and deleted without CLI or database edits.

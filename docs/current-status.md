@@ -159,14 +159,17 @@ Remaining Android concerns:
   refresh counts, and labels the private Cudy check as unreachable from the VPS
   instead of incorrectly calling it stale. The independent Cudy checks remain
   authoritative for fallback health.
-- Full enrollment/update/device lifecycle usability still needs the Phase 4
-  audit and automated rendered regression coverage.
+- Full enrollment/update/device lifecycle usability still needs the remaining
+  Phase 4 audit and automated rendered regression coverage.
 - The HTTP lifecycle regression now creates and deletes a user, revokes and
   consumes one-time enrollment codes, rejects code reuse, and verifies that
   disabled/deleted device tokens fail immediately while Enable restores the
   same token. Agent token caches are invalidated on every device state change.
-  Rendered confirmation/wording of destructive actions still needs the Phase 4
-  usability pass.
+  Destructive actions now use explicit labels and confirmations: user deletion
+  distinguishes account-only removal from legacy Cudy peer revocation, and
+  device controls say `Apply state` / `Delete device`. These controls were
+  rendered against production on desktop and at 375 pixels without page-level
+  overflow or console errors. Automated rendered regression coverage remains.
 
 ## Non-Negotiable Safety Gates
 

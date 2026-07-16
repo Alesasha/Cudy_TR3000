@@ -1745,7 +1745,11 @@ ADMIN_HTML = r"""<!doctype html>
           </td>
           <td class="inline">
             <button data-save-user="${u.id}">Save</button>
-            <button class="danger" data-delete-user="${u.id}">Delete</button>
+            <select data-delete-user-mode="${u.id}" title="Choose whether a legacy Cudy VPN peer should also be revoked.">
+              <option value="local">Delete account only</option>
+              <option value="revoke">Delete + revoke Cudy peer</option>
+            </select>
+            <button class="danger" data-delete-user="${u.id}">Delete user</button>
           </td>
         </tr>
       `).join("");
@@ -1807,8 +1811,10 @@ ADMIN_HTML = r"""<!doctype html>
       body.querySelectorAll("[data-delete-user]").forEach(button => {
         button.addEventListener("click", async () => {
           const userId = button.dataset.deleteUser;
-          const revoke = confirm(`Delete ${userId} and revoke its Cudy VPN peer? Press Cancel to delete only locally.`);
-          if (!revoke && !confirm(`Delete ${userId} only from local control panel?`)) return;
+          const mode = button.closest("tr").querySelector("[data-delete-user-mode]").value;
+          const revoke = mode === "revoke";
+          const action = revoke ? "delete the account and revoke its Cudy VPN peer" : "delete the account only";
+          if (!confirm(`Permanently ${action} for ${userId}?`)) return;
           const status = document.getElementById("userStatus");
           status.className = "status";
           try {
@@ -2053,8 +2059,8 @@ ADMIN_HTML = r"""<!doctype html>
             <td>${health.applied ?? ""}</td>
             <td>${errors.length ? errors.slice(0, 2).join("; ") : ""}</td>
             <td class="inline">
-              <button data-save-agent="${item.device_id}">Save</button>
-              <button class="danger" data-delete-agent="${item.device_id}">Delete</button>
+              <button data-save-agent="${item.device_id}">Apply state</button>
+              <button class="danger" data-delete-agent="${item.device_id}">Delete device</button>
             </td>
           </tr>
         `;
@@ -2063,6 +2069,11 @@ ADMIN_HTML = r"""<!doctype html>
         button.addEventListener("click", async () => {
           const deviceId = button.dataset.saveAgent;
           const enabled = button.closest("tr").querySelector("[data-agent-enabled]").checked;
+          const previous = state.agentStatus.find(item => item.device_id === deviceId);
+          if (previous && Boolean(previous.enabled) !== enabled) {
+            const action = enabled ? "enable" : "disable";
+            if (!confirm(`${action[0].toUpperCase() + action.slice(1)} agent device ${deviceId}?`)) return;
+          }
           const status = document.getElementById("enrollmentStatus");
           status.className = "status";
           try {
@@ -2138,6 +2149,7 @@ ADMIN_HTML = r"""<!doctype html>
       body.querySelectorAll("[data-revoke-enrollment]").forEach(button => {
         button.addEventListener("click", async () => {
           const status = document.getElementById("enrollmentStatus");
+          if (!confirm(`Revoke one-time enrollment code ${button.dataset.revokeEnrollment}?`)) return;
           status.className = "status";
           try {
             await api(`/api/admin/enrollment-codes?id=${encodeURIComponent(button.dataset.revokeEnrollment)}`, { method: "DELETE" });

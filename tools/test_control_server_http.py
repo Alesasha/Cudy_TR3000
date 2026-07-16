@@ -290,6 +290,12 @@ def main() -> int:
                 "scheduleAutoHistory",
                 "data-save-agent",
                 "data-delete-agent",
+                "data-delete-user-mode",
+                "Delete account only",
+                "Delete + revoke Cudy peer",
+                "Apply state",
+                "Delete device",
+                "Revoke one-time enrollment code",
             ):
                 if snippet not in admin_page:
                     raise AssertionError(f"admin page is missing {snippet!r}")
