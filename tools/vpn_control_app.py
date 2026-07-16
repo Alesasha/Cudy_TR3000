@@ -5495,6 +5495,54 @@ def select_auto_probe_candidates(
     return leaders + rotated[:remaining_slots]
 
 
+def probe_result_all_unresolvable(result_json: str | None) -> bool:
+    try:
+        result = json.loads(result_json or "{}")
+    except json.JSONDecodeError:
+        return False
+    checks = result.get("checks") if isinstance(result, dict) else None
+    if not isinstance(checks, list) or not checks:
+        return False
+    return all(
+        isinstance(check, dict) and str(check.get("resolve_status") or "") == "resolve_failed"
+        for check in checks
+    )
+
+
+def recent_default_probe_is_unresolvable(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    reference: datetime,
+    retry_seconds: int,
+) -> tuple[bool, int | None]:
+    """Return true when agents proved that a default apex probe has no DNS target.
+
+    Domain routes also represent suffixes, so an apex without A/AAAA records is
+    valid routing input. Retrying https://<apex>/ every worker cycle only creates
+    noise; keep a bounded negative cache and periodically retry it.
+    """
+    latest = row(
+        conn,
+        """
+        SELECT result_json, updated_at
+        FROM agent_probe_jobs
+        WHERE domain = ?
+          AND status = 'failed'
+          AND COALESCE(url, '') = ''
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+        """,
+        (domain,),
+    )
+    if not latest:
+        return False, None
+    age = timestamp_age_seconds(latest.get("updated_at"), reference=reference)
+    if age is None or age >= max(0, int(retry_seconds)):
+        return False, age
+    return probe_result_all_unresolvable(latest.get("result_json")), age
+
+
 def create_auto_probe_jobs_once(
     db_path: Path,
     inventory_path: Path,
@@ -5506,6 +5554,7 @@ def create_auto_probe_jobs_once(
     max_candidates_per_job: int = 4,
     connect_timeout: int = 5,
     max_time: int = 12,
+    unresolvable_retry_seconds: int = 86400,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     reference = datetime.now(timezone.utc)
@@ -5599,6 +5648,24 @@ def create_auto_probe_jobs_once(
             if cached and cached.get("selected_server_id") and cached_age is not None and cached_age < cache_ttl_seconds:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "cache_fresh", "age_seconds": cached_age})
                 continue
+            if not spec.get("url"):
+                unresolvable, unresolvable_age = recent_default_probe_is_unresolvable(
+                    conn,
+                    domain=domain,
+                    reference=reference,
+                    retry_seconds=unresolvable_retry_seconds,
+                )
+                if unresolvable:
+                    skipped.append(
+                        {
+                            "domain": domain,
+                            "user_id": user_id,
+                            "reason": "probe_target_unresolvable",
+                            "age_seconds": unresolvable_age,
+                            "retry_seconds": int(unresolvable_retry_seconds),
+                        }
+                    )
+                    continue
             spec_candidates = list(spec.get("candidate_server_ids") or [])
             policy = None
             if spec_candidates:
@@ -5687,6 +5754,7 @@ def create_auto_probe_jobs_once(
         "cache_ttl_seconds": cache_ttl_seconds,
         "max_jobs": max_jobs,
         "max_candidates_per_job": max_candidates_per_job,
+        "unresolvable_retry_seconds": int(unresolvable_retry_seconds),
         "invalid_assignments": invalid_assignments,
     }
 
@@ -6899,16 +6967,23 @@ def build_system_status(
         latest_domain_discovery = row(conn, "SELECT MAX(last_seen_at) AS value FROM domain_discovery_queue")
         failed_probe_cutoff_epoch = reference.replace(microsecond=0).timestamp() - PROBE_FAILED_WARN_SECONDS
         failed_probe_cutoff = datetime.fromtimestamp(failed_probe_cutoff_epoch, timezone.utc).replace(microsecond=0).isoformat()
-        failed_recent_probe_jobs = count_value(
+        failed_recent_rows = rows(
             conn,
             """
-            SELECT COUNT(*) AS count
+            SELECT url, result_json
             FROM agent_probe_jobs
             WHERE status = 'failed'
               AND COALESCE(finished_at, updated_at, created_at) >= ?
             """,
             (failed_probe_cutoff,),
         )
+        failed_recent_unresolvable = sum(
+            1
+            for item in failed_recent_rows
+            if not (item.get("url") or "").strip()
+            and probe_result_all_unresolvable(item.get("result_json"))
+        )
+        failed_recent_probe_jobs = len(failed_recent_rows) - failed_recent_unresolvable
         oldest_pending_probe = row(conn, "SELECT MIN(created_at) AS value FROM agent_probe_jobs WHERE status = 'pending'")
         latest_probe_created = row(conn, "SELECT MAX(created_at) AS value FROM agent_probe_jobs")
         latest_probe_updated = row(conn, "SELECT MAX(updated_at) AS value FROM agent_probe_jobs")
@@ -6970,6 +7045,7 @@ def build_system_status(
                 "pending": pending_probe_jobs,
                 "failed": failed_probe_jobs,
                 "failed_recent": failed_recent_probe_jobs,
+                "failed_recent_unresolvable": failed_recent_unresolvable,
                 "failed_warn_seconds": PROBE_FAILED_WARN_SECONDS,
                 "oldest_pending_created_at": (oldest_pending_probe or {}).get("value"),
                 "oldest_pending_age_seconds": timestamp_age_seconds((oldest_pending_probe or {}).get("value"), reference=reference),

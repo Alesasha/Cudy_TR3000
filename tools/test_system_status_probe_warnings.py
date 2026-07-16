@@ -59,6 +59,18 @@ def main() -> int:
             raise AssertionError(f"recent failed job counter is wrong: {recent_status['probe_jobs']!r}")
         if not any("probe job" in warning for warning in recent_status["warnings"]):
             raise AssertionError(f"recent failed job should warn: {recent_status['warnings']!r}")
+        with sqlite3.connect(db_path) as conn:
+            insert_failed_probe(conn, job_id="recent-unresolvable", timestamp=recent_time)
+            conn.execute(
+                "UPDATE agent_probe_jobs SET result_json = ? WHERE id = 'recent-unresolvable'",
+                ('{"checks":[{"resolve_status":"resolve_failed"},{"resolve_status":"resolve_failed"}]}',),
+            )
+            conn.commit()
+        suppressed_status = build_system_status(db_path, INVENTORY)
+        if suppressed_status["probe_jobs"]["failed_recent"] != 1:
+            raise AssertionError(f"unresolvable suffix probe must not add a warning: {suppressed_status['probe_jobs']!r}")
+        if suppressed_status["probe_jobs"]["failed_recent_unresolvable"] != 1:
+            raise AssertionError(f"unresolvable suffix probe counter is wrong: {suppressed_status['probe_jobs']!r}")
         readiness = build_readiness_status(db_path, INVENTORY)
         if readiness["ok"] is not True:
             raise AssertionError(f"recent failed probe should not make readiness fail: {readiness!r}")

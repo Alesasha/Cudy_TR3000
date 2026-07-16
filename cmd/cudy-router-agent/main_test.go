@@ -7,8 +7,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -296,6 +298,44 @@ func TestCriticalServiceTCPProbe(t *testing.T) {
 	}
 }
 
+func TestProbeProxyForInterfaceAndTCPConnect(t *testing.T) {
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodConnect || r.Host != "example.com:443" {
+			http.Error(w, "unexpected proxy request", http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer proxy.Close()
+	proxyURL, err := url.Parse(proxy.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(proxyURL.Port())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cachePath := filepath.Join(t.TempDir(), "policy.json")
+	cache := cachedPolicy{CachedAt: time.Now().UTC().Format(time.RFC3339)}
+	cache.Config.TransportPlan = []rawTransport{{
+		ServerID: "proxyde", InterfaceName: "proxyde", TransportType: "http-proxy-tun",
+		Config: map[string]any{"server": proxyURL.Hostname(), "server_port": port},
+	}}
+	data, _ := json.Marshal(cache)
+	if err := os.WriteFile(cachePath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{opts: options{PolicyCache: cachePath}, httpClient: http.DefaultClient}
+	resolved := a.probeProxyForInterface("proxyde")
+	if resolved == nil || resolved.Host != proxyURL.Host {
+		t.Fatalf("resolved proxy=%v", resolved)
+	}
+	result := a.probeTarget(context.Background(), "tcp://example.com:443", "proxyde", time.Second, 3*time.Second, "", "")
+	if result["ok"] != true || result["probe_type"] != "tcp" {
+		t.Fatalf("TCP proxy result=%v", result)
+	}
+}
+
 func TestTargetInterfaceUsesDomainAndMostSpecificCIDR(t *testing.T) {
 	groups := map[string]routeSet{
 		"proxyde": {Domains: []string{"openai.com"}, IPs: []string{"149.154.160.0/20"}},
@@ -310,6 +350,19 @@ func TestTargetInterfaceUsesDomainAndMostSpecificCIDR(t *testing.T) {
 	}
 	if got := targetInterface("https://gosuslugi.ru/", groups); got != "" {
 		t.Fatalf("direct interface=%q", got)
+	}
+}
+
+func TestPBRMarkForInterfaceRules(t *testing.T) {
+	rules := `29990: from all fwmark 0xb0000/0xff0000 lookup pbr_proxynl
+29991: from all fwmark 0xa0000/0xff0000 lookup pbr_proxyde
+30000: from all fwmark 0x10000/0xff0000 lookup pbr_wan`
+	mark, ok := pbrMarkForInterfaceRules(rules, "proxyde")
+	if !ok || mark != 0xa0000 {
+		t.Fatalf("proxyde mark=%#x ok=%v", mark, ok)
+	}
+	if mark, ok := pbrMarkForInterfaceRules(rules, "proxyfr"); ok || mark != 0 {
+		t.Fatalf("unexpected proxyfr mark=%#x ok=%v", mark, ok)
 	}
 }
 

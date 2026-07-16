@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -527,14 +529,23 @@ func (a *agent) probeTarget(ctx context.Context, target, iface string, connectTi
 		return map[string]any{"error": "invalid probe URL", "time_total_ms": 0}
 	}
 	dialer := &net.Dialer{Timeout: connectTimeout}
-	if err := bindDialerToInterface(dialer, iface); err != nil {
-		return map[string]any{"error": err.Error(), "time_total_ms": 0}
+	proxyURL := a.probeProxyForInterface(iface)
+	if proxyURL == nil {
+		if err := bindDialerToInterface(dialer, iface); err != nil {
+			return map[string]any{"error": err.Error(), "time_total_ms": 0}
+		}
 	}
 	started := time.Now()
 	requestCtx, cancel := context.WithTimeout(ctx, maxTime)
 	defer cancel()
 	if parsed.Scheme == "tcp" {
-		connection, dialErr := dialer.DialContext(requestCtx, "tcp", parsed.Host)
+		var connection net.Conn
+		var dialErr error
+		if proxyURL != nil {
+			connection, dialErr = dialHTTPConnectProxy(requestCtx, dialer, proxyURL, parsed.Host)
+		} else {
+			connection, dialErr = dialer.DialContext(requestCtx, "tcp", parsed.Host)
+		}
 		elapsed := time.Since(started)
 		if dialErr != nil {
 			return map[string]any{"probe_type": "tcp", "error": dialErr.Error(), "time_total_ms": elapsed.Milliseconds()}
@@ -547,6 +558,9 @@ func (a *agent) probeTarget(ctx context.Context, target, iface string, connectTi
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = dialer.DialContext
+	if proxyURL != nil {
+		transport.Proxy = http.ProxyURL(proxyURL)
+	}
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: maxTime}
 	req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, target, nil)
@@ -563,7 +577,7 @@ func (a *agent) probeTarget(ctx context.Context, target, iface string, connectTi
 	resp.Body.Close()
 	elapsed := time.Since(started)
 	result := map[string]any{
-		"probe_type":      "http_interface",
+		"probe_type":      map[bool]string{true: "http_proxy", false: "http_interface"}[proxyURL != nil],
 		"http_code":       resp.StatusCode,
 		"time_total_ms":   elapsed.Milliseconds(),
 		"bytes":           len(body),
@@ -597,6 +611,76 @@ func (a *agent) probeTarget(ctx context.Context, target, iface string, connectTi
 		result["semantic_status"] = "success_pattern_missing"
 	}
 	return result
+}
+
+func (a *agent) probeProxyForInterface(iface string) *url.URL {
+	if iface == "" || a.opts.PolicyCache == "" {
+		return nil
+	}
+	data, err := os.ReadFile(a.opts.PolicyCache)
+	if err != nil {
+		return nil
+	}
+	var cache cachedPolicy
+	if json.Unmarshal(data, &cache) != nil {
+		return nil
+	}
+	for _, raw := range cache.Config.TransportPlan {
+		if raw.InterfaceName != iface || raw.TransportType != "http-proxy-tun" {
+			continue
+		}
+		proxyType := firstNonEmpty(anyString(raw.Config["proxy_type"]), "http")
+		if proxyType != "http" {
+			return nil
+		}
+		host := anyString(raw.Config["server"])
+		port, ok := anyInt(raw.Config["server_port"])
+		if host == "" || !ok || port < 1 || port > 65535 {
+			return nil
+		}
+		result := &url.URL{Scheme: "http", Host: net.JoinHostPort(host, fmt.Sprint(port))}
+		username := anyString(raw.Config["username"])
+		password := anyString(raw.Config["password"])
+		if username != "" {
+			result.User = url.UserPassword(username, password)
+		}
+		return result
+	}
+	return nil
+}
+
+func dialHTTPConnectProxy(ctx context.Context, dialer *net.Dialer, proxyURL *url.URL, target string) (net.Conn, error) {
+	connection, err := dialer.DialContext(ctx, "tcp", proxyURL.Host)
+	if err != nil {
+		return nil, err
+	}
+	closeOnError := true
+	defer func() {
+		if closeOnError {
+			_ = connection.Close()
+		}
+	}()
+	header := ""
+	if proxyURL.User != nil {
+		password, _ := proxyURL.User.Password()
+		token := base64.StdEncoding.EncodeToString([]byte(proxyURL.User.Username() + ":" + password))
+		header = "Proxy-Authorization: Basic " + token + "\r\n"
+	}
+	if _, err := fmt.Fprintf(connection, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n%s\r\n", target, target, header); err != nil {
+		return nil, err
+	}
+	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		return nil, err
+	}
+	if response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP proxy CONNECT returned %s", response.Status)
+	}
+	closeOnError = false
+	return connection, nil
 }
 
 func (a *agent) postAgentStatus(ctx context.Context, status statusFile, desired desiredState) error {
@@ -1260,69 +1344,17 @@ func (a *agent) checkCriticalServices(ctx context.Context, services []criticalSe
 		passed := false
 		lastError := "no targets"
 		for _, target := range service.Targets {
-			requestCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-			parsed, parseErr := url.Parse(target)
 			iface := targetInterface(target, groups)
-			dialer := &net.Dialer{}
-			if bindErr := bindDialerToInterface(dialer, iface); bindErr != nil {
-				lastError = fmt.Sprintf("%s via %s: %v", target, iface, bindErr)
-				cancel()
-				continue
+			probe := a.probeTarget(ctx, target, iface, 5*time.Second, 12*time.Second, service.SuccessPattern, service.FailurePattern)
+			if probe["ok"] == true {
+				passed = true
+				break
 			}
-			if parseErr == nil && parsed.Scheme == "tcp" {
-				if service.SuccessPattern != "" || service.FailurePattern != "" {
-					lastError = target + ": content patterns are not supported for TCP targets"
-					cancel()
-					continue
-				}
-				connection, dialErr := dialer.DialContext(requestCtx, "tcp", parsed.Host)
-				if dialErr == nil {
-					_ = connection.Close()
-					passed = true
-					cancel()
-					break
-				}
-				lastError = fmt.Sprintf("%s%s: %v", target, viaInterface(iface), dialErr)
-				cancel()
-				continue
+			if probeError := anyString(probe["error"]); probeError != "" {
+				lastError = fmt.Sprintf("%s%s: %s", target, viaInterface(iface), probeError)
+			} else {
+				lastError = fmt.Sprintf("%s%s: HTTP %v or content mismatch (%s)", target, viaInterface(iface), probe["http_code"], anyString(probe["semantic_status"]))
 			}
-			req, err := http.NewRequestWithContext(requestCtx, http.MethodGet, target, nil)
-			if err == nil {
-				req.Header.Set("Range", "bytes=0-262143")
-				var resp *http.Response
-				client := a.httpClient
-				var transport *http.Transport
-				if iface != "" {
-					transport = http.DefaultTransport.(*http.Transport).Clone()
-					transport.DialContext = dialer.DialContext
-					client = &http.Client{Transport: transport}
-				}
-				resp, err = client.Do(req)
-				if transport != nil {
-					transport.CloseIdleConnections()
-				}
-				if err == nil {
-					body, readErr := io.ReadAll(io.LimitReader(resp.Body, 262144))
-					resp.Body.Close()
-					if readErr != nil {
-						err = readErr
-					} else {
-						text := string(body)
-						success := service.SuccessPattern == "" || regexp.MustCompile("(?im)"+service.SuccessPattern).MatchString(text)
-						failure := service.FailurePattern != "" && regexp.MustCompile("(?im)"+service.FailurePattern).MatchString(text)
-						if resp.StatusCode > 0 && success && !failure {
-							passed = true
-							cancel()
-							break
-						}
-						lastError = fmt.Sprintf("%s returned HTTP %d or content mismatch", target, resp.StatusCode)
-					}
-				}
-			}
-			if err != nil {
-				lastError = fmt.Sprintf("%s%s: %v", target, viaInterface(iface), err)
-			}
-			cancel()
 		}
 		if !passed {
 			failures = append(failures, label+": "+lastError)

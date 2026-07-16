@@ -19,31 +19,6 @@ in `docs/current-status.md` and frozen by tag
 - Do not combine a provider refresh, agent upgrade and Cudy apply trial in one
   maintenance window.
 
-## Phase 1: Restore A Green Baseline
-
-Goal: make all read-only production checks explainable and repeatably green.
-
-1. Inspect the four recent failed probe jobs on `uswest` and classify each as
-   provider failure, semantic failure, timeout or stale assignment.
-2. Reproduce the Cudy ChatGPT timeout through `proxyde` outside the router
-   agent and compare DNS, TCP, TLS, content and provider egress.
-3. Reconcile the two Telegram CIDRs whose expected interfaces are absent.
-4. Reconcile why the observer wants `proxygb` restart and `proxykz` creation;
-   either make those transports healthy before the trial or remove them from
-   the effective plan.
-5. Keep provider refresh and Auto workers running while verifying that no new
-   stale assignment accumulates.
-
-Exit criteria:
-
-- production `/healthz` and `/readyz` are green;
-- no unexplained recent failed probe warning remains;
-- `check_cudy_go_fallback.py --strict` passes;
-- `check_cudy_router_agent.py --expected-mode observe --strict` passes three
-  times at least five minutes apart;
-- guarded Cudy preview contains no transport start/restart action and no unsafe
-  path.
-
 ## Phase 2: Platform Agent Acceptance
 
 ### Windows

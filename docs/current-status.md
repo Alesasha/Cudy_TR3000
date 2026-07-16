@@ -30,9 +30,12 @@ Verified on 2026-07-16:
 - `/healthz` and `/readyz` are healthy;
 - Auto probe and provider refresh workers are enabled and have no worker error;
 - 25 of 31 transports are enabled and no enabled transport is stale;
-- 2 of 4 enabled agents are currently online;
-- 2 enabled agents are offline or stale;
-- 4 failed probe jobs remain inside the one-hour warning window;
+- 2 of 4 enabled agents are currently online: Cudy and Android;
+- Windows is intentionally disabled on the development workstation and the
+  Linux agent is offline/stale pending the next real-world acceptance run;
+- operational probe warnings are zero; nine recent failed apex probes are
+  classified as suffix targets without DNS records and do not trigger retries
+  for 24 hours or degrade readiness;
 - direct SSH audit, restricted tunnel-user deployment and agent update
   downloads work.
 
@@ -55,17 +58,19 @@ Verified fallback state:
 The Go `cudy-router-agent` remains intentionally in `observe` mode. It does not
 own PBR, DHCP or WAN routing.
 
-The strict router-agent gate is currently blocked:
+The read-only router-agent gate is green:
 
-- the ChatGPT critical check through `proxyde` times out;
-- `91.105.192.0/23` and `91.108.4.0/22` reference interfaces not present on
-  Cudy;
-- the preview wants to refresh/restart `proxygb` and prepare/start `proxykz`;
-- the guarded preview contains 9 changed files, including transport service
-  and sing-box config paths that the first trial deliberately refuses.
+- critical health is 5/5, including ChatGPT through `proxyde`;
+- blockers, warnings and transport actions are zero;
+- 22 effective routes produce eight PBR override file changes only;
+- `check_cudy_router_agent.py --expected-mode observe --strict` passed three
+  times at least five minutes apart;
+- guarded apply preflight passes and still requires explicit `--apply --yes`.
 
-No apply trial is allowed until these conditions are reconciled and repeated
-strict checks are green.
+The previous ChatGPT timeout was a router-local TUN diagnostic artifact, not a
+provider outage. For `http-proxy-tun` transports the observer now probes the
+upstream HTTP proxy from the root-only cached transport plan. User traffic and
+live PBR remain unchanged. The agent is still in `observe` mode.
 
 ## Android Agent
 
@@ -121,6 +126,10 @@ Remaining Android concerns:
   domain, global default.
 - Ordered candidate lists and `all-rest` are implemented.
 - Probe assignment prefers a capable agent that used the domain.
+- Default apex probes that every candidate reports as `resolve_failed` use a
+  bounded 24-hour negative cache. This supports suffix routes such as
+  `oaiusercontent.com` whose apex intentionally has no address while keeping a
+  periodic retry.
 - Global and per-user aliases are isolated and tested.
 - Important Service dependency groups can share one cache key, candidate list
   and winner; an isolated production staging test passed and was cleaned up.
@@ -130,7 +139,8 @@ Remaining Android concerns:
 
 ## Non-Negotiable Safety Gates
 
-- Do not enable `cudy-router-agent` apply while strict checks are red.
+- Do not enable `cudy-router-agent` apply outside the guarded trial with its
+  independent timed rollback, even though observe checks are green.
 - Do not move DHCP or WAN ownership from AirTies to Cudy before both guarded
   apply trials pass.
 - Do not enable the Windows development task without the independent watchdog
@@ -141,6 +151,7 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Stabilize the Cudy observer preview and recent Auto probe failures without
-changing routing. The detailed order and exit criteria are in
-`docs/roadmap.md`.
+Complete platform-agent acceptance, starting with a controlled Windows run
+behind the independent watchdog while Android continues its background soak.
+Linux acceptance remains dependent on Dima's next real-world session. The
+detailed order and exit criteria are in `docs/roadmap.md`.

@@ -284,6 +284,9 @@ Observe mode:
   temporary mode-0600 directory;
 - calculates PBR override changes while preserving every manual line outside
   the `cudy-router-agent` marker block;
+- validates `http-proxy-tun` exits through their upstream HTTP proxy from the
+  root-only cached transport plan; AWG/VLESS checks continue to use the
+  interface and OpenWrt PBR fwmark fallback;
 - writes only `/var/lib/cudy-router-agent/{desired,diff,status}.json`;
 - never creates a transport service, restarts PBR, or changes a route.
 
@@ -307,6 +310,7 @@ session disappears, Cudy restores the previous override files, runs the
 fail-open PBR restart and returns the agent to `observe`. A successful result is
 retained only with the additional `--commit` gate.
 
-The current observe plan contains 22 routes, seven PBR override changes and no
-dynamic transport action. Keep observe mode active until repeated diffs are
-stable and the independent rollback guard has been exercised.
+The current observe plan contains 22 routes, eight PBR override changes and no
+dynamic transport action. Critical health is 5/5 and three strict checks passed
+at least five minutes apart. Keep observe mode active until the independent
+rollback guard has been exercised in the first controlled apply trial.

@@ -535,6 +535,53 @@ def run_auto_worker_skips_without_capable_agent_check(tmp: Path) -> None:
     assert_equal(matching[0]["reason"], "no_capable_agent", "observer-only skip reason")
 
 
+def run_auto_worker_suppresses_unresolvable_apex_check(tmp: Path) -> None:
+    db_path = tmp / "unresolvable-apex.db"
+    app.init_db(db_path, INVENTORY)
+    app.save_global_domain_route(
+        db_path,
+        INVENTORY,
+        domain="suffix-only.example",
+        server_id="auto",
+    )
+    failed = app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="suffix-only.example",
+        candidate_server_ids=["proxyde", "proxynl"],
+    )
+    result_json = {
+        "checks": [
+            {"server_id": "proxyde", "resolve_status": "resolve_failed"},
+            {"server_id": "proxynl", "resolve_status": "resolve_failed"},
+        ]
+    }
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            UPDATE agent_probe_jobs
+            SET status = 'failed', result_json = ?, error = 'no working candidate',
+                finished_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (json.dumps(result_json), app.now(), app.now(), failed["id"]),
+        )
+    result = app.create_auto_probe_jobs_once(
+        db_path,
+        INVENTORY,
+        cache_ttl_seconds=0,
+        max_jobs=10,
+    )
+    matching = [item for item in result["skipped"] if item.get("domain") == "suffix-only.example"]
+    assert_equal(len(matching), 1, "unresolvable apex should be skipped once")
+    assert_equal(matching[0]["reason"], "probe_target_unresolvable", "unresolvable apex skip reason")
+    assert_equal(
+        [item for item in result["created"] if item.get("domain") == "suffix-only.example"],
+        [],
+        "unresolvable apex should not create another probe",
+    )
+
+
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     target_cidr = "203.0.113.0/24"
     cache_key = app.auto_cache_key_for_ip_route(target_cidr)
@@ -671,6 +718,7 @@ def main() -> int:
         run_auto_worker_prefers_domain_agent_check(db_path)
         run_probe_claim_requires_transport_capability_check(db_path)
         run_auto_worker_skips_without_capable_agent_check(tmp_path)
+        run_auto_worker_suppresses_unresolvable_apex_check(tmp_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
         run_service_group_shares_auto_winner_check(db_path)
         gc.collect()

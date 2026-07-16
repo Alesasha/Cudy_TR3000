@@ -14,10 +14,28 @@ param(
     [switch]$NoStart,
     [switch]$StartEngine,
     [string]$DebugProbeUrl = "",
-    [string]$DebugProbeCandidates = ""
+    [string]$DebugProbeCandidates = "",
+    [Alias("h")]
+    [switch]$Help
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($Help) {
+    Write-Host @"
+Android agent smoke test
+
+Safe status-only check:
+  powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -NoInstall -NoStart
+
+Install and start the selected APK:
+  powershell -ExecutionPolicy Bypass -File tools\android-agent-smoke.ps1 -ApkPath <path> -StartEngine
+
+Options: -Build -Configuration <Debug|Release> -Serial <adb-serial>
+         -WaitSeconds <seconds> -NoInstall -NoStart -StartEngine
+"@
+    exit 0
+}
 
 function Resolve-Adb {
     param([string]$Root)
@@ -85,10 +103,6 @@ function Invoke-Adb {
 }
 
 if (-not $NoInstall) {
-    if ($Serial) {
-        Write-Host "Force-stopping existing app instance..."
-        Invoke-Adb shell am force-stop com.nashvpn.cudyagent
-    }
     if (-not (Test-Path $ApkPath)) {
         throw "APK not found: $ApkPath"
     }
