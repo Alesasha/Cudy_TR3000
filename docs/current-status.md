@@ -17,8 +17,8 @@ This document records the verified live state. Planned work belongs in
     `2846b6385e4c0117e1cfdac050d925f56efa4643bdf46d3497bd556b998fc977`;
   - Linux `1.20 (21)`, SHA256
     `5ac2bf679cdef44e3b6c9db2a7ae0d4fc5703f5efe44aaec3077e452a2f898a2`;
-  - Windows `1.19 (20)`, SHA256
-    `e2ae82fa701d908339d33e0da8598fcb53c7eb6076dbfd1a2c6856eac7d94738`.
+  - Windows `1.20 (21)`, SHA256
+    `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
 
 ## Primary Control Server
 
@@ -103,7 +103,7 @@ Remaining Android concerns:
 
 ## Windows Agent
 
-- Windows `1.19 (20)` is published.
+- Windows `1.20 (21)` is published and its production manifest/hash match.
 - Packaging, cached-policy fallback, emergency stop and watchdog regression
   tests exist.
 - The development workstation scheduled task is intentionally disabled.
