@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import base64
 import getpass
+import gzip
 import hashlib
 import hmac
 import ipaddress
@@ -78,6 +79,9 @@ LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WAR
 TRANSPORT_STALE_WARN_SECONDS = int(os.environ.get("TRANSPORT_STALE_WARN_SECONDS", str(24 * 60 * 60)))
 PROBE_FAILED_WARN_SECONDS = int(os.environ.get("PROBE_FAILED_WARN_SECONDS", str(60 * 60)))
 WORKER_STATUS_LOCK = threading.Lock()
+FALLBACK_STATUS_CACHE_LOCK = threading.Lock()
+FALLBACK_STATUS_CACHE: dict[str, Any] = {"checked_at": 0.0, "value": None}
+FALLBACK_STATUS_CACHE_SECONDS = int(os.environ.get("CUDY_FALLBACK_STATUS_CACHE_SECONDS", "60"))
 WORKER_STATUS: dict[str, dict[str, Any]] = {
     "auto_probe": {"enabled": False, "last_started_at": None, "last_finished_at": None, "last_error": None},
     "provider_refresh": {"enabled": False, "last_started_at": None, "last_finished_at": None, "last_error": None},
@@ -611,8 +615,10 @@ USER_HTML = r"""<!doctype html>
       gap: 16px;
     }
     h1 { font-size: 20px; margin: 0; }
-    main { max-width: 1120px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+    main { max-width: 1120px; min-width: 0; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
     section {
+      min-width: 0;
+      overflow-x: auto;
       background: var(--panel);
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -1054,8 +1060,8 @@ ADMIN_HTML = r"""<!doctype html>
       gap: 16px;
     }
     h1 { font-size: 20px; margin: 0; }
-    main { max-width: 1280px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
-    section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
+    main { max-width: 1280px; min-width: 0; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+    section { min-width: 0; overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 18px; }
     h2 { font-size: 16px; margin: 0 0 14px; }
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
@@ -1101,6 +1107,7 @@ ADMIN_HTML = r"""<!doctype html>
     @media (max-width: 720px) {
       .admin-tabs { padding: 10px 14px 0; }
       main { padding: 14px; }
+      .summary-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
     }
   </style>
 </head>
@@ -1468,6 +1475,7 @@ ADMIN_HTML = r"""<!doctype html>
       text.className = status.ok ? "status ok" : "status error";
       const autoWorker = (status.workers || {}).auto_probe || {};
       const providerWorker = (status.workers || {}).provider_refresh || {};
+      const providerResult = providerWorker.last_result || {};
       const fallback = (status.control || {}).cudy_fallback_state || {};
       const backup = ((status.operations || {}).local_backup || {}).latest_archive || {};
       grid.innerHTML = [
@@ -1475,11 +1483,11 @@ ADMIN_HTML = r"""<!doctype html>
         ["Agents", `${(status.agents || {}).online || 0}/${(status.agents || {}).enabled || 0}`, `recent ${(status.agents || {}).recent_seconds || "-"}s`],
         ["Probe jobs", `${(status.probe_jobs || {}).pending || 0} pending`, `${(status.probe_jobs || {}).failed_recent || 0}/${(status.probe_jobs || {}).failed || 0} recent failed`],
         ["Discovery", `${(status.domain_discovery || {}).pending || 0} pending`, `${(status.domain_discovery || {}).total || 0} total`],
-        ["Transports", `${(status.transports || {}).enabled || 0}/${(status.transports || {}).total || 0}`, `oldest ${fmtAge((status.transports || {}).oldest_age_seconds)}`],
+        ["Transports", `${(status.transports || {}).active || 0}/${(status.transports || {}).enabled || 0}`, `active / enabled; stale ${(status.transports || {}).stale_enabled_count || 0}`],
         ["Auto worker", badge(autoWorker.enabled, autoWorker.enabled ? "on" : "off"), `last ${fmtAge(autoWorker.last_finished_age_seconds)}`],
-        ["Provider worker", badge(providerWorker.enabled, providerWorker.enabled ? "on" : "off"), `last ${fmtAge(providerWorker.last_finished_age_seconds)}`],
-        ["Cudy fallback", badge(fallback.ok, fallback.ok ? "fresh" : "stale"), `age ${fmtAge(fallback.age_seconds)}`],
-        ["Local backup", backup.exists ? "present" : "none", `age ${fmtAge(backup.age_seconds)}`],
+        ["Provider worker", badge(providerWorker.enabled, providerWorker.enabled ? "on" : "off"), `${providerResult.refreshed ?? "-"} refreshed / ${providerResult.failed ?? "-"} failed`],
+        ["Cudy fallback", fallback.reachable === false ? badge(null, "unreachable") : badge(fallback.ok, fallback.ok ? "fresh" : "stale"), `age ${fmtAge(fallback.age_seconds)}`],
+        ["VPS backup cache", backup.exists ? "present" : "none", `operator pull is checked separately`],
       ].map(([label, value, detail]) => `
         <div class="summary-item">
           <div class="summary-label">${label}</div>
@@ -1488,10 +1496,10 @@ ADMIN_HTML = r"""<!doctype html>
         </div>
       `).join("");
       const providerDetails = Object.entries((status.transports || {}).providers || {})
-        .map(([name, item]) => `${name}: ${item.enabled}/${item.total}, oldest ${fmtAge(item.oldest_age_seconds)}`)
+        .map(([name, item]) => `${name}: ${item.active}/${item.enabled} active/enabled, refreshed ${fmtAge(item.newest_age_seconds)} ago`)
         .join("; ");
       const rows = [
-        ["Workers", providerWorker.last_error || autoWorker.last_error ? "error" : "ok", `auto ${fmtAge(autoWorker.last_finished_age_seconds)} / provider ${fmtAge(providerWorker.last_finished_age_seconds)}`, `auto=${autoWorker.last_error || "-"}; provider=${providerWorker.last_error || "-"}`],
+        ["Workers", providerWorker.last_error || autoWorker.last_error ? "error" : "ok", `auto ${fmtAge(autoWorker.last_finished_age_seconds)} / provider ${fmtAge(providerWorker.last_finished_age_seconds)}`, `auto=${autoWorker.last_error || "-"}; provider=${providerWorker.last_error || "-"}; refresh=${providerResult.refreshed ?? "-"}/${providerResult.failed ?? "-"}`],
         ["Fallback", fallback.ok ? "ok" : "warn", fmtAge(fallback.age_seconds), fallback.error || fallback.archive_name || ""],
         ["Providers", "info", fmtAge((status.transports || {}).oldest_age_seconds), providerDetails || "-"],
         ["Probe jobs", (status.probe_jobs || {}).failed_recent ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
@@ -2179,12 +2187,11 @@ ADMIN_HTML = r"""<!doctype html>
       `).join("") : '<tr><td colspan="9" class="muted">No provider transports.</td></tr>';
     }
     async function load() {
-      const data = await api("/api/admin");
-      try {
-        state.systemStatus = await api("/api/status");
-      } catch (error) {
-        state.systemStatus = { ok: false, warnings: [error.message] };
-      }
+      const [data, statusResult] = await Promise.all([
+        api("/api/admin"),
+        api("/api/status").catch(error => ({ ok: false, warnings: [error.message] }))
+      ]);
+      state.systemStatus = statusResult;
       state.servers = data.servers;
       state.users = data.users;
       state.routes = data.routes;
@@ -2569,6 +2576,13 @@ ADMIN_HTML = r"""<!doctype html>
     });
     document.getElementById("globalRouteServer").addEventListener("change", () => renderAutoEditor("globalRoute"));
     document.getElementById("adminRouteServer").addEventListener("change", () => renderAutoEditor("adminRoute"));
+    let autoHistoryTimer = null;
+    function scheduleAutoHistory(prefix) {
+      if (autoHistoryTimer) clearTimeout(autoHistoryTimer);
+      autoHistoryTimer = setTimeout(() => syncAutoEditorFromExisting(prefix), 250);
+    }
+    document.getElementById("globalRouteDomain").addEventListener("input", () => scheduleAutoHistory("globalRoute"));
+    document.getElementById("adminRouteDomain").addEventListener("input", () => scheduleAutoHistory("adminRoute"));
     document.getElementById("globalRouteDomain").addEventListener("change", () => syncAutoEditorFromExisting("globalRoute"));
     document.getElementById("adminRouteDomain").addEventListener("change", () => syncAutoEditorFromExisting("adminRoute"));
     document.getElementById("routeUser").addEventListener("change", () => syncAutoEditorFromExisting("adminRoute"));
@@ -2750,6 +2764,12 @@ def fetch_json_url(url: str, *, timeout: int = 3) -> dict[str, Any]:
 
 
 def cudy_fallback_state_status() -> dict[str, Any]:
+    checked_at = time.monotonic()
+    with FALLBACK_STATUS_CACHE_LOCK:
+        cached = FALLBACK_STATUS_CACHE.get("value")
+        cached_at = float(FALLBACK_STATUS_CACHE.get("checked_at") or 0.0)
+        if cached is not None and checked_at - cached_at <= FALLBACK_STATUS_CACHE_SECONDS:
+            return dict(cached)
     result: dict[str, Any] = {
         "url": CUDY_FALLBACK_STATE_URL,
         "reachable": False,
@@ -2775,6 +2795,9 @@ def cudy_fallback_state_status() -> dict[str, Any]:
         )
     except Exception as exc:
         result["error"] = str(exc)
+    with FALLBACK_STATUS_CACHE_LOCK:
+        FALLBACK_STATUS_CACHE["checked_at"] = checked_at
+        FALLBACK_STATUS_CACHE["value"] = dict(result)
     return result
 
 
@@ -9743,10 +9766,18 @@ class Handler(BaseHTTPRequestHandler):
         *,
         extra_headers: list[tuple[str, str]] | None = None,
     ) -> None:
-        payload = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        payload = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        accepts_gzip = "gzip" in self.headers.get("accept-encoding", "").lower()
+        content_encoding = ""
+        if accepts_gzip and len(payload) >= 1024:
+            payload = gzip.compress(payload, compresslevel=5)
+            content_encoding = "gzip"
         self.send_response(status)
         self.send_header("content-type", "application/json; charset=utf-8")
         self.send_header("cache-control", "no-store")
+        self.send_header("vary", "accept-encoding")
+        if content_encoding:
+            self.send_header("content-encoding", content_encoding)
         for name, value in extra_headers or []:
             self.send_header(name, value)
         self.send_header("content-length", str(len(payload)))

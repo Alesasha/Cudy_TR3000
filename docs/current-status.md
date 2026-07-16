@@ -38,6 +38,8 @@ Verified on 2026-07-16:
   for 24 hours or degrade readiness;
 - direct SSH audit, restricted tunnel-user deployment and agent update
   downloads work.
+- the scheduled operator backup and Cudy fallback-sync tasks both have a zero
+  last result; the latest pulled backup archive is dated 2026-07-16.
 
 The control-server remains authoritative for policy, provider transport plans,
 Auto cache, probe jobs, enrollment, agent updates and admin/user UI.
@@ -139,8 +141,20 @@ Remaining Android concerns:
 - Recent Auto history now returns failed jobs with per-candidate reasons,
   latency and HTTP status; the admin candidate editor displays up to three
   recent failures next to the last ten winners.
-- Admin and user UI are operational, but need a focused end-to-end usability
-  and lifecycle audit against the current model.
+- Agent-token user entry, credential-protected admin entry, Route Lookup,
+  Auto cache, agent controls and failure history were rendered and exercised
+  against production on desktop and a 375-pixel mobile viewport.
+- Admin and user pages have no document-level horizontal overflow or browser
+  console errors; wide admin tables scroll inside their section.
+- Control JSON uses conditional gzip and the admin page loads its data and
+  system status concurrently. The external private-Cudy status probe is cached
+  for 60 seconds instead of adding a three-second timeout to every refresh.
+- The status page distinguishes active/enabled transports, reports provider
+  refresh counts, and labels the private Cudy check as unreachable from the VPS
+  instead of incorrectly calling it stale. The independent Cudy checks remain
+  authoritative for fallback health.
+- Full enrollment/update/device lifecycle usability still needs the Phase 4
+  audit and automated rendered regression coverage.
 
 ## Non-Negotiable Safety Gates
 

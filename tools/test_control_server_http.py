@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import socket
 import subprocess
@@ -286,6 +287,7 @@ def main() -> int:
                 "providerTransportsBody",
                 "adminCriticalServiceRouting",
                 "adminCriticalServiceCandidates",
+                "scheduleAutoHistory",
                 "data-save-agent",
                 "data-delete-agent",
             ):
@@ -300,6 +302,16 @@ def main() -> int:
                     raise AssertionError(f"/api/admin is missing {key!r}")
             if "agent_enrollment_codes" not in admin_payload:
                 raise AssertionError("/api/admin is missing 'agent_enrollment_codes'")
+            gzip_request = urllib.request.Request(
+                f"{base_url}/api/admin",
+                headers={"accept-encoding": "gzip"},
+            )
+            with opener.open(gzip_request, timeout=5) as response:
+                if response.headers.get("content-encoding") != "gzip":
+                    raise AssertionError("/api/admin did not honor Accept-Encoding: gzip")
+                compressed_admin = json.loads(gzip.decompress(response.read()).decode("utf-8"))
+            if compressed_admin.get("users") != admin_payload.get("users"):
+                raise AssertionError("gzip /api/admin payload differs from identity response")
             saved_alias = post_json(
                 opener,
                 f"{base_url}/api/service-aliases",
