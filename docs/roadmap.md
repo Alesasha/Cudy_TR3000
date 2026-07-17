@@ -111,9 +111,14 @@ Prerequisite: Phases 1 and the relevant Auto checks are green.
    and critical-service probe flaps; require repeated strict checks to pass.
 2. Deploy the LokVPN Reality `short_id` stabilization separately, allow one
    natural provider refresh, and require zero recurring transport actions.
+   This is complete for short-ID-only churn. Real endpoint identity changes
+   remain legitimate guarded transport refreshes.
 3. Capture current PBR, dnsmasq, nft, transport and service state.
 4. Run the first uncommitted override-only guarded apply trial without moving
    DHCP/WAN.
+   The initial attempts found a missing per-interface nft-set bootstrap and a
+   stale transaction-lock failure. Both are fixed; the corrected long trial is
+   still pending.
 5. Deliberately stop the controlling workstation path and prove the independent
    on-router rollback restores previous files, PBR state and `observe` gate.
 6. Inspect counters and Direct/provider routes after rollback.

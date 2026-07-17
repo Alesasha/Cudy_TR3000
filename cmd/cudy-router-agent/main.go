@@ -1353,7 +1353,7 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 	for path := range updates {
 		pathSet[path] = true
 	}
-	bootstrapRequired := transportBootstrapRequired(transports) || !a.pbrDataplaneReady(ctx)
+	bootstrapRequired := transportBootstrapRequired(transports) || !a.pbrDataplaneReady(ctx, groups)
 	if bootstrapRequired {
 		pathSet["/etc/config/pbr"] = true
 	}
@@ -1464,14 +1464,34 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 	return false, nil
 }
 
-func (a *agent) pbrDataplaneReady(ctx context.Context) bool {
+func (a *agent) pbrDataplaneReady(ctx context.Context, groups map[string]routeSet) bool {
 	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return a.runCommand(
+	if a.runCommand(
 		checkCtx,
 		"ip -4 rule show 2>/dev/null | grep -Eq 'fwmark .* lookup pbr_' && "+
 			"nft list chain inet fw4 pbr_prerouting 2>/dev/null | grep -q 'goto pbr_mark_'",
-	) == nil
+	) != nil {
+		return false
+	}
+	interfaces := make([]string, 0, len(groups))
+	for iface, routes := range groups {
+		if iface == "wan" || len(routes.Domains)+len(routes.IPs) == 0 {
+			continue
+		}
+		if !safeName(iface) {
+			return false
+		}
+		interfaces = append(interfaces, iface)
+	}
+	sort.Strings(interfaces)
+	for _, iface := range interfaces {
+		setName := "pbr_" + iface + "_4_dst_ip_user"
+		if a.runCommand(checkCtx, "nft list set inet fw4 "+shellQuote(setName)+" >/dev/null 2>&1") != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func transportBootstrapRequired(transports []transportAction) bool {

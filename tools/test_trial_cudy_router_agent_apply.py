@@ -35,7 +35,8 @@ def main() -> int:
     assert not defaults.apply
     assert not defaults.yes
     assert not defaults.commit
-    assert defaults.trial_seconds >= 120
+    assert defaults.trial_seconds == 600
+    assert defaults.settle_seconds == 420
     assert validate_preflight(healthy_state(), max_age_seconds=300) == []
 
     unsafe = healthy_state()
@@ -61,6 +62,8 @@ def main() -> int:
     source = (ROOT / "tools" / "trial_cudy_router_agent_apply.py").read_text(encoding="utf-8")
     assert "/sbin/start-stop-daemon" in source
     assert "test -f \"$trial/armed\"" in source
+    assert "rollback_trial(client, trial_path, args.timeout)" in source
+    assert "max(timeout, 360)" in source
     assert "/etc/init.d/pbr status" not in source
     print("Guarded Cudy apply trial regression passed.")
     return 0

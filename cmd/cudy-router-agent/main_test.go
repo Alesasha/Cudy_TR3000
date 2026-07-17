@@ -325,6 +325,38 @@ func TestApplyTransactionRestoresFileWhenApplyFails(t *testing.T) {
 	}
 }
 
+func TestPBRDataplaneRequiresSetsForDesiredInterfaces(t *testing.T) {
+	commands := []string{}
+	a := &agent{runCommand: func(_ context.Context, command string) error {
+		commands = append(commands, command)
+		if strings.Contains(command, "pbr_lokvpn-de1_4_dst_ip_user") {
+			return errors.New("missing set")
+		}
+		return nil
+	}}
+	groups := map[string]routeSet{
+		"wan":          {Domains: []string{"direct.example"}},
+		"proxyde":      {Domains: []string{"example.com"}},
+		"lokvpn-de1":   {Domains: []string{"openai.com"}},
+		"unused-empty": {},
+	}
+	if a.pbrDataplaneReady(context.Background(), groups) {
+		t.Fatal("dataplane with a missing desired interface set was accepted")
+	}
+	joined := strings.Join(commands, "\n")
+	if strings.Contains(joined, "pbr_wan_4_dst_ip_user") || strings.Contains(joined, "unused-empty") {
+		t.Fatalf("direct or empty groups were probed: %s", joined)
+	}
+	if !strings.Contains(joined, "pbr_lokvpn-de1_4_dst_ip_user") {
+		t.Fatalf("missing interface set was not probed: %s", joined)
+	}
+
+	a.runCommand = func(context.Context, string) error { return nil }
+	if !a.pbrDataplaneReady(context.Background(), groups) {
+		t.Fatal("complete desired interface sets were rejected")
+	}
+}
+
 func TestBuildDesiredRejectsInvalidCriticalPattern(t *testing.T) {
 	preview := previewResponse{
 		OK: true, Configured: true, Source: "live",

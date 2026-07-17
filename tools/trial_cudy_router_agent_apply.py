@@ -242,6 +242,22 @@ def wait_for_apply(client: Any, timeout: int, settle_seconds: int) -> dict[str, 
     raise RuntimeError(f"apply did not become healthy within {settle_seconds}s: {last.get('status') or {}}")
 
 
+def rollback_trial(client: Any, trial_path: str, timeout: int) -> None:
+    rc, output = ssh_exec(
+        client,
+        f"""
+set -eu
+trial={shlex.quote(trial_path)}
+[ -x "$trial/rollback.sh" ]
+"$trial/rollback.sh" 0
+test -f "$trial/rolled-back"
+""".strip(),
+        max(timeout, 360),
+    )
+    if rc != 0:
+        raise RuntimeError(output)
+
+
 def commit_trial(client: Any, trial_path: str, timeout: int) -> None:
     rc, output = ssh_exec(
         client,
@@ -270,8 +286,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ssh-password")
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--max-age-seconds", type=int, default=300)
-    parser.add_argument("--trial-seconds", type=int, default=300)
-    parser.add_argument("--settle-seconds", type=int, default=150)
+    parser.add_argument("--trial-seconds", type=int, default=600)
+    parser.add_argument("--settle-seconds", type=int, default=420)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--commit", action="store_true", help="Keep a healthy apply result, then return the service to observe mode.")
@@ -282,10 +298,10 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.commit and not (args.apply and args.yes):
         raise SystemExit("--commit requires --apply --yes")
-    if args.trial_seconds < 120:
-        raise SystemExit("--trial-seconds must be at least 120")
-    if args.trial_seconds <= args.settle_seconds + 30:
-        raise SystemExit("--trial-seconds must exceed --settle-seconds by at least 30 seconds")
+    if args.trial_seconds < 300:
+        raise SystemExit("--trial-seconds must be at least 300")
+    if args.trial_seconds <= args.settle_seconds + 120:
+        raise SystemExit("--trial-seconds must exceed --settle-seconds by at least 120 seconds")
     client = connect(args.host, args.user, load_password(args.ssh_password), args.timeout)
     try:
         state = read_state(client, args.timeout)
@@ -307,7 +323,14 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         trial_path = start_trial(client, state, args)
         print(f"Guarded trial started: {trial_path}; automatic rollback in {args.trial_seconds}s")
-        applied = wait_for_apply(client, args.timeout, args.settle_seconds)
+        try:
+            applied = wait_for_apply(client, args.timeout, args.settle_seconds)
+        except Exception:
+            # Do not leave a still-running apply cycle to collide with the
+            # delayed guard. The independent guard remains the final fallback
+            # if this immediate rollback cannot reach the router.
+            rollback_trial(client, trial_path, args.timeout)
+            raise
         applied_status = applied["status"]
         if applied_status.get("critical_services_ok") is not True or applied_status.get("ok") is not True:
             raise RuntimeError("post-apply status is not healthy; local Cudy guard remains armed")

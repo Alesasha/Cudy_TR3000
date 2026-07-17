@@ -47,6 +47,14 @@ fail_open() {
     fi
     set_forwarding
     rm -f "$STATE_DIR/starting" "$STATE_DIR/expected"
+    owner_pid="$(cat /tmp/cudy-pbr-safe.lock/pid 2>/dev/null || true)"
+    case "$owner_pid" in
+        ''|*[!0-9]*) owner_pid=0 ;;
+    esac
+    if [ "$owner_pid" -le 1 ] || ! kill -0 "$owner_pid" 2>/dev/null; then
+        rm -f /tmp/cudy-pbr-safe.lock/pid
+        rmdir /tmp/cudy-pbr-safe.lock 2>/dev/null || true
+    fi
     printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$reason" > "$STATE_DIR/failed"
 }
 

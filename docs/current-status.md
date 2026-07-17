@@ -141,8 +141,29 @@ control-server defect: LokVPN returns a different valid Reality `short_id` every
 15 minutes while endpoint, UUID, public key, SNI and flow remain unchanged.
 This creates a false perpetual `refresh-and-restart` action. The source now
 selects list-valued IDs deterministically and retains the active ID when every
-other transport identity field is unchanged. That control-server change must be
-deployed and pass one natural provider refresh before the route trial.
+other transport identity field is unchanged. The change is deployed and passed
+a natural provider refresh without recreating the false action. A later refresh
+changed the real endpoint, port, UUID and SNI together; that legitimate transport
+replacement was applied through the separately committed guarded bootstrap.
+
+The first override-only apply attempt showed that adding a newly bootstrapped
+interface to `pbr.config.supported_interface` is not enough: the required
+per-interface nft user set does not exist until a full PBR rebuild includes an
+override for that interface. The Go agent now checks every desired interface set
+and chooses the full guarded bootstrap path when one is absent.
+
+The next uncommitted attempt exposed two safety timing defects rather than a
+policy defect. A complete PBR rebuild on this router can take over two minutes,
+while the trial used a 90-second settle window. Its delayed rollback then
+overlapped the rebuild, and a stale lock caused the independent watchdog to stop
+an otherwise healthy PBR dataplane after 300 seconds. Direct WAN remained
+available, but tunneled services such as Telegram stopped until PBR was restored.
+The restart lock now records its owner PID, removes only dead locks, and clears
+the in-progress marker explicitly before reporting success. The trial defaults
+are now 600/420 seconds and any failed wait requests an immediate rollback. The
+fixed watchdog and rebuilt PBR have remained healthy beyond the old 300-second
+failure threshold. The router-agent remains in `observe`; the corrected route
+trial has not yet been rerun.
 
 Some router-local TUN diagnostics can produce false failures. For
 `http-proxy-tun` transports the observer now probes the upstream HTTP proxy
@@ -198,7 +219,14 @@ Remaining Android concerns:
   fail-open. The AmneziaVPN background service remains available for manual
   fallback, but its GUI/full-tunnel service must stay disconnected during
   normal development.
-- A controlled reboot and connectivity acceptance remains outstanding.
+- Two controlled reboots confirmed that the endpoint bypass survives Wi-Fi
+  interface reindexing. A SYSTEM task reconnects the configured Wi-Fi profile,
+  pins the AWG endpoint outside Cudy and refreshes OpenAI host routes every two
+  minutes. The task is intentionally not readable from a non-elevated shell,
+  but its state timestamp and routes update normally.
+- A 30-request HTTPS sample had no failures. The uswest path still showed high
+  latency variance (roughly 200-400 ms), so a longer streaming soak and an
+  alternate OpenAI maintenance exit remain useful follow-ups.
 
 ## Linux Agent
 
@@ -281,8 +309,10 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-First consolidate and push the current workspace checkpoint. Then repair and
-reboot-test the dedicated Windows OpenAI recovery transport before returning to
-the guarded transport bootstrap and override-only router-agent trials.
+First consolidate and push the PBR set-detection, PID-lock and guarded-trial
+timing fixes. Keep the corrected PBR running through another provider refresh,
+then align any legitimate transport change separately and rerun the long
+uncommitted override-only trial. Do not commit that route trial until its full
+apply, automatic rollback and post-rollback service checks all pass.
 Platform-agent acceptance follows while Android continues its background soak;
 Linux acceptance remains dependent on Dima's next real-world session.

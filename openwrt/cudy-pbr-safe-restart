@@ -59,14 +59,29 @@ fail_open() {
 
 cleanup() {
     rm -f "$STATE_DIR/starting"
+    rm -f "$LOCK_DIR/pid"
     rmdir "$LOCK_DIR" 2>/dev/null || true
 }
 
 mkdir -p "$STATE_DIR"
 if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-    log "another PBR transaction is already running; request coalesced"
-    exit 0
+    owner_pid="$(cat "$LOCK_DIR/pid" 2>/dev/null || true)"
+    case "$owner_pid" in
+        ''|*[!0-9]*) owner_pid=0 ;;
+    esac
+    if [ "$owner_pid" -gt 1 ] && kill -0 "$owner_pid" 2>/dev/null; then
+        log "another PBR transaction is already running; request coalesced"
+        exit 0
+    fi
+    log "removing stale PBR transaction lock"
+    rm -f "$LOCK_DIR/pid"
+    rmdir "$LOCK_DIR" 2>/dev/null || true
+    if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+        log "could not acquire PBR transaction lock"
+        exit 1
+    fi
 fi
+printf '%s\n' "$$" > "$LOCK_DIR/pid"
 trap cleanup EXIT INT TERM
 
 case "${1:-restart}" in
@@ -127,5 +142,9 @@ fi
 
 touch "$STATE_DIR/expected"
 rm -f "$STATE_DIR/failed"
+# BusyBox ash normally runs the EXIT trap, but explicitly clear the in-progress
+# marker before reporting success so the independent watchdog can never mistake
+# a completed rebuild for a stale one.
+cleanup
 log "PBR rebuild completed; forwarding is enabled"
 exit 0
