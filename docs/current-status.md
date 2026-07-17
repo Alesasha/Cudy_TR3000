@@ -2,7 +2,7 @@
 
 Snapshot date: 2026-07-17.
 
-Snapshot tag: `snapshot-2026-07-16-android-1.21`.
+Snapshot tag: `snapshot-2026-07-17-agents-android-1.22`.
 
 This document records the verified live state. Planned work belongs in
 `docs/roadmap.md`; historical notes are not operating instructions.
@@ -12,13 +12,12 @@ This document records the verified live state. Planned work belongs in
 - The tagged snapshot is pushed to GitHub. The current recovery checkpoint
   consolidates the post-snapshot safety work without tracking local secrets or
   runtime artifacts.
-- Android `1.21 (22)` is committed in `4c97412`.
+- Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current published artifacts:
-  - Android `1.21 (22)`, SHA256
-    `2846b6385e4c0117e1cfdac050d925f56efa4643bdf46d3497bd556b998fc977`;
-  - Linux `1.22 (23)`, SHA256
-    `c5ac57f3644427c2d9251d01c6f375142c25d66c27fa3859ea9c5ace66852423`;
+  - Android `1.22 (23)`, SHA256
+    `b512b2553aa8cbc1b76a30c00e749eb057fa915c2b71fad9d5b5082bd15a24fa`;
+  - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
@@ -200,7 +199,7 @@ unchanged. The agent is still in `observe` mode.
 
 ## Android Agent
 
-Android `1.21 (22)` is published and installed on the physical MIUI phone.
+Android `1.22 (23)` is published and installed on the physical MIUI test phone.
 
 Verified acceptance:
 
@@ -224,7 +223,7 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
-- the current physical-device check confirms version `1.21 (22)`, an active
+- the current physical-device check confirms version `1.22 (23)`, an active
   foreground `CudyVpnService`, and a device-idle whitelist entry for
   `com.nashvpn.cudyagent`; the production package is not debuggable.
 
@@ -235,6 +234,11 @@ Remaining Android concerns:
 - the current UI is functional but exposes too much technical state and needs
   a clearer user-facing status/version/update design;
 - JavaScript-only geographic decisions still require rendered probes.
+- long-running acceptance on a second, daily-use Android phone has not started;
+- the admin UI can create a one-time device code, but fresh-phone onboarding is
+  not yet fully self-contained: the administrator download and protected SSH
+  bootstrap are still separate steps. A universal APK must not embed an
+  unrestricted shared private key.
 
 ## Windows Agent
 
@@ -259,7 +263,7 @@ Remaining Android concerns:
 
 ## Linux Agent
 
-- Linux `1.22 (23)` is published.
+- Linux `1.23 (24)` is published.
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.
@@ -271,9 +275,17 @@ Remaining Android concerns:
   interface appears; stale/reused PIDs are discarded and a missing interface
   fails the cycle. This fixes the observed state where `health.ok=true` and
   Telegram routes were installed while `vpn_interfaces` was empty.
-- The latest Dima report predates `1.22 (23)` and has an empty interface list,
-  so production acceptance still requires installation/reconnect and a fresh
-  non-empty interface report.
+- Dima installed the preceding update and reported Gemini working but ChatGPT
+  unavailable. The control-server showed his device stale/offline from
+  `2026-07-17T12:09:24+00:00`, while the effective ChatGPT rules and current
+  Auto winners were present. This isolates the immediate failure to agent
+  recovery rather than a missing ChatGPT route.
+- `1.23 (24)` now reports update completion only after the systemd service is
+  active. The independent watchdog restarts an enabled-but-inactive service;
+  explicit user OFF remains disabled and is not restarted.
+- Production acceptance requires Dima to turn the agent ON once, receive
+  `1.23 (24)`, and submit a fresh online status with working ChatGPT/Telegram
+  and non-empty interfaces.
 - A long real-world test on Dima's machine is still required for suspend,
   resume, Wi-Fi changes, Zapret, UFW and update behavior.
 
@@ -344,6 +356,9 @@ Remaining Android concerns:
   confirms that the reviewed daily domain/IP update flow is not yet complete;
   provider refresh is automatic, but managed-domain source updates still need
   Phase 3 implementation.
+- YouTube dependencies are now also seeded as global Auto routes, so a restored
+  or cloned control-server retains the production policy instead of depending
+  on a one-off live database edit.
 
 ## Non-Negotiable Safety Gates
 
@@ -364,8 +379,10 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Have Dima install/reconnect Linux `1.22 (23)` and require a fresh report with
-non-empty `vpn_interfaces`, working Telegram and Reuters. In parallel, implement
-the reviewed daily domain/IP source update. Do not run another Cudy route trial
-until platform routing is stable and the existing guarded rollback baseline is
-reconfirmed.
+Enroll the daily-use Android phone as a separate device and begin a multi-day
+Wi-Fi/mobile-data/locked-screen soak on `1.22 (23)`. Until protected bootstrap
+provisioning is integrated into the admin workflow, install the APK and SSH
+bootstrap as explicit administrator steps and use the admin UI for the
+one-time device code. In parallel, have Dima turn the Linux agent ON once and
+confirm automatic recovery to `1.23 (24)`. Do not run another Cudy route trial
+until both platform paths are stable.

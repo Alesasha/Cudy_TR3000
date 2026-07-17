@@ -299,6 +299,8 @@ def main() -> int:
                 "Apply state",
                 "Delete device",
                 "Revoke one-time enrollment code",
+                "Download Android APK",
+                "/api/admin/agent-update-package?platform=",
             ):
                 if snippet not in admin_page:
                     raise AssertionError(f"admin page is missing {snippet!r}")
@@ -518,6 +520,11 @@ def main() -> int:
             app_version = fetch_json_with_bearer(f"{base_url}/api/agent/app-version?platform=android", device_token)
             if app_version.get("platform") != "android" or "version_code" not in app_version:
                 raise AssertionError(f"agent app version payload is malformed: {app_version!r}")
+            if app_version.get("download_url"):
+                with opener.open(f"{base_url}/api/admin/agent-update-package?platform=android", timeout=5) as response:
+                    first_bytes = response.read(2)
+                if first_bytes != b"PK":
+                    raise AssertionError(f"admin Android package is not an APK/zip: {first_bytes!r}")
             windows_version = fetch_json_with_bearer(f"{base_url}/api/agent/app-version?platform=windows", device_token)
             if windows_version.get("download_url"):
                 request = urllib.request.Request(

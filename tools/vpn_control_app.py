@@ -1371,6 +1371,7 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>Name</label><input id="enrollmentDisplayName" type="text" placeholder="Android phone"></div>
         <div class="field"><label>TTL hours</label><input id="enrollmentTtlHours" type="number" min="1" max="720" step="1" value="24"></div>
         <button type="submit">Create one-time code</button>
+        <a class="button" href="/api/admin/agent-update-package?platform=android">Download Android APK</a>
       </form>
       <p id="enrollmentStatus" class="status"></p>
       <table>
@@ -2222,7 +2223,7 @@ ADMIN_HTML = r"""<!doctype html>
       const body = document.getElementById("agentUpdatesBody");
       body.innerHTML = state.agentUpdates.length ? state.agentUpdates.map(item => {
         const packageText = item.download_url
-          ? `<span class="badge ok">available</span> ${item.download_url}`
+          ? `<span class="badge ok">available</span> <a href="/api/admin/agent-update-package?platform=${encodeURIComponent(item.platform)}">Download</a>`
           : '<span class="badge">not built</span>';
         return `
           <tr>
@@ -10335,6 +10336,17 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_error_json("Client config not found", HTTPStatus.NOT_FOUND)
                     return
                 self.send_file(config_path, download_name=config_path.name)
+            elif parsed.path == "/api/admin/agent-update-package":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                platform = normalize_platform(query.get("platform", [""])[0]) or "android"
+                suffix = ".apk" if platform == "android" else ".zip"
+                artifact = AGENT_UPDATE_DIR / f"{platform}{suffix}"
+                if not artifact.exists() or not artifact.is_file():
+                    self.send_error_json("Agent update package not found", HTTPStatus.NOT_FOUND)
+                    return
+                content_type = "application/vnd.android.package-archive" if suffix == ".apk" else "application/zip"
+                self.send_binary_file(artifact, download_name=artifact.name, content_type=content_type)
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
             elif parsed.path == "/readyz":

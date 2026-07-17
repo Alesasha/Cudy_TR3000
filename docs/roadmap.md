@@ -4,7 +4,7 @@ Updated: 2026-07-17.
 
 This roadmap contains remaining work only. The verified baseline is recorded
 in `docs/current-status.md` and frozen by tag
-`snapshot-2026-07-16-android-1.21`.
+`snapshot-2026-07-17-agents-android-1.22`.
 
 ## Execution Rules
 
@@ -35,7 +35,7 @@ leak, focus-stealing console or manual transport repair.
 
 ### Linux
 
-1. Confirm Dima receives Linux `1.22 (23)` through the control update path and
+1. Confirm Dima receives Linux `1.23 (24)` through the control update path and
    reports the expected non-empty TUN interface set after OFF/ON.
 2. Keep normal operation one-click from the UI; no manual Amnezia interface or
    route commands should be required.
@@ -52,7 +52,8 @@ The production agent now keeps recent compatible probe transports warm for six
 hours. A live cycle accepted a new probe job without changing the unified
 config hash or reloading libbox; the longer soak below remains required.
 
-1. Run a longer Wi-Fi/background/locked-screen soak on `1.21 (22)`.
+1. Enroll a second daily-use phone and run a multi-day
+   Wi-Fi/mobile-data/background/locked-screen soak on `1.22 (23)`.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
 3. Resolve or clearly explain the remaining Doze/battery warning.
 4. Redesign the main screen around a concise state indicator, current/latest
@@ -100,7 +101,10 @@ provider failure moves traffic to the next valid candidate.
    diagnostics and update status in plain language.
 5. Make enrollment and update behavior consistent across Windows, Linux and
    Android.
-6. Add automated rendered UI regression coverage for desktop and mobile
+6. Add an administrator APK download action and a protected Android provisioning
+   bundle/QR containing a one-time code plus per-device control bootstrap. Do
+   not ship an unrestricted shared SSH private key inside the universal APK.
+7. Add automated rendered UI regression coverage for desktop and mobile
    widths; the current production UI has passed the equivalent manual check.
    Users/Agents filtering and stale default-server option reduction are now
    covered by the HTTP smoke test and manual browser interaction; broader
