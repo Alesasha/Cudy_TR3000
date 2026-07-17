@@ -84,9 +84,20 @@ public static class CudySingBoxConfig
         foreach (var entry in plan.Entries)
         {
             var tag = OutboundTag(entry.ServerId);
-            var outbound = BuildProxyOutbound(entry, tag, directCidrs, directDomains);
-            outbounds.Add(outbound);
-            outboundTags[entry.ServerId] = tag;
+            try
+            {
+                var outbound = BuildProxyOutbound(entry, tag, directCidrs, directDomains);
+                outbounds.Add(outbound);
+                outboundTags[entry.ServerId] = tag;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+            {
+                // Keep the rest of the VPN usable while the control plane selects a supported fallback.
+                Android.Util.Log.Warn(
+                    "CudyAgent",
+                    $"Transport {entry.ServerId} is unavailable on Android and will be blocked: {ex.Message}");
+                outboundTags[entry.ServerId] = "block";
+            }
         }
         AddUrlTestOutbound(urlTest, outbounds, outboundTags);
 
@@ -139,6 +150,35 @@ public static class CudySingBoxConfig
         AddPolicyRules(root, "ip_routes", rules, outboundTags);
         AddPolicyRules(root, "domain_routes", rules, outboundTags);
 
+        var tunneledDomains = CollectTunneledDomainSuffixes(root, routeOverrides, outboundTags);
+        var dnsServers = new JsonArray
+        {
+            new JsonObject
+            {
+                ["type"] = "udp",
+                ["tag"] = "cloudflare",
+                ["server"] = "1.1.1.1",
+                ["server_port"] = 53,
+            },
+            new JsonObject
+            {
+                ["type"] = "fakeip",
+                ["tag"] = "fakeip",
+                ["inet4_range"] = "198.18.0.0/15",
+            },
+        };
+        var dnsRules = new JsonArray();
+        if (tunneledDomains.Count > 0)
+        {
+            dnsRules.Add(new JsonObject
+            {
+                ["domain_suffix"] = new JsonArray(
+                    tunneledDomains.Select(item => JsonValue.Create(item)).ToArray<JsonNode?>()),
+                ["action"] = "route",
+                ["server"] = "fakeip",
+            });
+        }
+
         var config = new JsonObject
         {
             ["log"] = new JsonObject
@@ -148,18 +188,11 @@ public static class CudySingBoxConfig
             },
             ["dns"] = new JsonObject
             {
-                ["servers"] = new JsonArray
-                {
-                    new JsonObject
-                    {
-                        ["type"] = "udp",
-                        ["tag"] = "cloudflare",
-                        ["server"] = "1.1.1.1",
-                        ["server_port"] = 53,
-                    },
-                },
+                ["servers"] = dnsServers,
+                ["rules"] = dnsRules,
                 ["final"] = "cloudflare",
                 ["strategy"] = "ipv4_only",
+                ["reverse_mapping"] = true,
             },
             ["inbounds"] = inbounds,
             ["outbounds"] = outbounds,
@@ -176,6 +209,57 @@ public static class CudySingBoxConfig
             "cudy0",
             "sing-box-unified",
             config.ToJsonString(JsonOptions));
+    }
+
+    private static SortedSet<string> CollectTunneledDomainSuffixes(
+        JsonElement root,
+        IReadOnlyList<CudySingBoxRouteOverride>? routeOverrides,
+        IReadOnlyDictionary<string, string> outboundTags)
+    {
+        var result = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (routeOverrides is not null)
+        {
+            foreach (var route in routeOverrides)
+            {
+                if (!outboundTags.TryGetValue(route.ServerId, out var outbound)
+                    || string.Equals(outbound, "direct", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                foreach (var domain in route.DomainSuffixes)
+                {
+                    var normalized = NormalizeDomain(domain);
+                    if (!string.IsNullOrWhiteSpace(normalized))
+                    {
+                        result.Add(normalized);
+                    }
+                }
+            }
+        }
+
+        if (!root.TryGetProperty("domain_routes", out var routes) || routes.ValueKind != JsonValueKind.Array)
+        {
+            return result;
+        }
+        foreach (var route in routes.EnumerateArray())
+        {
+            if (route.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+            var serverId = OptionalString(route, "server_id") ?? "";
+            if (!outboundTags.TryGetValue(serverId, out var outbound)
+                || string.Equals(outbound, "direct", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+            var domain = NormalizeDomain(OptionalString(route, "domain"));
+            if (!string.IsNullOrWhiteSpace(domain))
+            {
+                result.Add(domain);
+            }
+        }
+        return result;
     }
 
     private static JsonObject BuildHttpProxyConfig(CudyTransportEntry entry)

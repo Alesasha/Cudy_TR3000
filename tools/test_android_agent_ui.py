@@ -104,6 +104,15 @@ def main() -> int:
             "AddDisallowedApplication",
             "Added Android auto routes",
             "CudyAndroidProbeRunner.BuildLocalProbes(transportPlan)",
+            "Duplicate start request ignored; control loop and TUN remain active",
+            "StartFingerprint(",
+        ],
+    )
+    assert_contains(
+        ROOT / "apps" / "CudyAndroidAgent" / "CudyTransportStore.cs",
+        [
+            'Guid.NewGuid().ToString("N")',
+            "File.Move(tempPath, path, overwrite: true)",
         ],
     )
     assert_contains(
@@ -117,6 +126,15 @@ def main() -> int:
     probe_text = ANDROID_PROBE.read_text(encoding="utf-8")
     if ".StartOrReload(" in probe_text:
         raise AssertionError("Android probe runner must not reload the active VPN engine")
+    assert_contains(
+        ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidLibboxEngine.cs",
+        [
+            "MinimumReloadInterval",
+            "libbox config reload deferred",
+            "libbox pending config cancelled",
+            "reload_deferred=",
+        ],
+    )
     assert_contains(
         BOOT_RECEIVER,
         [
@@ -132,7 +150,13 @@ def main() -> int:
             '["action"] = "sniff"',
             '["action"] = "hijack-dns"',
             '["auto_detect_interface"] = true',
+            '["reverse_mapping"] = true',
+            '["type"] = "fakeip"',
+            '["inet4_range"] = "198.18.0.0/15"',
+            'CollectTunneledDomainSuffixes(',
             '["exclude_package"] = new JsonArray { "com.nashvpn.cudyagent" }',
+            "is unavailable on Android and will be blocked",
+            'outboundTags[entry.ServerId] = "block"',
         ],
     )
     print("Android agent UI static smoke passed.")

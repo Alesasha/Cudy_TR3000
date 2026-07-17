@@ -13,6 +13,7 @@ namespace CudyAndroidAgent;
 public sealed class CudyAndroidLibboxEngine : IDisposable
 {
     private const string LogTag = "CudyAgent";
+    private static readonly TimeSpan MinimumReloadInterval = TimeSpan.FromMinutes(10);
 
     private readonly CudyVpnService service;
     private readonly CudyLibboxPlatform platform;
@@ -24,6 +25,9 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
     private string activeConfigPath = "";
     private string activeServerId = "";
     private string activeConfigHash = "";
+    private DateTimeOffset activeConfigStartedAt = DateTimeOffset.MinValue;
+    private string pendingConfigHash = "";
+    private DateTimeOffset pendingConfigSince = DateTimeOffset.MinValue;
 
     public CudyAndroidLibboxEngine(CudyVpnService service)
     {
@@ -49,6 +53,26 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
         var configChanged = !string.Equals(activeConfigHash, configHash, StringComparison.Ordinal);
         if (pathChanged || serverChanged || configChanged)
         {
+            var now = DateTimeOffset.UtcNow;
+            var reloadAt = activeConfigStartedAt + MinimumReloadInterval;
+            if (!string.IsNullOrEmpty(activeConfigHash) && now < reloadAt)
+            {
+                if (string.IsNullOrEmpty(pendingConfigHash))
+                {
+                    pendingConfigSince = now;
+                }
+                pendingConfigHash = configHash;
+                var reloadInSeconds = Math.Max(1, (int)Math.Ceiling((reloadAt - now).TotalSeconds));
+                var pendingForSeconds = Math.Max(0, (int)Math.Floor((now - pendingConfigSince).TotalSeconds));
+                Log.Info(
+                    LogTag,
+                    $"libbox config reload deferred active={ShortHash(activeConfigHash)} " +
+                    $"pending={ShortHash(configHash)} pending_for={pendingForSeconds}s reload_in={reloadInSeconds}s");
+                return $"engine=running server={activeServerId} iface={transport.InterfaceName} " +
+                    $"config={ShortHash(activeConfigHash)} pending={ShortHash(configHash)} " +
+                    $"reload_deferred={reloadInSeconds}s";
+            }
+
             Log.Info(
                 LogTag,
                 $"libbox config reload old={ShortHash(activeConfigHash)} new={ShortHash(configHash)} " +
@@ -57,9 +81,21 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
             activeConfigPath = transport.ConfigPath;
             activeServerId = transport.ServerId;
             activeConfigHash = configHash;
+            activeConfigStartedAt = now;
+            pendingConfigHash = "";
+            pendingConfigSince = DateTimeOffset.MinValue;
         }
         else
         {
+            if (!string.IsNullOrEmpty(pendingConfigHash))
+            {
+                Log.Info(
+                    LogTag,
+                    $"libbox pending config cancelled pending={ShortHash(pendingConfigHash)} " +
+                    $"active={ShortHash(activeConfigHash)}");
+                pendingConfigHash = "";
+                pendingConfigSince = DateTimeOffset.MinValue;
+            }
             Log.Debug(LogTag, $"libbox config unchanged hash={ShortHash(configHash)}");
         }
 
@@ -163,6 +199,9 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
         activeConfigPath = "";
         activeServerId = "";
         activeConfigHash = "";
+        activeConfigStartedAt = DateTimeOffset.MinValue;
+        pendingConfigHash = "";
+        pendingConfigSince = DateTimeOffset.MinValue;
         platform.CloseAllDefaultInterfaceMonitors();
         service.CloseLibboxTun();
     }

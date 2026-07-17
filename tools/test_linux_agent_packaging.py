@@ -332,6 +332,22 @@ def main() -> int:
     assert_contains(update_builder, '"watch_agent_connectivity.py"', label="Build-AgentUpdateArtifacts.ps1")
     assert_contains(update_builder, '[string[]]$Platforms', label="Build-AgentUpdateArtifacts.ps1")
     assert_contains(update_builder, '$selectedPlatforms -contains "android"', label="Build-AgentUpdateArtifacts.ps1")
+    assert_contains(update_builder, '[string]$LinuxVersionName = "1.23"', label="Build-AgentUpdateArtifacts.ps1")
+    assert_contains(update_builder, '[int]$LinuxVersionCode = 24', label="Build-AgentUpdateArtifacts.ps1")
+    assert_contains(update_builder, 'version_name = $LinuxVersionName', label="Build-AgentUpdateArtifacts.ps1")
+    assert_contains(updater, "wait_for_service_active", label="update_agent.sh")
+    assert_contains(updater, 'systemctl is-active --quiet "$SERVICE_NAME"', label="update_agent.sh")
+    assert_contains(updater, "service=active control=ready", label="update_agent.sh")
+    assert_not_contains(
+        updater,
+        'systemctl restart "$SERVICE_NAME" || true',
+        label="update_agent.sh",
+    )
+    assert_contains(agent_ui_py, 'if "completed current=" in status:', label="cudy_agent_ui.py")
+    assert_contains(agent_ui_py, 'if "failed" in status:', label="cudy_agent_ui.py")
+    assert_contains(watchdog, "recover_enabled_service", label="watch_agent_connectivity.py")
+    assert_contains(watchdog, '["systemctl", "restart", name]', label="watch_agent_connectivity.py")
+    assert_contains(watchdog, 'result.setdefault("failed_services", []).insert(0, "agent-service")', label="watch_agent_connectivity.py")
 
     print("Linux agent packaging regression passed.")
     return 0

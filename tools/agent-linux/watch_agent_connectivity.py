@@ -10,6 +10,7 @@ import re
 import socket
 import subprocess
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -209,6 +210,25 @@ def service_enabled(name: str) -> bool:
     return result.returncode == 0 and result.stdout.strip() == "enabled"
 
 
+def service_active(name: str) -> bool:
+    result = subprocess.run(["systemctl", "is-active", "--quiet", name], check=False)
+    return result.returncode == 0
+
+
+def recover_enabled_service(name: str) -> bool:
+    if service_active(name):
+        return True
+    log(f"Enabled agent service is inactive; attempting restart: {name}", "WARN")
+    subprocess.run(["systemctl", "restart", name], check=False)
+    for _ in range(15):
+        if service_active(name):
+            log(f"Agent service recovered: {name}")
+            return True
+        time.sleep(1)
+    log(f"Agent service restart failed: {name}", "ERROR")
+    return False
+
+
 def emergency_stop(service_name: str) -> None:
     subprocess.run(["systemctl", "disable", "--now", service_name], check=False)
     subprocess.run([str(ROOT / "restore_direct.sh")], cwd=ROOT, check=False)
@@ -228,6 +248,9 @@ def main() -> int:
     if not service_enabled(args.agent_service):
         write_json(STATE_PATH, {"consecutive_failures": 0, "last_result": "agent_disabled", "updated_at": utc_now()})
         return 0
+    if not recover_enabled_service(args.agent_service):
+        result["ok"] = False
+        result.setdefault("failed_services", []).insert(0, "agent-service")
     state = read_json(STATE_PATH, {})
     failures = int(state.get("consecutive_failures") or 0)
     env = load_env()

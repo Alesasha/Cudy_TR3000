@@ -70,6 +70,28 @@ PY
   printf '0\n'
 }
 
+wait_for_service_active() {
+  local deadline=$((SECONDS + 45))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_for_control_ready() {
+  local deadline=$((SECONDS + 35))
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if curl -fsS --connect-timeout 2 --max-time 4 "${CONTROL_URL}/healthz" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
 copy_update_files() {
   local src="$1"
   shopt -s dotglob nullglob
@@ -108,9 +130,26 @@ apply_staged_update() {
   echo "Installed version code: $(current_version_code)" >> "$log_file" 2>/dev/null || true
   if command -v systemctl >/dev/null 2>&1; then
     write_update_status "restarting agent service after update."
-    ./install_systemd.sh "$SERVICE_NAME" >/dev/null 2>&1 || systemctl restart "$SERVICE_NAME" || true
+    if ! ./install_systemd.sh "$SERVICE_NAME" >>"$log_file" 2>&1; then
+      echo "install_systemd.sh failed; attempting direct service restart" >>"$log_file"
+      systemctl daemon-reload >>"$log_file" 2>&1 || true
+      systemctl enable "$SERVICE_NAME" >>"$log_file" 2>&1 || true
+      systemctl restart "$SERVICE_NAME" >>"$log_file" 2>&1
+    fi
+    if ! wait_for_service_active; then
+      write_update_status "failed: agent service did not become active after update. Run Diagnostics or turn the agent OFF and ON."
+      systemctl --no-pager --full status "$SERVICE_NAME" >>"$log_file" 2>&1 || true
+      journalctl -u "$SERVICE_NAME" -n 120 --no-pager >>"$log_file" 2>&1 || true
+      return 1
+    fi
+    if wait_for_control_ready; then
+      write_update_status "completed current=$(current_version_code) service=active control=ready."
+    else
+      write_update_status "completed current=$(current_version_code) service=active control=pending. The agent will keep reconnecting automatically."
+    fi
+  else
+    write_update_status "completed current=$(current_version_code) service=not-managed."
   fi
-  write_update_status "completed current=$(current_version_code)."
   echo "Agent update applied from $stage_path"
 }
 

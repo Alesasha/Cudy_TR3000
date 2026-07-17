@@ -8,6 +8,7 @@ using IO.Nekohasekai.Libbox;
 using Renci.SshNet;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
@@ -43,6 +44,7 @@ public class CudyVpnService : VpnService
     private bool debugProbePending;
     private IReadOnlyList<CudyCriticalService> criticalServices = Array.Empty<CudyCriticalService>();
     private int consecutiveCriticalFailures;
+    private string activeStartFingerprint = "";
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
     {
@@ -82,6 +84,20 @@ public class CudyVpnService : VpnService
             StopAgent("missing control URL or token");
             return;
         }
+
+        var startFingerprint = StartFingerprint(
+            controlUrl,
+            deviceId,
+            sshHost,
+            sshUser,
+            controlOnly);
+        if (loopTask is { IsCompleted: false }
+            && string.Equals(activeStartFingerprint, startFingerprint, StringComparison.Ordinal))
+        {
+            Log.Info(LogTag, "Duplicate start request ignored; control loop and TUN remain active");
+            return;
+        }
+        activeStartFingerprint = startFingerprint;
 
         SaveServiceStatus("starting");
         StartForeground(NotificationId, BuildNotification("Starting"));
@@ -132,11 +148,29 @@ public class CudyVpnService : VpnService
         debugProbeUrl = "";
         debugProbeCandidates = "";
         debugProbePending = false;
+        activeStartFingerprint = "";
         if (!string.IsNullOrWhiteSpace(finalStatus))
         {
             SaveServiceStatus(finalStatus);
         }
         StopSelf();
+    }
+
+    private static string StartFingerprint(
+        string controlUrl,
+        string deviceId,
+        string sshHost,
+        string sshUser,
+        bool controlOnly)
+    {
+        var value = string.Join(
+            '\n',
+            controlUrl,
+            deviceId,
+            sshHost,
+            sshUser,
+            controlOnly ? "control-only" : "vpn");
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 
     private void StartSshControl(string host, string user, string privateKey)

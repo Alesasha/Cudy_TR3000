@@ -427,15 +427,28 @@ class AgentUi:
         return ["./update_agent.sh", "--force"]
 
     def wait_for_update_and_restart(self, previous_code: int) -> None:
-        deadline = time.monotonic() + 120
+        deadline = time.monotonic() + 180
+        completed = False
+        failure = ""
         while time.monotonic() < deadline:
-            _name, code = current_version()
             status = read_update_status().lower()
-            if code > previous_code or "completed current=" in status:
+            if "completed current=" in status:
+                completed = True
+                break
+            if "failed" in status:
+                failure = read_update_status()
                 break
             time.sleep(2)
 
         def restart() -> None:
+            if not completed:
+                detail = failure or "Update did not finish within 180 seconds."
+                self.write_output(detail)
+                self.write_output("The current window remains open. Run Diagnostics before retrying the update.")
+                self.restart_after_update = False
+                self.busy = False
+                self.refresh_status()
+                return
             try:
                 self.write_output("Update installed. Restarting Cudy Agent window...")
                 launch_fresh_ui()

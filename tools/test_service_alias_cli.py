@@ -128,6 +128,13 @@ def main() -> int:
             "Reuters lookup should be a managed Auto route",
         )
 
+        youtube_lookup = json.loads(run_cli(db_path, "route-lookup", "youtube", "--user-id", "alias-user", "--json"))
+        assert_equal(youtube_lookup["alias"]["label"], "YouTube", "YouTube alias label")
+        assert_true(
+            all(item["route_state"] == "managed" and item["requested_server_id"] == "auto" for item in youtube_lookup["results"]),
+            "YouTube lookup should be a managed Auto route",
+        )
+
         tunnel_list = db_path.parent / "domain-tunnel-list.txt"
         tunnel_list.write_text("needs-tunnel.example\n# comment\nalso-needs-tunnel.example\n", encoding="utf-8")
         imported_domains = json.loads(

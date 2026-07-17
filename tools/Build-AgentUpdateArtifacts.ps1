@@ -1,7 +1,9 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\..\build\agent-updates",
-    [string]$VersionName = "1.21",
-    [int]$VersionCode = 22,
+    [string]$VersionName = "1.22",
+    [int]$VersionCode = 23,
+    [string]$LinuxVersionName = "1.23",
+    [int]$LinuxVersionCode = 24,
     [string]$AndroidApk = "",
     [ValidateSet("windows", "linux", "android")]
     [string[]]$Platforms = @("windows", "linux", "android")
@@ -22,13 +24,15 @@ New-Item -ItemType Directory -Force -Path $resolvedOutputDir | Out-Null
 function Write-VersionFile {
     param(
         [Parameter(Mandatory = $true)][string]$Platform,
-        [Parameter(Mandatory = $true)][string]$ArtifactPath
+        [Parameter(Mandatory = $true)][string]$ArtifactPath,
+        [Parameter(Mandatory = $true)][string]$ArtifactVersionName,
+        [Parameter(Mandatory = $true)][int]$ArtifactVersionCode
     )
     $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $ArtifactPath).Hash.ToLowerInvariant()
     $content = [pscustomobject]@{
         platform = $Platform
-        version_name = $VersionName
-        version_code = $VersionCode
+        version_name = $ArtifactVersionName
+        version_code = $ArtifactVersionCode
         sha256 = $hash
         artifact = (Split-Path -Leaf $ArtifactPath)
         built_at = (Get-Date).ToString("s")
@@ -100,7 +104,7 @@ function Build-WindowsUpdate {
     [System.IO.File]::WriteAllText((Join-Path $stage "agent.version.json"), $versionJson, [System.Text.UTF8Encoding]::new($false))
     $zipPath = Join-Path $resolvedOutputDir "windows.zip"
     New-ZipFromItems -StageDir $stage -ZipPath $zipPath
-    Write-VersionFile -Platform "windows" -ArtifactPath $zipPath
+    Write-VersionFile -Platform "windows" -ArtifactPath $zipPath -ArtifactVersionName $VersionName -ArtifactVersionCode $VersionCode
 }
 
 function Build-LinuxUpdate {
@@ -140,12 +144,12 @@ function Build-LinuxUpdate {
         Copy-Item -LiteralPath (Join-Path $source $file) -Destination (Join-Path $stage $file) -Force
     }
     Copy-Item -LiteralPath (Join-Path $root "tools\route_agent.py") -Destination (Join-Path $stage "route_agent.py") -Force
-    $versionJson = [pscustomobject]@{ platform = "linux"; version_name = $VersionName; version_code = $VersionCode } |
+    $versionJson = [pscustomobject]@{ platform = "linux"; version_name = $LinuxVersionName; version_code = $LinuxVersionCode } |
         ConvertTo-Json -Depth 5
     [System.IO.File]::WriteAllText((Join-Path $stage "agent.version.json"), $versionJson, [System.Text.UTF8Encoding]::new($false))
     $zipPath = Join-Path $resolvedOutputDir "linux.zip"
     New-ZipFromItems -StageDir $stage -ZipPath $zipPath
-    Write-VersionFile -Platform "linux" -ArtifactPath $zipPath
+    Write-VersionFile -Platform "linux" -ArtifactPath $zipPath -ArtifactVersionName $LinuxVersionName -ArtifactVersionCode $LinuxVersionCode
 }
 
 function Build-AndroidUpdate {
@@ -166,7 +170,7 @@ function Build-AndroidUpdate {
     }
     $target = Join-Path $resolvedOutputDir "android.apk"
     Copy-Item -LiteralPath $apkPath -Destination $target -Force
-    Write-VersionFile -Platform "android" -ArtifactPath $target
+    Write-VersionFile -Platform "android" -ArtifactPath $target -ArtifactVersionName $VersionName -ArtifactVersionCode $VersionCode
 }
 
 $selectedPlatforms = @($Platforms | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)

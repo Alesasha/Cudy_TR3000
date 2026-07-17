@@ -48,12 +48,18 @@ public static class CudyTransportStore
 
     private static void WriteUtf8Atomic(string path, string content)
     {
-        var tempPath = path + ".tmp";
-        File.WriteAllText(tempPath, content, System.Text.Encoding.UTF8);
-        if (File.Exists(path))
+        var tempPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
         {
-            File.Delete(path);
+            File.WriteAllText(tempPath, content, System.Text.Encoding.UTF8);
+            File.Move(tempPath, path, overwrite: true);
         }
-        File.Move(tempPath, path);
+        finally
+        {
+            if (File.Exists(tempPath))
+            {
+                File.Delete(tempPath);
+            }
+        }
     }
 }

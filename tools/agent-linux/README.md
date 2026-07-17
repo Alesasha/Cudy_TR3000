@@ -29,8 +29,13 @@ posts status/probe results back to the control server.
 - `uninstall_systemd.sh`: disables the service, stops managed processes, and
   restores direct routing.
 - `watch_agent_connectivity.py`: independent critical-service watchdog. The
-  systemd timer runs it every minute; after three consecutive failures it posts
+  systemd timer runs it every minute. It restarts an unexpectedly inactive but
+  enabled agent service; after three consecutive connectivity failures it posts
   diagnostics, disables the managed agent, and restores direct routing.
+- `update_agent.sh`: downloads a signed-by-hash release manifest, stages the
+  update, restarts the systemd service, and reports completion only after the
+  service is active. Control connectivity may remain pending while the service
+  continues reconnecting in the background.
 - `test_prod_agent.sh`: smoke test.
 
 ## Requirements

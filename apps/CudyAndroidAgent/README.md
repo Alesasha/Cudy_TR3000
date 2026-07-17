@@ -35,6 +35,12 @@ Current MVP:
 - implements the Android libbox `PlatformInterface.openTun(...)` callback.
 - builds one unified Android sing-box config from all control-server
   `transport_plan`, `ip_routes`, and `domain_routes` entries.
+- answers DNS for managed domain routes from a selective FakeIP range so HTTP
+  proxy transports receive the original destination host name; Direct domains
+  keep normal DNS answers.
+- coalesces changing Auto/probe policy and limits disruptive libbox/TUN reloads
+  to one per ten minutes.
+- ignores duplicate service starts for an already active control configuration.
 - keeps `final=direct`, so only matching policy rules use provider exits;
 - adds control-server `ip_routes` into Android `VpnService.Builder`, so Android
   system routing sends those CIDRs into the app TUN.
@@ -60,7 +66,7 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current production build is `1.21 (22)`. It is published through the
+Current production build is `1.22 (23)`. It is published through the
 control-server agent-update manifest and has passed a physical-phone smoke:
 policy fetch, foreground service, libbox engine, selective routing, status
 post, non-disruptive HTTP/TCP probe jobs, direct and provider routes, and a real
@@ -87,7 +93,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.21-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.22-YYYYMMDD.apk
 ```
 
 Manual smoke test:

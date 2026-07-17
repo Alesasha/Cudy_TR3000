@@ -231,6 +231,18 @@ MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS = [
             "www.reutersmedia.net",
         ],
     },
+    {
+        "server_id": "auto",
+        "note": "Managed YouTube Auto route",
+        "domains": [
+            "youtube.com",
+            "www.youtube.com",
+            "youtu.be",
+            "googlevideo.com",
+            "ytimg.com",
+            "youtubei.googleapis.com",
+        ],
+    },
 ]
 GEO_BLOCK_PATTERNS = [
     "gemini isn't currently supported in your country",

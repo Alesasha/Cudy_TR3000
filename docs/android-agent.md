@@ -27,7 +27,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest verified release: `1.21 (22)`.
+Latest verified release: `1.22 (23)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -35,10 +35,10 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Latest Release APK smoke on the physical phone:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.21-20260716.apk`;
-- SHA256: `2846b6385e4c0117e1cfdac050d925f56efa4643bdf46d3497bd556b998fc977`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.22-20260717.apk`;
+- SHA256: `b512b2553aa8cbc1b76a30c00e749eb057fa915c2b71fad9d5b5082bd15a24fa`;
 - foreground service stayed running;
-- Android VPN was established on `tun2`;
+- Android VPN was established on `tun0` and reported `VALIDATED`;
 - control-server reported `isasha_X7Pro_Cudy-android` online and healthy;
 - a production probe job tested `proxyde` and `proxynl` while active browser
   traffic continued through the VPN;
@@ -49,6 +49,16 @@ Latest Release APK smoke on the physical phone:
   continuously change the unified config or recreate the Android VPN; only
   libbox-compatible transport types are retained, while native AWG remains a
   separate final project phase;
+- managed domain routes use selective FakeIP DNS, so HTTP provider exits receive
+  the original host name instead of an already resolved destination IP; Direct
+  domains continue to use normal DNS;
+- changing Auto/probe policy is coalesced and libbox reloads no more than once
+  per ten minutes, instead of recreating Android TUN on every control cycle;
+- duplicate starts from package replacement, boot receiver, or the activity are
+  ignored while the same control loop is already active;
+- one unsupported transport no longer prevents supported Android transports
+  from starting; routes assigned to it fail closed until a supported winner is
+  selected;
 - boot/reconnect receiver is registered for `BOOT_COMPLETED` and
   `MY_PACKAGE_REPLACED`;
 - receiver start path was verified through the explicit test broadcast
@@ -68,15 +78,18 @@ Real reboot check on the MIUI test phone:
 - SSH control, policy fetch and TUN recovered automatically;
 - Android marked the VPN network `VALIDATED`.
 
-Latest full-TUN verification on 2026-07-16:
+Latest full-TUN verification on 2026-07-17:
 
 - Android VPN interface `tun0` owns `0.0.0.0/0` and DNS `172.40.0.2`;
 - Android reports the VPN network as `VALIDATED`;
 - `mail.ru` matched the final `Direct` outbound;
-- `chatgpt.com` matched `out-proxyde` by SNI;
+- `chatgpt.com` received FakeIP and matched `out-proxyde` with the original
+  `chatgpt.com:443` destination;
+- `gemini.google.com` and `www.reuters.com` returned through managed provider
+  exits, while `ozon.ru` and `gosuslugi.ru` remained Direct;
 - Telegram `149.154.160.0/20` matched `out-proxyfr` by CIDR;
-- unchanged policy cycles logged the same config hash and did not reload
-  libbox.
+- five unchanged policy cycles logged the same config hash and did not reload
+  libbox after one coalesced Auto-policy update.
 
 The control policy still includes these Telegram CIDRs:
 
@@ -108,7 +121,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.21-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.22-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
