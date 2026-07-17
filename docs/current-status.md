@@ -265,6 +265,10 @@ Remaining Android concerns:
   against production on desktop and a 375-pixel mobile viewport.
 - Admin and user pages have no document-level horizontal overflow or browser
   console errors; wide admin tables scroll inside their section.
+- The Users and Agents tables now have client-side search with visible result
+  counts. User default-server selectors omit unavailable stale servers while
+  preserving an already selected unavailable value, and the web-login column
+  says `configured` / `not set` instead of the ambiguous `yes` / `no`.
 - Control JSON uses conditional gzip and the admin page loads its data and
   system status concurrently. The external private-Cudy status probe is cached
   for 60 seconds instead of adding a three-second timeout to every refresh.

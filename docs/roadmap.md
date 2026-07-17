@@ -99,6 +99,9 @@ provider failure moves traffic to the next valid candidate.
    Android.
 6. Add automated rendered UI regression coverage for desktop and mobile
    widths; the current production UI has passed the equivalent manual check.
+   Users/Agents filtering and stale default-server option reduction are now
+   covered by the HTTP smoke test and manual browser interaction; broader
+   rendered automation remains pending.
 
 Exit criteria: a new user/device can be enrolled, configured, updated,
 disabled, re-enabled and deleted without CLI or database edits.

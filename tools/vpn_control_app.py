@@ -1071,7 +1071,7 @@ ADMIN_HTML = r"""<!doctype html>
     table { width: 100%; border-collapse: collapse; }
     th, td { border-bottom: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: middle; }
     th { color: var(--muted); font-weight: 600; }
-    input[type="text"], input[type="password"], select {
+    input[type="text"], input[type="password"], input[type="search"], select {
       min-height: 34px;
       border: 1px solid var(--line);
       border-radius: 6px;
@@ -1167,8 +1167,12 @@ ADMIN_HTML = r"""<!doctype html>
         <button id="syncCudyClients" class="secondary" type="button">Sync Cudy</button>
       </form>
       <p id="userStatus" class="status"></p>
+      <div class="toolbar">
+        <div class="field"><label>Find user</label><input id="userFilter" type="search" placeholder="ID, name, IP or role" autocomplete="off"></div>
+        <span id="userFilterStatus" class="muted"></span>
+      </div>
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Client IP</th><th>Default</th><th>Enabled</th><th>Login</th><th>Password</th><th>Actions</th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Role</th><th>Client IP</th><th>Default</th><th>Enabled</th><th>Web login</th><th>Password</th><th>Actions</th></tr></thead>
         <tbody id="usersBody"></tbody>
       </table>
     </section>
@@ -1347,6 +1351,10 @@ ADMIN_HTML = r"""<!doctype html>
         <thead><tr><th>Platform</th><th>Version</th><th>Code</th><th>Package</th><th>SHA256</th><th>Notes</th></tr></thead>
         <tbody id="agentUpdatesBody"></tbody>
       </table>
+      <div class="toolbar">
+        <div class="field"><label>Find device</label><input id="agentFilter" type="search" placeholder="Device, user or platform" autocomplete="off"></div>
+        <span id="agentFilterStatus" class="muted"></span>
+      </div>
       <table>
         <thead><tr><th>Device</th><th>User</th><th>Platform</th><th>Enabled</th><th>Last Seen</th><th>Reported</th><th>Health</th><th>Applied</th><th>Errors</th><th></th></tr></thead>
         <tbody id="agentStatusBody"></tbody>
@@ -1423,7 +1431,10 @@ ADMIN_HTML = r"""<!doctype html>
       return data;
     }
     function serverOptions(value) {
-      return state.servers.map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""} ${s.candidate_available === false ? "disabled" : ""}>${serverOptionLabel(s)}</option>`).join("");
+      return state.servers
+        .filter(s => s.candidate_available !== false || s.id === value)
+        .map(s => `<option value="${s.id}" ${s.id === value ? "selected" : ""}>${serverOptionLabel(s)}</option>`)
+        .join("");
     }
     function physicalServerOptions(value) {
       return state.servers
@@ -1734,7 +1745,11 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function renderUsers() {
       const body = document.getElementById("usersBody");
-      body.innerHTML = state.users.map(u => `
+      const query = document.getElementById("userFilter").value.trim().toLowerCase();
+      const users = state.users.filter(u => !query || [u.id, u.display_name, u.role, u.client_ip]
+        .some(value => String(value || "").toLowerCase().includes(query)));
+      document.getElementById("userFilterStatus").textContent = `Showing ${users.length} of ${state.users.length}`;
+      body.innerHTML = users.map(u => `
         <tr data-id="${u.id}">
           <td>${u.id}</td>
           <td><input type="text" data-field="display_name" value="${u.display_name}"></td>
@@ -1742,7 +1757,7 @@ ADMIN_HTML = r"""<!doctype html>
           <td><input type="text" data-field="client_ip" value="${u.client_ip || ""}" placeholder="10.77.0.x"></td>
           <td><select data-field="default_server_id">${serverOptions(u.default_server_id)}</select></td>
           <td><input type="checkbox" data-field="enabled" ${u.enabled ? "checked" : ""}></td>
-          <td>${u.has_login ? "yes" : "no"}</td>
+          <td title="Whether a web-panel password is configured">${u.has_login ? "configured" : "not set"}</td>
           <td class="inline">
             <input type="password" data-field="password" data-password-input="${u.id}" placeholder="new password only">
             <button class="secondary" type="button" data-toggle-row-password="${u.id}" title="Show/hide the new password typed here. Stored passwords cannot be viewed.">Show typed</button>
@@ -2049,7 +2064,11 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function renderAgentStatus() {
       const body = document.getElementById("agentStatusBody");
-      body.innerHTML = state.agentStatus.length ? state.agentStatus.map(item => {
+      const query = document.getElementById("agentFilter").value.trim().toLowerCase();
+      const agents = state.agentStatus.filter(item => !query || [item.device_id, item.user_id, item.platform]
+        .some(value => String(value || "").toLowerCase().includes(query)));
+      document.getElementById("agentFilterStatus").textContent = `Showing ${agents.length} of ${state.agentStatus.length}`;
+      body.innerHTML = agents.length ? agents.map(item => {
         const health = (item.status || {}).health || {};
         const errors = ((item.status || {}).errors || []).concat((item.status || {}).status_errors || []);
         return `
@@ -2203,6 +2222,8 @@ ADMIN_HTML = r"""<!doctype html>
         </tr>
       `).join("") : '<tr><td colspan="9" class="muted">No provider transports.</td></tr>';
     }
+    document.getElementById("userFilter").addEventListener("input", renderUsers);
+    document.getElementById("agentFilter").addEventListener("input", renderAgentStatus);
     async function load() {
       const [data, statusResult] = await Promise.all([
         api("/api/admin"),
