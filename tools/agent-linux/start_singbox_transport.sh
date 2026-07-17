@@ -29,11 +29,24 @@ pid_file="run/${name}.pid"
 hash_file="run/${name}.sha256"
 new_hash="$(sha256sum "$config_path" | awk '{print $1}')"
 
+is_managed_transport_pid() {
+  local candidate="$1" cmd
+  [ -n "$candidate" ] && kill -0 "$candidate" 2>/dev/null || return 1
+  cmd="$(tr '\0' ' ' < "/proc/${candidate}/cmdline" 2>/dev/null || true)"
+  case "$cmd" in
+    *sing-box*" run -c ${config_path}"*) return 0 ;;
+  esac
+  return 1
+}
+
 running=0
 if [ -f "$pid_file" ]; then
   old_pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [ -n "${old_pid:-}" ] && kill -0 "$old_pid" 2>/dev/null; then
+  if is_managed_transport_pid "${old_pid:-}" && ip link show "$name" >/dev/null 2>&1; then
     running=1
+  elif [ -n "${old_pid:-}" ]; then
+    echo "discarding stale transport pid: $name pid=$old_pid"
+    rm -f "$pid_file" "$hash_file"
   fi
 fi
 
@@ -62,6 +75,19 @@ printf '%s\n' "$new_hash" > "$hash_file"
 sleep 2
 if ! kill -0 "$pid" 2>/dev/null; then
   echo "ERROR: sing-box transport failed: $name" >&2
+  tail -80 "logs/${name}.err.log" >&2 || true
+  exit 1
+fi
+for _ in $(seq 1 10); do
+  ip link show "$name" >/dev/null 2>&1 && break
+  sleep 1
+done
+if ! ip link show "$name" >/dev/null 2>&1; then
+  echo "ERROR: sing-box process is alive but TUN interface is missing: $name" >&2
+  kill "$pid" 2>/dev/null || true
+  sleep 1
+  kill -9 "$pid" 2>/dev/null || true
+  rm -f "$pid_file" "$hash_file"
   tail -80 "logs/${name}.err.log" >&2 || true
   exit 1
 fi

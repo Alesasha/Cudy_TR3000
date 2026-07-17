@@ -284,7 +284,7 @@ func (a *agent) cycle(ctx context.Context) error {
 		_ = writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
 		return err
 	}
-	actions, transportUpdates, preparable, err := a.planTransports(preview)
+	actions, transportUpdates, preparable, err := a.planTransports(ctx, preview)
 	if err != nil {
 		status.Error = err.Error()
 		_ = writeJSONAtomic(filepath.Join(a.opts.StateDir, "status.json"), status, 0o600)
@@ -841,7 +841,7 @@ func maxFloat(left, right float64) float64 {
 	return right
 }
 
-func (a *agent) planTransports(preview previewResponse) ([]transportAction, map[string][]byte, map[string]bool, error) {
+func (a *agent) planTransports(ctx context.Context, preview previewResponse) ([]transportAction, map[string][]byte, map[string]bool, error) {
 	needed := map[string]transportPreview{}
 	transportByServer := map[string]transportPreview{}
 	for _, item := range preview.TransportPlan {
@@ -921,6 +921,12 @@ func (a *agent) planTransports(preview previewResponse) ([]transportAction, map[
 		initData := []byte(renderTransportInit(configPath))
 		configChanged := fileDiffers(configPath, config)
 		initChanged := fileDiffers(initPath, initData)
+		registrationMissing := false
+		if previewItem.Applicable && a.runCommand != nil {
+			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			registrationMissing = a.runCommand(checkCtx, transportRegistrationCheckCommand(iface)) != nil
+			cancel()
+		}
 		if configChanged {
 			updates[configPath] = config
 		}
@@ -931,14 +937,16 @@ func (a *agent) planTransports(preview previewResponse) ([]transportAction, map[
 		if missing {
 			preparable[iface] = true
 		}
-		if missing || configChanged || initChanged {
+		if missing || configChanged || initChanged || registrationMissing {
 			action := "refresh-and-restart"
 			if missing {
 				action = "prepare-and-start"
+			} else if registrationMissing && !configChanged && !initChanged {
+				action = "register-and-restart"
 			}
 			actions = append(actions, transportAction{
 				ServerID: raw.ServerID, Interface: iface, TransportType: raw.TransportType,
-				Action: action, ConfigPath: configPath, Service: service, RequiresBootstrap: missing,
+				Action: action, ConfigPath: configPath, Service: service, RequiresBootstrap: missing || registrationMissing,
 			})
 		}
 	}
@@ -1107,14 +1115,15 @@ func buildDesired(preview previewResponse, preparable map[string]bool, now time.
 		if strings.TrimSpace(route.Target) == "" {
 			continue
 		}
-		iface := route.Interface
+		rawIface := route.Interface
+		iface := openWRTInterfaceName(rawIface)
 		if route.ServerID == "direct" {
 			iface = "wan"
 		}
 		if iface == "" || !safeName(iface) {
 			return desired, fmt.Errorf("route %q has unsafe or missing interface %q", route.Target, iface)
 		}
-		if route.ServerID != "direct" && !route.Applicable && !preparable[iface] {
+		if route.ServerID != "direct" && !route.Applicable && !preparable[rawIface] {
 			desired.Blockers = append(desired.Blockers, fmt.Sprintf("route %q is not applicable on %s: %s", route.Target, iface, route.Warning))
 			continue
 		}
@@ -1229,7 +1238,11 @@ func (a *agent) prepareTransportTransaction(ctx context.Context, updates map[str
 		Existed      bool
 		Mode         os.FileMode
 	}
-	pathSet := map[string]bool{"/etc/config/pbr": true}
+	pathSet := map[string]bool{
+		"/etc/config/firewall": true,
+		"/etc/config/network":  true,
+		"/etc/config/pbr":      true,
+	}
 	for path := range updates {
 		pathSet[path] = true
 	}
@@ -1275,6 +1288,7 @@ func (a *agent) prepareTransportTransaction(ctx context.Context, updates map[str
 				_ = os.Remove(item.Path)
 			}
 		}
+		_ = a.runCommand(context.Background(), "ubus call network reload >/dev/null 2>&1 || true; /etc/init.d/firewall reload >/dev/null 2>&1 || true")
 		for _, transport := range transports {
 			for _, item := range backups {
 				if item.Path == filepath.Join("/etc/init.d", transport.Service) && item.Existed {
@@ -1297,12 +1311,7 @@ func (a *agent) prepareTransportTransaction(ctx context.Context, updates map[str
 		}
 	}
 	for _, transport := range transports {
-		command := fmt.Sprintf(
-			"chmod 0755 /etc/init.d/%[1]s && /etc/init.d/%[1]s enable && /etc/init.d/%[1]s restart && "+
-				"uci -q get pbr.config.supported_interface | tr ' ' '\\n' | grep -qxF '%[2]s' || uci add_list pbr.config.supported_interface='%[2]s'; "+
-				"i=0; while [ ! -d /sys/class/net/%[2]s ] && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done; test -d /sys/class/net/%[2]s",
-			transport.Service, transport.Interface,
-		)
+		command := transportRegistrationCommand(transport, false)
 		transportCtx, cancel := context.WithTimeout(ctx, 35*time.Second)
 		err := a.runCommand(transportCtx, command)
 		cancel()
@@ -1331,6 +1340,68 @@ func (a *agent) prepareTransportTransaction(ctx context.Context, updates map[str
 	return false, nil
 }
 
+func transportRegistrationCommand(transport transportAction, commitPBR bool) string {
+	pbrCommit := "true"
+	if commitPBR {
+		pbrCommit = "uci commit pbr"
+	}
+	return fmt.Sprintf(
+		"set -e; network_changed=0; "+
+			"if ! uci -q get network.%[3]s >/dev/null 2>&1; then uci set network.%[3]s=interface; network_changed=1; fi; "+
+			"[ \"$(uci -q get network.%[3]s.proto)\" = none ] || { uci set network.%[3]s.proto='none'; network_changed=1; }; "+
+			"[ \"$(uci -q get network.%[3]s.device)\" = '%[2]s' ] || { uci set network.%[3]s.device='%[2]s'; network_changed=1; }; "+
+			"if [ \"$network_changed\" = 1 ]; then uci commit network; fi; "+
+			"if [ \"$network_changed\" = 1 ]; then ubus call network reload >/dev/null; fi; "+
+			"uci -q get firewall.%[3]s_zone >/dev/null 2>&1 || uci set firewall.%[3]s_zone=zone; "+
+			"uci set firewall.%[3]s_zone.name='%[3]s'; "+
+			"uci set firewall.%[3]s_zone.network='%[3]s'; uci set firewall.%[3]s_zone.input='REJECT'; "+
+			"uci set firewall.%[3]s_zone.output='ACCEPT'; uci set firewall.%[3]s_zone.forward='REJECT'; "+
+			"uci set firewall.%[3]s_zone.masq='1'; uci set firewall.%[3]s_zone.mtu_fix='1'; "+
+			"uci -q get firewall.lan_%[3]s_forward >/dev/null 2>&1 || uci set firewall.lan_%[3]s_forward=forwarding; "+
+			"uci set firewall.lan_%[3]s_forward.src='lan'; "+
+			"uci set firewall.lan_%[3]s_forward.dest='%[3]s'; "+
+			"uci -q get firewall.lan_%[3]s_quic_reject >/dev/null 2>&1 || uci set firewall.lan_%[3]s_quic_reject=rule; "+
+			"uci set firewall.lan_%[3]s_quic_reject.name='Reject QUIC from lan to %[3]s'; "+
+			"uci set firewall.lan_%[3]s_quic_reject.src='lan'; uci set firewall.lan_%[3]s_quic_reject.dest='%[3]s'; "+
+			"uci set firewall.lan_%[3]s_quic_reject.proto='udp'; uci set firewall.lan_%[3]s_quic_reject.dest_port='443'; "+
+			"uci set firewall.lan_%[3]s_quic_reject.target='REJECT'; uci set firewall.lan_%[3]s_quic_reject.family='ipv4'; "+
+			"if uci -q get firewall.friends >/dev/null 2>&1 || uci show firewall 2>/dev/null | grep -q \"name='friends'\"; then "+
+			"uci -q get firewall.friends_%[3]s_forward >/dev/null 2>&1 || uci set firewall.friends_%[3]s_forward=forwarding; "+
+			"uci set firewall.friends_%[3]s_forward.src='friends'; uci set firewall.friends_%[3]s_forward.dest='%[3]s'; "+
+			"uci -q get firewall.friends_%[3]s_quic_reject >/dev/null 2>&1 || uci set firewall.friends_%[3]s_quic_reject=rule; "+
+			"uci set firewall.friends_%[3]s_quic_reject.name='Reject QUIC from friends to %[3]s'; "+
+			"uci set firewall.friends_%[3]s_quic_reject.src='friends'; uci set firewall.friends_%[3]s_quic_reject.dest='%[3]s'; "+
+			"uci set firewall.friends_%[3]s_quic_reject.proto='udp'; uci set firewall.friends_%[3]s_quic_reject.dest_port='443'; "+
+			"uci set firewall.friends_%[3]s_quic_reject.target='REJECT'; uci set firewall.friends_%[3]s_quic_reject.family='ipv4'; fi; "+
+			"uci commit firewall; /etc/init.d/firewall reload >/dev/null; "+
+			"chmod 0755 /etc/init.d/%[1]s && /etc/init.d/%[1]s enable && /etc/init.d/%[1]s restart && "+
+			"i=0; while [ ! -d /sys/class/net/%[2]s ] && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done; "+
+			"test -d /sys/class/net/%[2]s; ifup %[3]s >/dev/null 2>&1 || true; "+
+			"uci -q get pbr.config.supported_interface | tr ' ' '\\n' | grep -qxF '%[3]s' || "+
+			"{ uci add_list pbr.config.supported_interface='%[3]s'; %[4]s; }",
+		transport.Service, transport.Interface, openWRTInterfaceName(transport.Interface), pbrCommit,
+	)
+}
+
+func transportRegistrationCheckCommand(iface string) string {
+	routeIface := openWRTInterfaceName(iface)
+	return fmt.Sprintf(
+		"test \"$(uci -q get network.%[2]s)\" = interface && "+
+			"test \"$(uci -q get network.%[2]s.proto)\" = none && "+
+			"test \"$(uci -q get network.%[2]s.device)\" = '%[1]s' && "+
+			"test \"$(uci -q get firewall.%[2]s_zone.name)\" = '%[2]s' && "+
+			"test \"$(uci -q get firewall.%[2]s_zone.network)\" = '%[2]s' && "+
+			"test \"$(uci -q get firewall.lan_%[2]s_forward.src)\" = lan && "+
+			"test \"$(uci -q get firewall.lan_%[2]s_forward.dest)\" = '%[2]s' && "+
+			"test \"$(uci -q get firewall.lan_%[2]s_quic_reject.target)\" = REJECT && "+
+			"{ ! uci -q get firewall.friends >/dev/null 2>&1 && ! uci show firewall 2>/dev/null | grep -q \"name='friends'\" || "+
+			"{ test \"$(uci -q get firewall.friends_%[2]s_forward.dest)\" = '%[2]s' && "+
+			"test \"$(uci -q get firewall.friends_%[2]s_quic_reject.target)\" = REJECT; }; } && "+
+			"uci -q get pbr.config.supported_interface | tr ' ' '\\n' | grep -qxF '%[2]s'",
+		iface, routeIface,
+	)
+}
+
 func probeFailure(probe map[string]any) string {
 	if value := anyString(probe["error"]); value != "" {
 		return value
@@ -1355,6 +1426,10 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 	}
 	bootstrapRequired := transportBootstrapRequired(transports) || !a.pbrDataplaneReady(ctx, groups)
 	if bootstrapRequired {
+		if len(transports) > 0 {
+			pathSet["/etc/config/firewall"] = true
+			pathSet["/etc/config/network"] = true
+		}
 		pathSet["/etc/config/pbr"] = true
 	}
 	paths := make([]string, 0, len(pathSet))
@@ -1397,6 +1472,9 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 				_ = os.Remove(item.Path)
 			}
 		}
+		if len(transports) > 0 {
+			_ = a.runCommand(context.Background(), "ubus call network reload >/dev/null 2>&1 || true; /etc/init.d/firewall reload >/dev/null 2>&1 || true")
+		}
 		for _, transport := range transports {
 			for _, item := range backups {
 				if item.Path == filepath.Join("/etc/init.d", transport.Service) && item.Existed {
@@ -1428,12 +1506,7 @@ func (a *agent) applyTransaction(ctx context.Context, updates map[string][]byte,
 		}
 	}
 	for _, transport := range transports {
-		command := fmt.Sprintf(
-			"chmod 0755 /etc/init.d/%[1]s && /etc/init.d/%[1]s enable && /etc/init.d/%[1]s restart && "+
-				"uci -q get pbr.config.supported_interface | tr ' ' '\\n' | grep -qxF '%[2]s' || { uci add_list pbr.config.supported_interface='%[2]s'; uci commit pbr; }; "+
-				"i=0; while [ ! -d /sys/class/net/%[2]s ] && [ $i -lt 20 ]; do sleep 1; i=$((i+1)); done; test -d /sys/class/net/%[2]s",
-			transport.Service, transport.Interface,
-		)
+		command := transportRegistrationCommand(transport, true)
 		transportCtx, transportCancel := context.WithTimeout(ctx, 35*time.Second)
 		err := a.runCommand(transportCtx, command)
 		transportCancel()
@@ -1553,13 +1626,17 @@ func (a *agent) checkCriticalServices(ctx context.Context, services []criticalSe
 		lastError := "no targets"
 		for _, target := range service.Targets {
 			iface := targetInterface(target, groups)
-			probe := a.probeTarget(ctx, target, iface, 5*time.Second, 12*time.Second, service.SuccessPattern, service.FailurePattern)
-			if shouldRetryNetworkProbe(probe) {
+			var probe map[string]any
+			for attempt := 0; attempt < 3; attempt++ {
+				probe = a.probeTarget(ctx, target, iface, 5*time.Second, 12*time.Second, service.SuccessPattern, service.FailurePattern)
+				if !shouldRetryNetworkProbe(probe) || attempt == 2 {
+					break
+				}
 				select {
 				case <-ctx.Done():
 					probe["error"] = ctx.Err().Error()
+					attempt = 2
 				case <-time.After(500 * time.Millisecond):
-					probe = a.probeTarget(ctx, target, iface, 5*time.Second, 12*time.Second, service.SuccessPattern, service.FailurePattern)
 				}
 			}
 			if probe["ok"] == true {
@@ -1767,6 +1844,22 @@ func safeName(value string) bool {
 		return false
 	}
 	return true
+}
+
+func openWRTInterfaceName(value string) string {
+	var result strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			result.WriteRune(r)
+		} else {
+			result.WriteByte('_')
+		}
+	}
+	name := result.String()
+	if name != "" && name[0] >= '0' && name[0] <= '9' {
+		return "cudy_" + name
+	}
+	return name
 }
 
 func firstNonEmpty(values ...string) string {

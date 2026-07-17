@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated: 2026-07-16.
+Updated: 2026-07-17.
 
 This roadmap contains remaining work only. The verified baseline is recorded
 in `docs/current-status.md` and frozen by tag
@@ -35,7 +35,8 @@ leak, focus-stealing console or manual transport repair.
 
 ### Linux
 
-1. Confirm Dima receives Linux `1.20 (21)` through the control update path.
+1. Confirm Dima receives Linux `1.22 (23)` through the control update path and
+   reports the expected non-empty TUN interface set after OFF/ON.
 2. Keep normal operation one-click from the UI; no manual Amnezia interface or
    route commands should be required.
 3. Test suspend/resume, lid close, reboot and Wi-Fi roaming.
@@ -70,8 +71,10 @@ recovery, and a user-facing UI that does not expose raw engine internals.
 2. Soak the implemented TTL refresh and bounded 300-domain activity window
    under real traffic. Local regressions cover 305 targets and fresh/stale
    cache behavior; agent-side real-usage reporting remains to be validated.
-3. Finish the reviewed daily domain/IP list update flow; unknown traffic stays
-   Direct until an admin-approved promotion.
+3. Finish the reviewed daily domain/IP list update flow. Provider refresh is
+   already automatic, but the managed-domain source is not; the Reuters miss
+   demonstrated this gap. Unknown traffic stays Direct until an admin-approved
+   promotion.
 4. Verify global/user default and domain-specific candidate precedence through
    one full production scenario.
 5. Keep control-server transport plans minimal so agents start only exits used
@@ -120,8 +123,12 @@ Prerequisite: Phases 1 and the relevant Auto checks are green.
 4. Run the first uncommitted override-only guarded apply trial without moving
    DHCP/WAN.
    The initial attempts found a missing per-interface nft-set bootstrap and a
-   stale transaction-lock failure. Both are fixed; the corrected long trial is
-   still pending.
+   stale transaction-lock failure. Both are fixed. The next attempt exposed a
+   managed netdevice that lacked its OpenWrt network/firewall registration; the
+   agent now treats that registration as transactional desired state and maps
+   hyphenated netdevices to UCI-safe logical names. The first corrected trial
+   applied and rolled back automatically, but a later transient critical-service
+   probe flap requires one more uncommitted soak before acceptance.
 5. Deliberately stop the controlling workstation path and prove the independent
    on-router rollback restores previous files, PBR state and `observe` gate.
 6. Inspect counters and Direct/provider routes after rollback.

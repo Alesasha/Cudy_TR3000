@@ -25,7 +25,7 @@ class CudyPBRSafetyTests(unittest.TestCase):
         self.assertIn("fw4 check", text)
         self.assertIn("pbr_dataplane_ready", text)
         self.assertIn("wait_for_dataplane", text)
-        self.assertNotIn("/var/run/pbr.lock", text)
+        self.assertIn("rm -f /var/run/pbr.lock", text)
         self.assertIn("fail_open", text)
         self.assertIn("fw4 validation failed after PBR stop", text)
         self.assertNotIn("fw4 validation failed before PBR start", text)
@@ -35,6 +35,7 @@ class CudyPBRSafetyTests(unittest.TestCase):
         self.assertIn("/tmp/cudy-pbr-safe.lock/pid", text)
         self.assertIn('kill -0 "$owner_pid"', text)
         self.assertIn("rmdir /tmp/cudy-pbr-safe.lock", text)
+        self.assertNotIn("/var/run/pbr.lock", text)
 
     def test_router_agent_uses_safe_bootstrap(self) -> None:
         main = (ROOT / "cmd" / "cudy-router-agent" / "main.go").read_text(encoding="utf-8")

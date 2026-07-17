@@ -107,6 +107,7 @@ TELEGRAM_CIDRS = [
     "91.108.56.0/22",
     "91.108.8.0/22",
 ]
+TELEGRAM_PROBE_URL = "tcp://149.154.167.50:443"
 SERVICE_ALIAS_SEEDS = [
     {
         "aliases": ["telegram", "tg", "телеграм"],
@@ -184,6 +185,15 @@ SERVICE_ALIAS_SEEDS = [
             "mirror.logol.ru",
         ],
     },
+    {
+        "aliases": ["reuters", "reuters.com"],
+        "label": "Reuters",
+        "targets": [
+            "reuters.com",
+            "www.reuters.com",
+            "www.reutersmedia.net",
+        ],
+    },
 ]
 MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS = [
     {
@@ -210,6 +220,15 @@ MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS = [
             "www.gosuslugi.ru",
             "esia.gosuslugi.ru",
             "lk.gosuslugi.ru",
+        ],
+    },
+    {
+        "server_id": "auto",
+        "note": "Managed Reuters Auto route",
+        "domains": [
+            "reuters.com",
+            "www.reuters.com",
+            "www.reutersmedia.net",
         ],
     },
 ]
@@ -5065,7 +5084,13 @@ def default_probe_url_for_cidr(target_cidr: str) -> str:
 
 
 def ip_route_probe_url(target_cidr: str, note: str = "") -> str:
-    return probe_url_from_note(note) or default_probe_url_for_cidr(target_cidr)
+    explicit_url = probe_url_from_note(note)
+    if explicit_url:
+        return explicit_url
+    normalized_target = normalize_ipv4_cidr(target_cidr)
+    if normalized_target in TELEGRAM_CIDRS:
+        return TELEGRAM_PROBE_URL
+    return default_probe_url_for_cidr(normalized_target)
 
 
 def save_auto_cache_entry(
@@ -5165,8 +5190,18 @@ def create_probe_job(
     with connect(db_path) as conn:
         if normalized_user_id and row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)) is None:
             raise ValueError(f"Unknown user: {normalized_user_id}")
-        if assigned_device_id and row(conn, "SELECT id FROM agent_devices WHERE id = ?", (assigned_device_id,)) is None:
-            raise ValueError(f"Unknown agent device: {assigned_device_id}")
+        if assigned_device_id:
+            assigned_device = row(
+                conn,
+                "SELECT id, user_id FROM agent_devices WHERE id = ?",
+                (assigned_device_id,),
+            )
+            if assigned_device is None:
+                raise ValueError(f"Unknown agent device: {assigned_device_id}")
+            if normalized_user_id and assigned_device.get("user_id") != normalized_user_id:
+                raise ValueError(
+                    f"Agent device {assigned_device_id} does not belong to user {normalized_user_id}"
+                )
         candidates = expand_auto_candidate_ids(server_map(conn), candidates)
         for server_id in candidates:
             validate_server_id(conn, server_id, require_user_visible=True)
@@ -5319,10 +5354,11 @@ def claim_agent_probe_jobs(
             FROM agent_probe_jobs
             WHERE status = 'pending'
               AND (assigned_device_id = '' OR assigned_device_id = ?)
+              AND (user_id = '' OR user_id = ?)
             ORDER BY priority ASC, created_at ASC
             LIMIT ?
             """,
-            (device["id"], max_limit * 10),
+            (device["id"], str(device.get("user_id") or ""), max_limit * 10),
         )
         claimed: list[dict[str, Any]] = []
         for item in entries:
@@ -5873,6 +5909,9 @@ def create_auto_probe_jobs_once(
                 continue
             if not assigned_device_id and not eligible_agents:
                 skipped.append({"domain": domain, "user_id": user_id, "reason": "no_capable_agent"})
+                continue
+            if user_id and not assigned_device_id:
+                skipped.append({"domain": domain, "user_id": user_id, "reason": "no_active_user_agent"})
                 continue
             job_requests.append(
                 {

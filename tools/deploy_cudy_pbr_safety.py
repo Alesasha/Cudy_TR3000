@@ -40,8 +40,15 @@ def deploy(args: argparse.Namespace) -> dict[str, Any]:
     try:
         for index, (source, _target) in enumerate(FILES.items()):
             upload_via_cat(client, source, f"/tmp/cudy-pbr-safety-{index}")
+        maintenance_command = ""
         start_command = ""
         if args.start_pbr:
+            maintenance_command = r"""
+/etc/init.d/pbr disable 2>/dev/null || true
+/etc/init.d/pbr stop >/tmp/cudy-pbr-deploy-stop.log 2>&1 || true
+echo 1 > /proc/sys/net/ipv4/ip_forward
+[ ! -e /proc/sys/net/ipv6/conf/all/forwarding ] || echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+""".strip()
             start_command = r"""
 printf '\n== controlled PBR start ==\n'
 if /usr/bin/cudy-pbr-safe-restart; then
@@ -80,10 +87,7 @@ uci set pbr.config.procd_reload_delay='30'
 uci commit cudy-pbr-safety
 uci commit pbr
 
-/etc/init.d/pbr disable 2>/dev/null || true
-/etc/init.d/pbr stop >/tmp/cudy-pbr-deploy-stop.log 2>&1 || true
-echo 1 > /proc/sys/net/ipv4/ip_forward
-[ ! -e /proc/sys/net/ipv6/conf/all/forwarding ] || echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+{maintenance_command}
 
 /etc/init.d/cudy-pbr-safe enable
 /etc/init.d/cudy-pbr-watchdog enable
@@ -147,7 +151,6 @@ printf 'recent_logs_end\n'
     ok = (
         rc == 0
         and fields.get("watchdog") == "running"
-        and fields.get("pbr_enabled") == "no"
         and fields.get("safe_enabled") == "yes"
         and fields.get("ip_forward") == "1"
         and fields.get("strict_enforcement") == "0"
@@ -156,7 +159,12 @@ printf 'recent_logs_end\n'
         and fields.get("wan_ping") == "ok"
     )
     if args.start_pbr:
-        ok = ok and fields.get("pbr_dataplane") == "ready" and fields.get("failed_state") == "none"
+        ok = (
+            ok
+            and fields.get("pbr_enabled") == "no"
+            and fields.get("pbr_dataplane") == "ready"
+            and fields.get("failed_state") == "none"
+        )
     return {"ok": ok, "host": args.host, "start_pbr": args.start_pbr, "fields": fields, "output": output}
 
 

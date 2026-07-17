@@ -85,6 +85,7 @@ def main() -> int:
         assert_true(any(item["alias"] == "openai" for item in aliases), "OpenAI alias should be seeded")
         assert_true(any(item["alias"] == "mailru" for item in aliases), "Mail.ru alias should be seeded")
         assert_true(any(item["alias"] == "speedtest" for item in aliases), "Speedtest alias should be seeded")
+        assert_true(any(item["alias"] == "reuters" for item in aliases), "Reuters alias should be seeded")
         assert_true(any(item["alias"] == "linux-mirrors" for item in aliases), "Linux mirrors alias should be seeded")
 
         lookup = json.loads(run_cli(db_path, "route-lookup", "testtg", "--user-id", "alias-user", "--json"))
@@ -113,6 +114,18 @@ def main() -> int:
         assert_true(
             all(item["route_state"] == "managed" and item["requested_server_id"] == "auto" for item in chatgpt_lookup["results"]),
             "ChatGPT lookup should be a managed Auto route",
+        )
+
+        reuters_lookup = json.loads(run_cli(db_path, "route-lookup", "reuters", "--user-id", "alias-user", "--json"))
+        assert_equal(reuters_lookup["alias"]["label"], "Reuters", "Reuters alias label")
+        assert_equal(
+            [item["target"] for item in reuters_lookup["results"]],
+            ["reuters.com", "www.reuters.com", "www.reutersmedia.net"],
+            "Reuters lookup targets",
+        )
+        assert_true(
+            all(item["route_state"] == "managed" and item["requested_server_id"] == "auto" for item in reuters_lookup["results"]),
+            "Reuters lookup should be a managed Auto route",
         )
 
         tunnel_list = db_path.parent / "domain-tunnel-list.txt"

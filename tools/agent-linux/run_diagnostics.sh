@@ -18,27 +18,11 @@ mkdir -p logs run
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 report_path="logs/diagnostic-${VPN_AGENT_DEVICE_ID}-${timestamp}.txt"
 
-ensure_control_tunnel() {
+wait_for_control_tunnel() {
   if curl -fsS --connect-timeout 3 --max-time 5 "${VPN_CONTROL_URL}/healthz" >/dev/null 2>&1; then
     return 0
   fi
-  if [ ! -x ./start_tunnel.sh ]; then
-    return 1
-  fi
-  if [ -f run/control-tunnel.pid ]; then
-    pid="$(cat run/control-tunnel.pid 2>/dev/null || true)"
-    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      sleep 1
-      kill -9 "$pid" 2>/dev/null || true
-    fi
-    rm -f run/control-tunnel.pid
-  fi
-  : >logs/control-tunnel.out.log
-  : >logs/control-tunnel.err.log
-  nohup ./start_tunnel.sh >logs/control-tunnel.out.log 2>logs/control-tunnel.err.log &
-  echo "$!" > run/control-tunnel.pid
-  for _ in $(seq 1 20); do
+  for _ in $(seq 1 25); do
     if curl -fsS --connect-timeout 3 --max-time 5 "${VPN_CONTROL_URL}/healthz" >/dev/null 2>&1; then
       return 0
     fi
@@ -116,7 +100,7 @@ copy_report_to_clipboard() {
 
 summary="diagnostic ${VPN_AGENT_DEVICE_ID} $(date -Is)"
 send_ok=0
-if [ -n "$VPN_AGENT_TOKEN" ] && ensure_control_tunnel; then
+if [ -n "$VPN_AGENT_TOKEN" ] && wait_for_control_tunnel; then
   if python3 - "$VPN_CONTROL_URL" "$VPN_AGENT_TOKEN" "$summary" "$report_path" <<'PY'
 import json
 import sys

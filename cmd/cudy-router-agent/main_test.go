@@ -81,7 +81,7 @@ func TestPreparableTransportMakesRouteEligible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(desired.Blockers) != 0 || len(desired.Groups["lokvpn-de1"].Domains) != 1 {
+	if len(desired.Blockers) != 0 || len(desired.Groups["lokvpn_de1"].Domains) != 1 {
 		t.Fatalf("desired=%+v", desired)
 	}
 }
@@ -92,7 +92,7 @@ func TestUnusedMissingTransportIsNotPrepared(t *testing.T) {
 		TransportPlan: []transportPreview{{ServerID: "unused", Interface: "unused", Applicable: false}},
 		Routes:        []routePreview{{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
 	}
-	actions, updates, preparable, err := a.planTransports(preview)
+	actions, updates, preparable, err := a.planTransports(context.Background(), preview)
 	if err != nil || len(actions) != 0 || len(updates) != 0 || len(preparable) != 0 {
 		t.Fatalf("unused transport was prepared: actions=%v updates=%v preparable=%v err=%v", actions, updates, preparable, err)
 	}
@@ -129,7 +129,7 @@ func TestApplicableTransportRefreshesChangedConfigWithoutBootstrap(t *testing.T)
 		TransportPlan: []transportPreview{{ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
 		Routes:        []routePreview{{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
 	}
-	actions, updates, preparable, err := a.planTransports(preview)
+	actions, updates, preparable, err := a.planTransports(context.Background(), preview)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestExistingUnsupportedTransportIsAcceptedWithoutManagement(t *testing.T) {
 			Kind: "domain", Target: "chatgpt.com", ServerID: "aktau", Interface: "awg1", Applicable: false,
 		}},
 	}
-	actions, updates, preparable, err := a.planTransports(preview)
+	actions, updates, preparable, err := a.planTransports(context.Background(), preview)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,6 +299,71 @@ func TestObserveDoesNotAdvertiseTransportManagement(t *testing.T) {
 	}
 }
 
+func TestTransportRegistrationCommandCreatesOpenWRTInterface(t *testing.T) {
+	command := transportRegistrationCommand(transportAction{
+		Service: "sing-box-lokvpn-de1", Interface: "lokvpn-de1",
+	}, true)
+	for _, expected := range []string{
+		"set -e",
+		"network.lokvpn_de1=interface",
+		"network.lokvpn_de1.proto='none'",
+		"network.lokvpn_de1.device='lokvpn-de1'",
+		"ubus call network reload",
+		"firewall.lokvpn_de1_zone=zone",
+		"firewall.lan_lokvpn_de1_forward=forwarding",
+		"firewall.friends_lokvpn_de1_forward=forwarding",
+		"firewall.friends_lokvpn_de1_quic_reject=rule",
+		"ifup lokvpn_de1",
+		"pbr.config.supported_interface='lokvpn_de1'",
+		"uci commit pbr",
+	} {
+		if !strings.Contains(command, expected) {
+			t.Fatalf("registration command is missing %q: %s", expected, command)
+		}
+	}
+}
+
+func TestRegistrationDriftRequiresTransportBootstrap(t *testing.T) {
+	root := t.TempDir()
+	policyPath := filepath.Join(root, "cache.json")
+	singBoxDir := filepath.Join(root, "sing-box")
+	if err := os.MkdirAll(singBoxDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cache := cachedPolicy{CachedAt: time.Now().UTC().Format(time.RFC3339)}
+	cache.Config.TransportPlan = []rawTransport{{
+		ServerID: "proxyde", InterfaceName: "proxyde", TransportType: "http-proxy-tun",
+		Config: map[string]any{"server": "203.0.113.10", "server_port": float64(8080), "proxy_type": "http"},
+	}}
+	raw, err := json.Marshal(cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(policyPath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &agent{
+		opts: options{PolicyCache: policyPath, SingBoxDir: singBoxDir}, now: time.Now,
+		runCommand: func(_ context.Context, command string) error {
+			if strings.Contains(command, "network.proxyde") {
+				return errors.New("registration missing")
+			}
+			return nil
+		},
+	}
+	preview := previewResponse{
+		TransportPlan: []transportPreview{{ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
+		Routes:        []routePreview{{Kind: "domain", Target: "example.com", ServerID: "proxyde", Interface: "proxyde", Applicable: true}},
+	}
+	actions, _, _, err := a.planTransports(context.Background(), preview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(actions) != 1 || !actions[0].RequiresBootstrap {
+		t.Fatalf("registration drift did not require bootstrap: %+v", actions)
+	}
+}
+
 func TestApplyTransactionRestoresFileWhenApplyFails(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "force-proxyde.domains")
@@ -329,7 +394,7 @@ func TestPBRDataplaneRequiresSetsForDesiredInterfaces(t *testing.T) {
 	commands := []string{}
 	a := &agent{runCommand: func(_ context.Context, command string) error {
 		commands = append(commands, command)
-		if strings.Contains(command, "pbr_lokvpn-de1_4_dst_ip_user") {
+		if strings.Contains(command, "pbr_lokvpn_de1_4_dst_ip_user") {
 			return errors.New("missing set")
 		}
 		return nil
@@ -337,7 +402,7 @@ func TestPBRDataplaneRequiresSetsForDesiredInterfaces(t *testing.T) {
 	groups := map[string]routeSet{
 		"wan":          {Domains: []string{"direct.example"}},
 		"proxyde":      {Domains: []string{"example.com"}},
-		"lokvpn-de1":   {Domains: []string{"openai.com"}},
+		"lokvpn_de1":   {Domains: []string{"openai.com"}},
 		"unused-empty": {},
 	}
 	if a.pbrDataplaneReady(context.Background(), groups) {
@@ -347,7 +412,7 @@ func TestPBRDataplaneRequiresSetsForDesiredInterfaces(t *testing.T) {
 	if strings.Contains(joined, "pbr_wan_4_dst_ip_user") || strings.Contains(joined, "unused-empty") {
 		t.Fatalf("direct or empty groups were probed: %s", joined)
 	}
-	if !strings.Contains(joined, "pbr_lokvpn-de1_4_dst_ip_user") {
+	if !strings.Contains(joined, "pbr_lokvpn_de1_4_dst_ip_user") {
 		t.Fatalf("missing interface set was not probed: %s", joined)
 	}
 

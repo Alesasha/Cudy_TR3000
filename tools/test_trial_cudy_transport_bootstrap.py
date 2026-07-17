@@ -49,6 +49,8 @@ def main() -> int:
     state = healthy_state()
     assert validate_preflight(state) == []
     assert transport_paths(state["desired"]["transport_actions"]) == [
+        "/etc/config/firewall",
+        "/etc/config/network",
         "/etc/config/pbr",
         "/etc/init.d/sing-box-proxykz",
         "/etc/sing-box/proxykz.json",
@@ -71,6 +73,8 @@ def main() -> int:
     assert "[ -f \"$trial/commit\" ] && exit 0" in guard
     assert "[ -f \"$trial/rolled-back\" ] && exit 0" in guard
     assert "/etc/init.d/cudy-router-agent stop" in guard
+    assert "/etc/init.d/network reload" in guard
+    assert "/etc/init.d/firewall reload" in guard
     assert "/usr/bin/cudy-pbr-fast-apply" in guard
     assert "/usr/bin/cudy-pbr-safe-restart restart" in guard
     assert "rollback-pbr-failed" in guard

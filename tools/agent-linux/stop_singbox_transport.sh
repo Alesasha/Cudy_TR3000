@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 name="${1:?usage: stop_singbox_transport.sh NAME}"
+config_path="transports/${name}.json"
 if [ "$(id -u)" -ne 0 ]; then
   exec sudo "$0" "$name"
 fi
@@ -10,7 +11,8 @@ fi
 pid_file="run/${name}.pid"
 if [ -f "$pid_file" ]; then
   pid="$(cat "$pid_file" 2>/dev/null || true)"
-  if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
+  cmd="$(tr '\0' ' ' < "/proc/${pid}/cmdline" 2>/dev/null || true)"
+  if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null && [[ "$cmd" == *sing-box*" run -c ${config_path}"* ]]; then
     kill "$pid" 2>/dev/null || true
     sleep 1
     kill -9 "$pid" 2>/dev/null || true

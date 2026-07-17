@@ -12,7 +12,9 @@ strip_cr() {
 
 POLL_SECONDS="$(strip_cr "${POLL_SECONDS:-60}")"
 CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-95.182.91.203}")"
+CONTROL_USER="$(strip_cr "${CONTROL_USER:-cudy-tunnel-linux}")"
 CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
+CONTROL_REMOTE_PORT="$(strip_cr "${CONTROL_REMOTE_PORT:-8765}")"
 CONTROL_TUNNEL_WAIT_SECONDS="$(strip_cr "${CONTROL_TUNNEL_WAIT_SECONDS:-25}")"
 DIRECT_BASELINE="$(strip_cr "${DIRECT_BASELINE:-1}")"
 EXTRA_INTERFACE_MAPS="$(strip_cr "${EXTRA_INTERFACE_MAPS:-}")"
@@ -41,6 +43,25 @@ stop_control_tunnel() {
   fi
 }
 
+cleanup_orphaned_control_tunnels() {
+  local proc pid cmd tracked_pid=""
+  [ -f run/control-tunnel.pid ] && tracked_pid="$(cat run/control-tunnel.pid 2>/dev/null || true)"
+  for proc in /proc/[0-9]*/cmdline; do
+    pid="${proc#/proc/}"
+    pid="${pid%/cmdline}"
+    [ "$pid" = "$tracked_pid" ] && continue
+    cmd="$(tr '\0' ' ' < "$proc" 2>/dev/null || true)"
+    case "$cmd" in
+      *"-L ${CONTROL_LOCAL_PORT}:127.0.0.1:${CONTROL_REMOTE_PORT}"*"${CONTROL_USER}@${CONTROL_HOST}"*)
+        log "stopping orphaned SSH control tunnel pid=$pid"
+        kill "$pid" 2>/dev/null || true
+        sleep 1
+        kill -9 "$pid" 2>/dev/null || true
+        ;;
+    esac
+  done
+}
+
 dump_control_tunnel_logs() {
   log "control tunnel stderr tail:"
   tail -80 logs/control-tunnel.err.log 2>/dev/null | tee -a "$LOG_PATH" || true
@@ -53,6 +74,7 @@ ensure_tunnel() {
     return 0
   fi
   stop_control_tunnel
+  cleanup_orphaned_control_tunnels
   : >logs/control-tunnel.out.log
   : >logs/control-tunnel.err.log
   log "starting SSH control tunnel on 127.0.0.1:${CONTROL_LOCAL_PORT}"

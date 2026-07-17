@@ -14,6 +14,21 @@ from deploy_cudy_go_fallback import ROOT, connect, load_password, ssh_exec, uplo
 DEFAULT_BINARY = ROOT / "build" / "cudy" / "cudy-router-agent-linux-arm64"
 DEFAULT_INIT = ROOT / "openwrt" / "cudy-router-agent.init"
 DEFAULT_FAST_APPLY = ROOT / "openwrt" / "cudy-pbr-fast-apply"
+DEFAULT_SOURCES = tuple((ROOT / "cmd" / "cudy-router-agent").glob("*.go")) + (
+    ROOT / "go.mod",
+    ROOT / "go.sum",
+)
+
+
+def validate_artifact_freshness(binary: Path, sources: tuple[Path, ...] = DEFAULT_SOURCES) -> None:
+    binary_mtime = binary.stat().st_mtime
+    newer = [path for path in sources if path.exists() and path.stat().st_mtime > binary_mtime]
+    if newer:
+        names = ", ".join(str(path.relative_to(ROOT)) for path in newer)
+        raise RuntimeError(
+            "router-agent binary is older than its sources: "
+            f"{names}; run tools\\Build-CudyRouterAgentGo.ps1 before deploy"
+        )
 
 
 def deploy(args: argparse.Namespace) -> dict[str, Any]:
@@ -26,6 +41,7 @@ def deploy(args: argparse.Namespace) -> dict[str, Any]:
         raise FileNotFoundError(init)
     if not fast_apply.exists():
         raise FileNotFoundError(fast_apply)
+    validate_artifact_freshness(binary)
     if args.dry_run:
         requested_mode = "apply" if args.enable_apply else "observe" if args.disable_apply else "preserve"
         return {"ok": True, "dry_run": True, "host": args.host, "mode": requested_mode}

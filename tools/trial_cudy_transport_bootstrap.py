@@ -27,7 +27,7 @@ SAFE_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
 
 
 def transport_paths(actions: list[dict[str, Any]]) -> list[str]:
-    paths = {"/etc/config/pbr"}
+    paths = {"/etc/config/firewall", "/etc/config/network", "/etc/config/pbr"}
     for action in actions:
         service = str(action.get("service") or "")
         config_path = str(action.get("config_path") or "")
@@ -95,6 +95,8 @@ while IFS='|' read -r existed index path; do
     rm -f "$path"
   fi
 done < "$trial/paths"
+/etc/init.d/network reload 2>/dev/null || true
+/etc/init.d/firewall reload 2>/dev/null || true
 for service in {services}; do
   if [ -f "$trial/service-$service.enabled" ]; then
     /etc/init.d/$service enable 2>/dev/null || true

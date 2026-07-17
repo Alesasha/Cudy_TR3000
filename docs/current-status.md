@@ -1,6 +1,6 @@
 # Current Status
 
-Snapshot date: 2026-07-16.
+Snapshot date: 2026-07-17.
 
 Snapshot tag: `snapshot-2026-07-16-android-1.21`.
 
@@ -17,8 +17,8 @@ This document records the verified live state. Planned work belongs in
 - Current published artifacts:
   - Android `1.21 (22)`, SHA256
     `2846b6385e4c0117e1cfdac050d925f56efa4643bdf46d3497bd556b998fc977`;
-  - Linux `1.20 (21)`, SHA256
-    `5ac2bf679cdef44e3b6c9db2a7ae0d4fc5703f5efe44aaec3077e452a2f898a2`;
+  - Linux `1.22 (23)`, SHA256
+    `c5ac57f3644427c2d9251d01c6f375142c25d66c27fa3859ea9c5ace66852423`;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
@@ -163,7 +163,33 @@ the in-progress marker explicitly before reporting success. The trial defaults
 are now 600/420 seconds and any failed wait requests an immediate rollback. The
 fixed watchdog and rebuilt PBR have remained healthy beyond the old 300-second
 failure threshold. The router-agent remains in `observe`; the corrected route
-trial has not yet been rerun.
+trial was rerun, but its first PBR build rejected the generated fw4 include and
+the independent transaction restored the legacy overrides successfully. The
+new policy referenced `lokvpn-de1`, whose sing-box netdevice and PBR supported
+interface entry existed but whose OpenWrt `network` interface/firewall zone did
+not. OpenWrt UCI also rejects named sections containing a hyphen, and that same
+hyphen produced an invalid nft identifier. The corrected model keeps the
+physical TUN as `lokvpn-de1` but uses `lokvpn_de1` for OpenWrt network, firewall
+and PBR state.
+
+Transport registration is now transactional state owned by the Go agent. For
+every managed sing-box interface it verifies and repairs the OpenWrt `network`
+entry, firewall zone, LAN and optional `friends` forwarding/QUIC rules, and the
+PBR supported-interface list. Network, firewall and PBR configs are included in
+both agent rollback and the independent guarded bootstrap. A new route trial is
+blocked until this registration passes, provider transport actions return to
+zero and the per-interface nft set exists after a clean PBR bootstrap.
+
+The corrected `lokvpn_de1` registration and nft set now pass independent UCI,
+firewall, netdevice, PBR-list and nft checks. The first corrected uncommitted
+route trial reached a healthy apply state and its on-router guard then restored
+the previous overrides, `observe` mode and the closed apply gate without the
+workstation. WAN recovered with 0% packet loss and the legacy Telegram exits
+answered through `proxyfr` and `proxynl`. A later apply cycle did record two
+consecutive transient ChatGPT TLS handshake timeouts through `proxyde`; network
+failures now receive three bounded attempts while semantic/content failures are
+still never retried. A second uncommitted soak is required before a committed
+route trial.
 
 Some router-local TUN diagnostics can produce false failures. For
 `http-proxy-tun` transports the observer now probes the upstream HTTP proxy
@@ -198,11 +224,14 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
+- the current physical-device check confirms version `1.21 (22)`, an active
+  foreground `CudyVpnService`, and a device-idle whitelist entry for
+  `com.nashvpn.cudyagent`; the production package is not debuggable.
 
 Remaining Android concerns:
 
-- the test phone is not in the standard Android Doze whitelist even though
-  boot recovery succeeded; a longer locked/background soak is required;
+- a longer locked/background soak is still required despite the current
+  device-idle whitelist and successful boot recovery;
 - the current UI is functional but exposes too much technical state and needs
   a clearer user-facing status/version/update design;
 - JavaScript-only geographic decisions still require rendered probes.
@@ -230,10 +259,21 @@ Remaining Android concerns:
 
 ## Linux Agent
 
-- Linux `1.20 (21)` is published.
+- Linux `1.22 (23)` is published.
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.
+- The systemd-owned control tunnel is now the only SSH tunnel owner. The UI
+  and diagnostics wait for it instead of killing and recreating the shared
+  forward, while startup removes only exact orphaned forwards left by a crash.
+- Transport startup no longer trusts a PID file alone. It verifies that the
+  PID belongs to the expected sing-box config and that the requested TUN
+  interface appears; stale/reused PIDs are discarded and a missing interface
+  fails the cycle. This fixes the observed state where `health.ok=true` and
+  Telegram routes were installed while `vpn_interfaces` was empty.
+- The latest Dima report predates `1.22 (23)` and has an empty interface list,
+  so production acceptance still requires installation/reconnect and a fresh
+  non-empty interface report.
 - A long real-world test on Dima's machine is still required for suspend,
   resume, Wi-Fi changes, Zapret, UFW and update behavior.
 
@@ -243,6 +283,11 @@ Remaining Android concerns:
   domain, global default.
 - Ordered candidate lists and `all-rest` are implemented.
 - Probe assignment prefers a capable agent that used the domain.
+- User-scoped probe jobs can now be assigned and claimed only by devices of
+  that user. Telegram CIDRs use the known service endpoint
+  `149.154.167.50:443` instead of probing the arbitrary first address of each
+  network. Existing contaminated Telegram winners were replaced with the
+  known-working `proxynl` recovery choice pending valid same-user probes.
 - Default apex probes that every candidate reports as `resolve_failed` use a
   bounded 24-hour negative cache. This supports suffix routes such as
   `oaiusercontent.com` whose apex intentionally has no address while keeping a
@@ -293,6 +338,12 @@ Remaining Android concerns:
   device controls say `Apply state` / `Delete device`. These controls were
   rendered against production on desktop and at 375 pixels without page-level
   overflow or console errors. Automated rendered regression coverage remains.
+- Reuters was absent from managed policy and therefore remained Direct. Its
+  apex, `www` host and `www.reutersmedia.net` dependency are now seeded and
+  deployed as global Auto routes with a `reuters` service alias. This incident
+  confirms that the reviewed daily domain/IP update flow is not yet complete;
+  provider refresh is automatic, but managed-domain source updates still need
+  Phase 3 implementation.
 
 ## Non-Negotiable Safety Gates
 
@@ -313,10 +364,8 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-First consolidate and push the PBR set-detection, PID-lock and guarded-trial
-timing fixes. Keep the corrected PBR running through another provider refresh,
-then align any legitimate transport change separately and rerun the long
-uncommitted override-only trial. Do not commit that route trial until its full
-apply, automatic rollback and post-rollback service checks all pass.
-Platform-agent acceptance follows while Android continues its background soak;
-Linux acceptance remains dependent on Dima's next real-world session.
+Have Dima install/reconnect Linux `1.22 (23)` and require a fresh report with
+non-empty `vpn_interfaces`, working Telegram and Reuters. In parallel, implement
+the reviewed daily domain/IP source update. Do not run another Cudy route trial
+until platform routing is stable and the existing guarded rollback baseline is
+reconfirmed.

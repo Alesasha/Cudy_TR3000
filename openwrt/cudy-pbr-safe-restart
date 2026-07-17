@@ -51,6 +51,7 @@ fail_open() {
     reason="$1"
     log "PBR failed; restoring direct WAN: $reason"
     run_with_timeout /etc/init.d/pbr stop >/tmp/cudy-pbr-stop.log 2>&1 || true
+    rm -f /var/run/pbr.lock
     set_forwarding
     rm -f "$STATE_DIR/starting" "$STATE_DIR/expected"
     printf '%s %s\n' "$(date -Iseconds 2>/dev/null || date)" "$reason" > "$STATE_DIR/failed"
@@ -95,6 +96,7 @@ case "${1:-restart}" in
     stop)
         rm -f "$STATE_DIR/expected" "$STATE_DIR/failed"
         run_with_timeout /etc/init.d/pbr stop || true
+        rm -f /var/run/pbr.lock
         set_forwarding
         log "PBR stopped; direct WAN remains active"
         exit 0
@@ -139,6 +141,12 @@ if ! nft list table inet fw4 2>/dev/null | grep -q 'pbr_'; then
     fail_open "PBR nft objects are absent"
     exit $?
 fi
+
+# The package occasionally leaves its empty command lock behind even though
+# start has returned and the dataplane is ready. Removing it here cannot race
+# a PBR command: this wrapper serializes rebuilds and the start command above
+# has already exited.
+rm -f /var/run/pbr.lock
 
 touch "$STATE_DIR/expected"
 rm -f "$STATE_DIR/failed"

@@ -521,6 +521,108 @@ def run_probe_claim_requires_transport_capability_check(db_path: Path) -> None:
     assert_equal([item["id"] for item in capable_jobs], [job["id"]], "capable agent should claim provider probe job")
 
 
+def run_probe_jobs_are_user_isolated_check(db_path: Path) -> None:
+    other_user_id = "smoke_auto_other_user"
+    app.create_or_update_user(
+        db_path,
+        INVENTORY,
+        user_id=other_user_id,
+        display_name="Smoke Other User",
+        role="user",
+        password=None,
+        client_ip="10.77.255.249",
+        enabled=True,
+        allow_no_password=True,
+    )
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=other_user_id,
+        device_id="smoke-other-device",
+        display_name="Other Device",
+        platform="windows",
+    )
+    app.create_agent_device(
+        db_path,
+        INVENTORY,
+        user_id=TEST_USER_ID,
+        device_id="smoke-owner-device",
+        display_name="Owner Device",
+        platform="windows",
+    )
+    with app.connect(db_path) as conn:
+        for device_id in ("smoke-other-device", "smoke-owner-device"):
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO agent_status (device_id, status_json, reported_at)
+                VALUES (?, ?, ?)
+                """,
+                (
+                    device_id,
+                    json.dumps(
+                        {
+                            "platform": "windows",
+                            "capabilities": {"can_manage_transports": True, "can_probe": True},
+                        }
+                    ),
+                    app.now(),
+                ),
+            )
+    job = app.create_probe_job(
+        db_path,
+        INVENTORY,
+        domain="user-isolated.example",
+        candidate_server_ids=["proxyde"],
+        user_id=TEST_USER_ID,
+    )
+    other_jobs = app.claim_agent_probe_jobs(
+        db_path,
+        INVENTORY,
+        device={"id": "smoke-other-device", "user_id": other_user_id, "platform": "windows"},
+        limit=2,
+    )
+    assert_equal(other_jobs, [], "another user's agent must not claim a user-scoped probe")
+    owner_jobs = app.claim_agent_probe_jobs(
+        db_path,
+        INVENTORY,
+        device={"id": "smoke-owner-device", "user_id": TEST_USER_ID, "platform": "windows"},
+        limit=2,
+    )
+    assert_equal([item["id"] for item in owner_jobs], [job["id"]], "owner's agent should claim its probe")
+    try:
+        app.create_probe_job(
+            db_path,
+            INVENTORY,
+            domain="mismatched-assignment.example",
+            candidate_server_ids=["proxyde"],
+            user_id=TEST_USER_ID,
+            assigned_device_id="smoke-other-device",
+        )
+    except ValueError as exc:
+        assert "does not belong" in str(exc)
+    else:
+        raise AssertionError("cross-user assigned probe must be rejected")
+
+
+def run_telegram_probe_target_check() -> None:
+    for target_cidr in app.TELEGRAM_CIDRS:
+        assert_equal(
+            app.ip_route_probe_url(target_cidr),
+            app.TELEGRAM_PROBE_URL,
+            f"Telegram CIDR {target_cidr} should use a known reachable endpoint",
+        )
+    assert_equal(
+        app.ip_route_probe_url("203.0.113.0/24", "probe=tcp://203.0.113.9:8443"),
+        "tcp://203.0.113.9:8443",
+        "an explicit probe target must override defaults",
+    )
+    assert_equal(
+        app.ip_route_probe_url("203.0.113.0/24"),
+        "tcp://203.0.113.1:443",
+        "generic CIDRs should retain the default probe target",
+    )
+
+
 def run_auto_worker_skips_without_capable_agent_check(tmp: Path) -> None:
     db_path = tmp / "no-capable-agent.db"
     app.init_db(db_path, INVENTORY)
@@ -939,6 +1041,8 @@ def main() -> int:
         run_agent_transport_plan_is_minimal_check(db_path)
         run_auto_worker_prefers_domain_agent_check(db_path)
         run_probe_claim_requires_transport_capability_check(db_path)
+        run_probe_jobs_are_user_isolated_check(db_path)
+        run_telegram_probe_target_check()
         run_auto_worker_skips_without_capable_agent_check(tmp_path)
         run_auto_worker_suppresses_unresolvable_apex_check(tmp_path)
         run_auto_worker_active_domain_window_check(tmp_path)

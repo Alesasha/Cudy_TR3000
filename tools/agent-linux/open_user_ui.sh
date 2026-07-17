@@ -14,32 +14,20 @@ VPN_CONTROL_URL="http://127.0.0.1:${CONTROL_LOCAL_PORT}"
 
 mkdir -p run logs
 
-start_control_tunnel_if_needed() {
+wait_for_managed_control_tunnel() {
   if curl -fsS --connect-timeout 2 --max-time 4 "${VPN_CONTROL_URL}/healthz" >/dev/null 2>&1; then
     return 0
   fi
-  if [ -f run/control-tunnel.pid ]; then
-    pid="$(cat run/control-tunnel.pid 2>/dev/null || true)"
-    if [ -n "${pid:-}" ] && kill -0 "$pid" 2>/dev/null; then
-      kill "$pid" 2>/dev/null || true
-      sleep 1
-      kill -9 "$pid" 2>/dev/null || true
-    fi
-    rm -f run/control-tunnel.pid
-  fi
-  : >logs/control-tunnel.out.log
-  : >logs/control-tunnel.err.log
-  nohup ./start_tunnel.sh >logs/control-tunnel.out.log 2>logs/control-tunnel.err.log &
-  echo "$!" > run/control-tunnel.pid
-  for _ in $(seq 1 20); do
+  for _ in $(seq 1 25); do
     if curl -fsS --connect-timeout 2 --max-time 4 "${VPN_CONTROL_URL}/healthz" >/dev/null 2>&1; then
       return 0
     fi
     sleep 1
   done
-  echo "ERROR: control tunnel is not ready." >&2
+  echo "ERROR: managed control tunnel is not ready." >&2
+  echo "Turn the agent ON and wait for the connection indicator to become healthy." >&2
   tail -80 logs/control-tunnel.err.log >&2 || true
-  exit 1
+  return 1
 }
 
 open_url() {
@@ -51,7 +39,7 @@ open_url() {
   fi
 }
 
-start_control_tunnel_if_needed
+wait_for_managed_control_tunnel
 
 if [ -n "$VPN_AGENT_TOKEN" ]; then
   open_url "${VPN_CONTROL_URL}/agent-login?token=${VPN_AGENT_TOKEN}"

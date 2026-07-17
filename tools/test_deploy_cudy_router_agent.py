@@ -12,7 +12,7 @@ TOOLS = ROOT / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-from deploy_cudy_router_agent import build_parser
+from deploy_cudy_router_agent import build_parser, validate_artifact_freshness
 
 
 def main() -> int:
@@ -31,6 +31,23 @@ def main() -> int:
     assert not apply.disable_apply
     init = (ROOT / "openwrt" / "cudy-router-agent.init").read_text(encoding="utf-8")
     assert "-authoritative-overrides" in init
+
+    temp = ROOT / "build" / "test-router-agent-freshness"
+    source = ROOT / "build" / "test-router-agent-source.go"
+    try:
+        temp.parent.mkdir(parents=True, exist_ok=True)
+        temp.write_bytes(b"binary")
+        source.write_text("package main\n", encoding="utf-8")
+        source.touch()
+        try:
+            validate_artifact_freshness(temp, (source,))
+        except RuntimeError as exc:
+            assert "Build-CudyRouterAgentGo.ps1" in str(exc)
+        else:
+            raise AssertionError("stale router-agent artifact was accepted")
+    finally:
+        temp.unlink(missing_ok=True)
+        source.unlink(missing_ok=True)
     print("Cudy router-agent deploy defaults regression passed.")
     return 0
 
