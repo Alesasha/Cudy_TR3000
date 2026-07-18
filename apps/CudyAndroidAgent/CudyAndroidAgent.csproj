@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationId>com.nashvpn.cudyagent</ApplicationId>
-    <ApplicationVersion>25</ApplicationVersion>
-    <ApplicationDisplayVersion>1.24</ApplicationDisplayVersion>
+    <ApplicationVersion>26</ApplicationVersion>
+    <ApplicationDisplayVersion>1.25</ApplicationDisplayVersion>
     <PublishTrimmed>false</PublishTrimmed>
     <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
     <AndroidEnableFastDeployment>false</AndroidEnableFastDeployment>
@@ -21,4 +21,15 @@
   <ItemGroup>
     <PackageReference Include="SSH.NET" Version="2025.1.0" />
   </ItemGroup>
+  <ItemGroup>
+    <AndroidAsset
+      Include="..\..\secrets\android_enrollment_bootstrap_ed25519"
+      Link="android_enrollment_bootstrap_ed25519"
+      Condition="Exists('..\..\secrets\android_enrollment_bootstrap_ed25519')" />
+  </ItemGroup>
+  <Target Name="EnsureEnrollmentBootstrapKey" BeforeTargets="Build">
+    <Error
+      Condition="!Exists('..\..\secrets\android_enrollment_bootstrap_ed25519')"
+      Text="Missing secrets/android_enrollment_bootstrap_ed25519. Generate the restricted Android enrollment bootstrap key before building." />
+  </Target>
 </Project>

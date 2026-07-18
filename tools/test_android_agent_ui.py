@@ -19,6 +19,8 @@ VPN_SERVICE = ROOT / "apps" / "CudyAndroidAgent" / "CudyVpnService.cs"
 CRITICAL_MONITOR = ROOT / "apps" / "CudyAndroidAgent" / "CudyCriticalServiceMonitor.cs"
 SING_BOX_CONFIG = ROOT / "apps" / "CudyAndroidAgent" / "CudySingBoxConfig.cs"
 ANDROID_PROBE = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidProbe.cs"
+SSH_CONTROL = ROOT / "apps" / "CudyAndroidAgent" / "CudySshControl.cs"
+PROJECT = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidAgent.csproj"
 
 
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
@@ -72,7 +74,6 @@ def main() -> int:
         "adminDevicesList",
         "adminSaveUserButton",
         "adminCreateCodeButton",
-        "adminProvisioningQrView",
         "adminShareProvisioningButton",
     }
     missing_admin = sorted(required_admin_ids - admin_ids)
@@ -92,6 +93,10 @@ def main() -> int:
             "LoadUserUiAsync",
             "CheckUpdateAsync",
             "typeof(AdminActivity)",
+            'EnrollmentBootstrapUser = "cudy-enroll"',
+            "EnrollmentBootstrapPort = 8766",
+            "ReadEnrollmentBootstrapKey",
+            'RequiredJsonString(provisioning, "ssh_private_key")',
         ],
     )
     assert_contains(
@@ -104,10 +109,29 @@ def main() -> int:
             "EditDeviceAsync",
             "display_name =",
             'agent_only =',
-            'provision_transport = platform == "android"',
+            'activationCode = code',
             'Intent.ActionSend',
+            'Share activation code',
         ],
     )
+    assert_contains(SSH_CONTROL, ["uint remotePort = 8765", "remotePort)"])
+    assert_contains(
+        PROJECT,
+        [
+            "android_enrollment_bootstrap_ed25519",
+            "EnsureEnrollmentBootstrapKey",
+            "<ApplicationVersion>26</ApplicationVersion>",
+        ],
+    )
+    main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
+    for forbidden in (
+        'GetString("device_id", "isasha_X7Pro_Cudy-android")',
+        "importProvisioningButton",
+        "ProvisioningFileRequest",
+        "cudyagent://provision",
+    ):
+        if forbidden in main_text:
+            raise AssertionError(f"MainActivity.cs still contains removed provisioning value: {forbidden}")
     assert_contains(
         ADMIN_SESSION,
         [

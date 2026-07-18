@@ -128,7 +128,10 @@ Do not expose the panel as public plain HTTP for phone access. A phone can use
 the minimal in-app admin UI in Android `1.24+`; it uses the provisioned
 per-device restricted SSH tunnel and still requires administrator credentials.
 Normal Android users receive the universal APK plus an admin-generated one-time
-provisioning QR/file and do not need admin access.
+activation code and do not need admin access. The APK bootstrap account can
+forward only to the enrollment listener on `127.0.0.1:8766`; successful
+activation replaces it with a unique per-device key for the normal control
+listener.
 
 For a Linux client agent:
 

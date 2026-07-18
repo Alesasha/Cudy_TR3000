@@ -16,22 +16,16 @@ using System.Text.Json;
     Label = "@string/app_name",
     MainLauncher = true,
     Exported = true)]
-[IntentFilter(
-    new[] { Intent.ActionView },
-    Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
-    DataScheme = "cudyagent",
-    DataHost = "provision")]
-[IntentFilter(
-    new[] { Intent.ActionView },
-    Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
-    DataMimeType = "application/vnd.nashvpn.cudy-provisioning+json")]
 public class MainActivity : Activity
 {
     private const int VpnPrepareRequest = 1001;
     private const int NotificationPermissionRequest = 1002;
-    private const int ProvisioningFileRequest = 1003;
-    private const string ProvisioningSchema = "cudy-agent-provisioning/v1";
     private const string PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS";
+    private const string EnrollmentBootstrapAsset = "android_enrollment_bootstrap_ed25519";
+    private const string EnrollmentBootstrapHost = "95.182.91.203";
+    private const string EnrollmentBootstrapUser = "cudy-enroll";
+    private const string EnrollmentBootstrapHostKey = "SHA256:iyONyymHdd2Fwun5GIxKFo7eh4sooHpK1hdtLZOmGTM";
+    private const uint EnrollmentBootstrapPort = 8766;
     private EditText? controlUrlInput;
     private EditText? deviceIdInput;
     private EditText? tokenInput;
@@ -103,13 +97,31 @@ public class MainActivity : Activity
             throw new InvalidOperationException("Required layout controls are missing.");
         }
 
-        controlUrlInput.Text = preferences.GetString("control_url", "http://127.0.0.1:18765");
-        deviceIdInput.Text = preferences.GetString("device_id", "isasha_X7Pro_Cudy-android");
+        controlUrlInput.Text = preferences.GetString("control_url", "");
+        deviceIdInput.Text = preferences.GetString("device_id", "");
         tokenInput.Text = preferences.GetString("token", "");
-        sshHostInput.Text = preferences.GetString("ssh_host", "95.182.91.203");
-        sshUserInput.Text = preferences.GetString("ssh_user", "cudy-tunnel-windows");
+        sshHostInput.Text = preferences.GetString("ssh_host", "");
+        sshUserInput.Text = preferences.GetString("ssh_user", "");
         sshHostKeyInput.Text = preferences.GetString("ssh_host_key_sha256", "");
         sshKeyInput.Text = preferences.GetString("ssh_key", "");
+        if (string.IsNullOrWhiteSpace(tokenInput.Text)
+            && string.Equals(deviceIdInput.Text, "isasha_X7Pro_Cudy-android", StringComparison.Ordinal))
+        {
+            controlUrlInput.Text = "";
+            deviceIdInput.Text = "";
+            sshHostInput.Text = "";
+            sshUserInput.Text = "";
+            sshHostKeyInput.Text = "";
+            sshKeyInput.Text = "";
+            preferences.Edit()
+                ?.Remove("control_url")
+                ?.Remove("device_id")
+                ?.Remove("ssh_host")
+                ?.Remove("ssh_user")
+                ?.Remove("ssh_host_key_sha256")
+                ?.Remove("ssh_key")
+                ?.Apply();
+        }
         defaultServerInput.Text = preferences.GetString("last_default_server_id", "auto");
         autostartCheckBox.Checked = preferences.GetBoolean("autostart_enabled", true);
         statusText.Text = "Ready";
@@ -121,7 +133,6 @@ public class MainActivity : Activity
         RequireButton(Resource.Id.adminButton).Click += (_, _) =>
             StartActivity(new Intent(this, typeof(AdminActivity)));
         RequireButton(Resource.Id.enrollButton).Click += async (_, _) => await EnrollDeviceAsync();
-        RequireButton(Resource.Id.importProvisioningButton).Click += (_, _) => OpenProvisioningFile();
         RequireButton(Resource.Id.loadUiButton).Click += async (_, _) => await LoadUserUiAsync();
         RequireButton(Resource.Id.saveDefaultButton).Click += async (_, _) => await SaveDefaultServerAsync();
         RequireButton(Resource.Id.saveDomainButton).Click += async (_, _) => await SaveDomainRouteAsync();
@@ -189,23 +200,6 @@ public class MainActivity : Activity
             return;
         }
 
-        if (string.Equals(intent.Data?.Scheme, "cudyagent", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(intent.Data?.Host, "provision", StringComparison.OrdinalIgnoreCase))
-        {
-            try
-            {
-                var encoded = intent.Data?.GetQueryParameter("data") ?? "";
-                var json = DecodeBase64Url(encoded);
-                await ApplyProvisioningBundleAsync(json, activate: true);
-            }
-            catch (Exception ex)
-            {
-                statusText!.Text = "Provisioning failed";
-                outputText!.Text = ex.Message;
-            }
-            return;
-        }
-
         if (intent.Extras is null)
         {
             return;
@@ -238,70 +232,12 @@ public class MainActivity : Activity
         }
     }
 
-    private void OpenProvisioningFile()
-    {
-        var intent = new Intent(Intent.ActionOpenDocument);
-        intent.AddCategory(Intent.CategoryOpenable);
-        intent.SetType("*/*");
-        StartActivityForResult(intent, ProvisioningFileRequest);
-    }
-
-    private static string DecodeBase64Url(string value)
-    {
-        var normalized = value.Replace('-', '+').Replace('_', '/');
-        normalized = normalized.PadRight(normalized.Length + ((4 - normalized.Length % 4) % 4), '=');
-        return Encoding.UTF8.GetString(Convert.FromBase64String(normalized));
-    }
-
-    private async Task ApplyProvisioningBundleAsync(string json, bool activate)
-    {
-        using var document = JsonDocument.Parse(json);
-        var root = document.RootElement;
-        var schema = root.TryGetProperty("schema", out var schemaProperty)
-            ? schemaProperty.GetString() ?? ""
-            : "";
-        if (!string.Equals(schema, ProvisioningSchema, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Unsupported provisioning format.");
-        }
-        var platform = root.TryGetProperty("platform", out var platformProperty)
-            ? platformProperty.GetString() ?? ""
-            : "";
-        if (!string.Equals(platform, "android", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidOperationException("This provisioning package is not for Android.");
-        }
-        var expiresAt = root.TryGetProperty("expires_at", out var expiryProperty)
-            ? expiryProperty.GetString() ?? ""
-            : "";
-        if (!DateTimeOffset.TryParse(expiresAt, out var expiry) || expiry <= DateTimeOffset.UtcNow)
-        {
-            throw new InvalidOperationException("Provisioning package has expired.");
-        }
-
-        controlUrlInput!.Text = RequiredProvisioningString(root, "control_url");
-        deviceIdInput!.Text = RequiredProvisioningString(root, "device_id");
-        sshHostInput!.Text = RequiredProvisioningString(root, "ssh_host");
-        sshUserInput!.Text = RequiredProvisioningString(root, "ssh_user");
-        sshHostKeyInput!.Text = RequiredProvisioningString(root, "ssh_host_key_sha256");
-        sshKeyInput!.Text = RequiredProvisioningString(root, "ssh_private_key");
-        enrollmentCodeInput!.Text = RequiredProvisioningString(root, "enrollment_code");
-        tokenInput!.Text = "";
-        SaveSettingsToPreferences();
-        statusText!.Text = "Provisioning imported";
-        outputText!.Text = $"device={deviceIdInput.Text}\nexpires={expiresAt}";
-        if (activate)
-        {
-            await EnrollDeviceAsync();
-        }
-    }
-
-    private static string RequiredProvisioningString(JsonElement root, string name)
+    private static string RequiredJsonString(JsonElement root, string name)
     {
         var value = root.TryGetProperty(name, out var property) ? property.GetString() ?? "" : "";
         if (string.IsNullOrWhiteSpace(value))
         {
-            throw new InvalidOperationException($"Provisioning field is missing: {name}");
+            throw new InvalidOperationException($"Enrollment field is missing: {name}");
         }
         return value;
     }
@@ -590,7 +526,25 @@ public class MainActivity : Activity
                 display_name = string.IsNullOrWhiteSpace(requestedDeviceId) ? "Android phone" : requestedDeviceId,
                 platform = "android",
             });
-            var json = await ControlRequestAsync("POST", "/api/agent/enroll", body, useAuth: false);
+            string json;
+            if (HasSshSettings())
+            {
+                json = await ControlRequestAsync("POST", "/api/agent/enroll", body, useAuth: false);
+            }
+            else
+            {
+                var bootstrapKey = ReadEnrollmentBootstrapKey();
+                json = await Task.Run(() => CudySshControl.RunCurlWithNewClient(
+                    EnrollmentBootstrapHost,
+                    EnrollmentBootstrapUser,
+                    bootstrapKey,
+                    EnrollmentBootstrapHostKey,
+                    "POST",
+                    null,
+                    "/api/agent/enroll",
+                    body,
+                    EnrollmentBootstrapPort));
+            }
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (!root.TryGetProperty("token", out var tokenProperty))
@@ -601,6 +555,18 @@ public class MainActivity : Activity
             var deviceId = root.TryGetProperty("device_id", out var deviceProperty)
                 ? deviceProperty.GetString() ?? requestedDeviceId
                 : requestedDeviceId;
+            if (root.TryGetProperty("provisioning", out var provisioning))
+            {
+                controlUrlInput!.Text = RequiredJsonString(provisioning, "control_url");
+                sshHostInput!.Text = RequiredJsonString(provisioning, "ssh_host");
+                sshUserInput!.Text = RequiredJsonString(provisioning, "ssh_user");
+                sshHostKeyInput!.Text = RequiredJsonString(provisioning, "ssh_host_key_sha256");
+                sshKeyInput!.Text = RequiredJsonString(provisioning, "ssh_private_key");
+            }
+            else if (!HasSshSettings())
+            {
+                throw new InvalidOperationException("Enrollment response did not contain device transport settings.");
+            }
             tokenInput!.Text = token;
             deviceIdInput!.Text = deviceId;
             enrollmentCodeInput!.Text = "";
@@ -614,6 +580,19 @@ public class MainActivity : Activity
             statusText!.Text = "Activation failed";
             outputText!.Text = ex.Message;
         }
+    }
+
+    private string ReadEnrollmentBootstrapKey()
+    {
+        using var stream = Assets?.Open(EnrollmentBootstrapAsset)
+            ?? throw new InvalidOperationException("Enrollment bootstrap key is unavailable.");
+        using var reader = new StreamReader(stream, Encoding.UTF8);
+        var value = reader.ReadToEnd();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException("Enrollment bootstrap key is empty.");
+        }
+        return value;
     }
 
     private static string SummarizeLookup(string json)
@@ -903,30 +882,9 @@ public class MainActivity : Activity
         RenderStoredStatus();
     }
 
-    protected override async void OnActivityResult(int requestCode, Result resultCode, Intent? data)
+    protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
         base.OnActivityResult(requestCode, resultCode, data);
-        if (requestCode == ProvisioningFileRequest)
-        {
-            if (resultCode != Result.Ok || data?.Data is null)
-            {
-                statusText!.Text = "Provisioning import cancelled";
-                return;
-            }
-            try
-            {
-                using var stream = ContentResolver?.OpenInputStream(data.Data)
-                    ?? throw new InvalidOperationException("Cannot open provisioning file.");
-                using var reader = new StreamReader(stream, Encoding.UTF8);
-                await ApplyProvisioningBundleAsync(await reader.ReadToEndAsync(), activate: true);
-            }
-            catch (Exception ex)
-            {
-                statusText!.Text = "Provisioning failed";
-                outputText!.Text = ex.Message;
-            }
-            return;
-        }
         if (requestCode == VpnPrepareRequest)
         {
             var pendingStart = pendingStartAfterPrepare;

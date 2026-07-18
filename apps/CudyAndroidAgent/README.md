@@ -20,7 +20,9 @@ Current MVP:
   checkbox, one-time activation code, default server, domain route, route
   lookup, and update check controls;
 - activates a device through `/api/agent/enroll` with a one-time enrollment
-  code and stores the returned device token;
+  code, then stores the returned device token and unique per-device SSH key;
+- uses the APK's shared `cudy-enroll` key only for the isolated enrollment
+  listener on port `8766`; that account cannot reach the ordinary control API;
 - lets an activated device call agent-scoped control APIs:
   `/api/agent/bootstrap`, `/api/agent/user-default-server`,
   `/api/agent/domain-routes`, `/api/agent/route-lookup`, and
@@ -66,12 +68,12 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current release candidate is `1.24 (25)`. It is built, signed and installed on
-the physical test phone. The routing runtime inherited from `1.23 (24)` has
-passed policy fetch, foreground-service, libbox, selective-routing, status,
-non-disruptive probe and real-reboot checks. Publishing the `1.24` update
-manifest and matching control-server changes is pending recovery of new SSH
-sessions to uswest.
+Current published release is `1.25 (26)`. The control-server update manifest
+contains the matching APK. Its code-only bootstrap and issued per-device SSH
+channel passed an end-to-end production test; physical-phone installation is
+the next acceptance check. The routing runtime inherited from `1.24 (25)` has
+already passed policy fetch, foreground-service, libbox, selective-routing,
+status, non-disruptive probe and real-reboot checks.
 
 Safety note:
 
@@ -94,27 +96,24 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.24-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.25-YYYYMMDD.apk
 ```
 
 Manual smoke test:
 
 1. Install the signed APK.
-2. Enter the SSH host/user/key bootstrap fields if they were not delivered by
-   the installer/intents. Current direct control HTTP is local to uswest, so a
-   fresh phone needs either this SSH bootstrap path or a future public HTTPS
-   enrollment endpoint.
-3. Enter the one-time activation code and tap `Activate this device`.
-4. Tap `Setup permissions`.
-5. Allow notification, VPN, and battery unrestricted mode when prompted.
-6. On MIUI/Xiaomi/POCO/Redmi, enable Autostart when the app opens the vendor
+2. Enter the one-time activation code and tap `Activate this device`. The app
+   obtains and stores its individual SSH key and device token automatically.
+3. Tap `Setup permissions`.
+4. Allow notification, VPN, and battery unrestricted mode when prompted.
+5. On MIUI/Xiaomi/POCO/Redmi, enable Autostart when the app opens the vendor
    settings screen. Android does not allow the app to grant this vendor
    permission by itself.
-7. Tap `Load settings`.
-8. Set the default server or a domain route if needed, then tap the matching
+6. Tap `Load settings`.
+7. Set the default server or a domain route if needed, then tap the matching
    save button.
-9. Tap `Prepare VPN` and grant Android VPN permission.
-10. Tap `ON`.
+8. Tap `Prepare VPN` and grant Android VPN permission.
+9. Tap `ON`.
 
 Expected MVP status:
 
@@ -172,19 +171,19 @@ powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -ClearDat
 powershell -ExecutionPolicy Bypass -File tools\android-agent-reset.ps1 -Uninstall
 ```
 
-Current test defaults:
+Fresh-install activation defaults:
 
 ```text
-Control URL: http://127.0.0.1:18765
-Device ID: isasha_X7Pro_Cudy-android
-SSH host: 95.182.91.203
-SSH user: cudy-tunnel-windows
+Control URL: empty
+Device ID: empty
+Device token: empty
+Device SSH settings: empty
 ```
 
-If SSH host/user/key are filled, `Check control`, `Fetch policy`, and the
-foreground service use SSH remote `curl` to talk to the control-server local
-HTTP API on uswest. The `Control URL` field remains useful for a direct HTTP
-test path.
+The APK contains only the restricted enrollment bootstrap. After the user
+enters a one-time activation code, the app receives and stores its unique
+device id, token, SSH key, host pin, and control URL. Subsequent control calls
+use only those per-device credentials.
 
 One-time Android enrollment code:
 

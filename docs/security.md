@@ -8,7 +8,7 @@ Never commit:
 - `.env` or any real provider credential file;
 - private SSH keys;
 - AmneziaWG private keys and preshared keys;
-- generated client `.conf`, `.vpn`, QR, or PNG files;
+- generated client `.conf` or `.vpn` files;
 - live runtime snapshots if they include local operational details;
 - provider subscription URLs containing `pass=`, tokens, UUIDs, or authorization strings.
 - generated provider configs such as `openwrt/lokvpn.json`.

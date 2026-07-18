@@ -176,18 +176,12 @@
                 android:layout_height="wrap_content"
                 android:paddingTop="8dp"
                 android:textIsSelectable="true" />
-            <WebView
-                android:id="@+id/adminProvisioningQrView"
-                android:layout_width="260dp"
-                android:layout_height="260dp"
-                android:layout_gravity="center_horizontal"
-                android:visibility="gone" />
             <Button
                 android:id="@+id/adminShareProvisioningButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:enabled="false"
-                android:text="Share Android setup" />
+                android:text="Share activation code" />
         </LinearLayout>
     </LinearLayout>
 </ScrollView>

@@ -144,10 +144,10 @@ def run_su_script(client: paramiko.SSHClient, *, password: str, script_path: str
 
 def promotion_script(args: argparse.Namespace, *, remote_archive: str, remote_script: str) -> str:
     return f"""set -eu
-if ! python3 -c 'import paramiko, qrcode' >/dev/null 2>&1; then
+if ! python3 -c 'import paramiko' >/dev/null 2>&1; then
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -y
-  apt-get install -y python3 python3-paramiko python3-qrcode openssh-client curl tar
+  apt-get install -y python3 python3-paramiko openssh-client curl tar
 fi
 mkdir -p {args.remote_dir} {args.remote_dir}/data
 cd {args.remote_dir}

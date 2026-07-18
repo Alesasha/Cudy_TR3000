@@ -142,7 +142,7 @@ def prepare_target(
     command = (
         "set -eu\n"
         "if command -v apt-get >/dev/null 2>&1; then "
-        "apt-get update -y && apt-get install -y python3 python3-paramiko python3-qrcode openssh-client curl tar; "
+        "apt-get update -y && apt-get install -y python3 python3-paramiko openssh-client curl tar; "
         "fi\n"
         f"id -u {shlex.quote(service_user)} >/dev/null 2>&1 || "
         f"useradd --system --home {shlex.quote(remote_dir)} --shell /usr/sbin/nologin {shlex.quote(service_user)}\n"

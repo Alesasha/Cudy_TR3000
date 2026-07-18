@@ -232,9 +232,9 @@ http://127.0.0.1:18765/admin
 
 The admin `Users` table supports create, edit, enable/disable and explicit
 delete. The `Agents` section supports device enable/disable/delete, downloading
-the universal Android APK and creating a one-time Android QR/provisioning file.
-The provisioning result contains a per-device private bootstrap key and is
-shown once; send it only to its intended user.
+the universal Android APK and creating a one-time activation code. Send the
+text code to its intended user. The Android app exchanges it once for its
+individual device token and SSH key; there is no QR or provisioning file.
 
 `127.0.0.1` always means the device on which the browser runs. Therefore the
 admin page is not available from an ordinary phone browser through this Windows

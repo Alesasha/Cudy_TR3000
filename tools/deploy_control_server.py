@@ -293,10 +293,10 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
         if not args.skip_package_install:
             package_step = (
                 "if command -v apt-get >/dev/null 2>&1; then\n"
-                "  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import paramiko, qrcode' >/dev/null 2>&1; then\n"
+                "  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import paramiko' >/dev/null 2>&1; then\n"
                 "    export DEBIAN_FRONTEND=noninteractive\n"
                 "    apt-get update -y\n"
-                "    apt-get install -y python3 python3-paramiko python3-qrcode openssh-client curl tar\n"
+                "    apt-get install -y python3 python3-paramiko openssh-client curl tar\n"
                 "  fi\n"
                 "fi\n"
             )

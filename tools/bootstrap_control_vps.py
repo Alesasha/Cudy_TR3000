@@ -78,7 +78,6 @@ def build_steps(args: argparse.Namespace) -> list[Step]:
         "openssh-client",
         "python3",
         "python3-paramiko",
-        "python3-qrcode",
         "python3-pip",
         "python3-venv",
         "sqlite3",

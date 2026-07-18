@@ -101,11 +101,11 @@ provider failure moves traffic to the next valid candidate.
    diagnostics and update status in plain language.
 5. Make enrollment and update behavior consistent across Windows, Linux and
    Android.
-6. Extend the implemented APK download and protected Android provisioning flow
-   to equivalent one-click Windows/Linux installers. Android already uses a
-   one-time QR/file with a per-device restricted SSH key; the universal APK has
-   no shared private key.
-   Android `1.24` also has the minimal in-app credential-protected admin surface;
+6. Extend the implemented APK download and protected Android code-only
+   enrollment flow to equivalent one-click Windows/Linux installers. Android
+   uses a shared SSH bootstrap account restricted to the enrollment-only port,
+   then receives a unique per-device SSH key and token after consuming the code.
+   Android `1.25` also has the minimal in-app credential-protected admin surface;
    extend it only after the current user/device/enrollment workflow is soaked.
 7. Add automated rendered UI regression coverage for desktop and mobile
    widths; the current production UI has passed the equivalent manual check.

@@ -15,7 +15,6 @@ import getpass
 import gzip
 import hashlib
 import hmac
-import io
 import ipaddress
 import json
 import os
@@ -1224,7 +1223,6 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
         </div>
         <button type="submit">Create</button>
-        <button id="syncCudyClients" class="secondary" type="button">Sync Cudy</button>
       </form>
       <p id="userStatus" class="status"></p>
       <div class="toolbar">
@@ -1402,18 +1400,11 @@ ADMIN_HTML = r"""<!doctype html>
         <a class="button" href="/api/admin/agent-update-package?platform=android">Download Android APK</a>
       </form>
       <p id="enrollmentStatus" class="status"></p>
-      <div id="provisioningResult" hidden>
-        <h3>Android provisioning</h3>
-        <p class="muted">This QR and file contain a private per-device bootstrap key. Send them only to the intended user. They are shown once.</p>
-        <div class="toolbar">
-          <img id="provisioningQr" alt="Android provisioning QR" width="260" height="260">
-          <div>
-            <p><strong id="provisioningDevice"></strong></p>
-            <p id="provisioningExpiry" class="muted"></p>
-            <button id="downloadProvisioning" type="button">Download provisioning file</button>
-            <button id="copyProvisioningLink" class="secondary" type="button">Copy QR link</button>
-          </div>
-        </div>
+      <div id="activationResult" hidden>
+        <h3>One-time activation code</h3>
+        <p><code id="activationCode"></code></p>
+        <p id="activationExpiry" class="muted"></p>
+        <button id="copyActivationCode" type="button">Copy activation code</button>
       </div>
       <table>
         <thead><tr><th>Code ID</th><th>User</th><th>Device</th><th>Platform</th><th>State</th><th>Expires</th><th>Updated</th><th></th></tr></thead>
@@ -1473,7 +1464,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null, lastProvisioning: null };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null, lastActivationCode: "" };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const adminSections = Array.from(document.querySelectorAll("[data-admin-section]"));
@@ -2447,6 +2438,7 @@ ADMIN_HTML = r"""<!doctype html>
       const status = document.getElementById("userStatus");
       status.className = "status";
       try {
+        const createdUserId = document.getElementById("newUserId").value.trim();
         const result = await api("/api/admin/users", {
           method: "POST",
           body: JSON.stringify({
@@ -2464,48 +2456,34 @@ ADMIN_HTML = r"""<!doctype html>
         event.target.reset();
         status.textContent = result.cudy_client
           ? `User created. Legacy Cudy peer created: ${result.cudy_client.config_path || result.cudy_client.client_name || result.id || ""}`
-          : "User created. Create a one-time agent enrollment code below.";
+          : "User created. Create the user's device(s) and obtain a one-time enrollment code in the Devices tab.";
         status.className = "status ok";
         await load();
+        if (!result.cudy_client) {
+          activateAdminSection("agents");
+          document.getElementById("enrollmentUser").value = createdUserId;
+          const deviceStatus = document.getElementById("enrollmentStatus");
+          deviceStatus.textContent = "User created. Create the user's device(s) and obtain a one-time enrollment code in the Devices tab.";
+          deviceStatus.className = "status ok";
+          document.getElementById("enrollmentDeviceId").focus();
+        }
       } catch (error) {
         status.textContent = error.message;
         status.className = "status error";
       }
     });
-    document.getElementById("syncCudyClients").addEventListener("click", async () => {
-      const status = document.getElementById("userStatus");
-      status.className = "status";
-      status.textContent = "Syncing Cudy clients...";
-      try {
-        const result = await api("/api/admin/sync-cudy-clients", { method: "POST", body: "{}" });
-        status.textContent = `Synced Cudy clients: ${result.synced.length}, warnings: ${result.warnings.length}`;
-        status.className = result.warnings.length ? "status error" : "status ok";
-        await load();
-      } catch (error) {
-        status.textContent = error.message;
-        status.className = "status error";
-      }
-    });
-    document.getElementById("downloadProvisioning").addEventListener("click", () => {
-      const provisioning = state.lastProvisioning;
-      if (!provisioning || !provisioning.bundle) return;
-      const blob = new Blob([JSON.stringify(provisioning.bundle, null, 2)], { type: "application/vnd.nashvpn.cudy-provisioning+json" });
-      const link = document.createElement("a");
-      link.href = URL.createObjectURL(blob);
-      link.download = provisioning.file_name || "cudy-agent.cudy-provision.json";
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
-    });
-    document.getElementById("copyProvisioningLink").addEventListener("click", async () => {
-      const provisioning = state.lastProvisioning;
-      if (!provisioning || !provisioning.deep_link) return;
-      await navigator.clipboard.writeText(provisioning.deep_link);
-      document.getElementById("enrollmentStatus").textContent = "Provisioning QR link copied.";
+    document.getElementById("copyActivationCode").addEventListener("click", async () => {
+      if (!state.lastActivationCode) return;
+      await navigator.clipboard.writeText(state.lastActivationCode);
+      document.getElementById("enrollmentStatus").textContent = "Activation code copied.";
     });
     document.getElementById("enrollmentForm").addEventListener("submit", async event => {
       event.preventDefault();
       const status = document.getElementById("enrollmentStatus");
+      const submitButton = event.submitter;
       status.className = "status";
+      status.textContent = "Creating one-time activation code...";
+      if (submitButton) submitButton.disabled = true;
       try {
         const result = await api("/api/admin/enrollment-codes", {
           method: "POST",
@@ -2514,30 +2492,23 @@ ADMIN_HTML = r"""<!doctype html>
             device_id: document.getElementById("enrollmentDeviceId").value,
             display_name: document.getElementById("enrollmentDisplayName").value,
             platform: document.getElementById("enrollmentPlatform").value,
-            ttl_hours: Number(document.getElementById("enrollmentTtlHours").value || 24),
-            provision_transport: document.getElementById("enrollmentPlatform").value === "android"
+            ttl_hours: Number(document.getElementById("enrollmentTtlHours").value || 24)
           })
         });
         document.getElementById("enrollmentDeviceId").value = "";
         document.getElementById("enrollmentDisplayName").value = "";
-        status.textContent = `Activation code: ${result.code} (expires ${result.expires_at})`;
+        status.textContent = "Activation code created. Send this code to the intended user.";
         status.className = "status ok";
-        state.lastProvisioning = result.provisioning || null;
-        const provisioningBox = document.getElementById("provisioningResult");
-        provisioningBox.hidden = !state.lastProvisioning;
-        if (state.lastProvisioning) {
-          document.getElementById("provisioningDevice").textContent = result.desired_device_id || result.display_name;
-          document.getElementById("provisioningExpiry").textContent = `Expires: ${result.expires_at}`;
-          const qr = document.getElementById("provisioningQr");
-          qr.hidden = !state.lastProvisioning.qr_svg_b64;
-          qr.src = state.lastProvisioning.qr_svg_b64
-            ? `data:image/svg+xml;base64,${state.lastProvisioning.qr_svg_b64}`
-            : "";
-        }
+        state.lastActivationCode = result.code;
+        document.getElementById("activationResult").hidden = false;
+        document.getElementById("activationCode").textContent = result.code;
+        document.getElementById("activationExpiry").textContent = `Expires: ${result.expires_at}`;
         await load();
       } catch (error) {
         status.textContent = error.message;
         status.className = "status error";
+      } finally {
+        if (submitButton) submitButton.disabled = false;
       }
     });
     document.getElementById("refreshSystemStatus").addEventListener("click", async () => {
@@ -3593,30 +3564,6 @@ def render_provisioning_authorized_keys(db_path: Path) -> Path:
     os.chmod(temporary, 0o644)
     os.replace(temporary, target)
     return target
-
-
-def encode_provisioning_deep_link(bundle: dict[str, Any]) -> str:
-    raw = json.dumps(bundle, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-    return f"cudyagent://provision?data={encoded}"
-
-
-def provisioning_qr_svg_b64(deep_link: str) -> str:
-    try:
-        import qrcode
-        import qrcode.image.svg
-
-        image = qrcode.make(
-            deep_link,
-            image_factory=qrcode.image.svg.SvgPathImage,
-            box_size=4,
-            border=4,
-        )
-        output = io.BytesIO()
-        image.save(output)
-        return base64.b64encode(output.getvalue()).decode("ascii")
-    except (ImportError, OSError, ValueError):
-        return ""
 
 
 def normalize_client_ip(value: str | None) -> str | None:
@@ -6997,16 +6944,11 @@ def create_agent_enrollment_code(
     platform: str | None = "android",
     ttl_hours: int = 24,
     enabled: bool = True,
-    provision_transport: bool = False,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     normalized_user_id = user_id.strip()
     normalized_platform = normalize_platform(platform) or "android"
     normalized_device_id = normalize_device_id(device_id) if device_id else None
-    if provision_transport and normalized_device_id is None:
-        normalized_device_id = normalize_device_id(
-            f"{normalized_user_id}-{normalized_platform}-{secrets.token_hex(3)}"
-        )
     label = (display_name or normalized_device_id or f"{normalized_user_id}-{normalized_platform}").strip()
     ttl_hours = max(1, min(int(ttl_hours), 24 * 30))
     code = generate_enrollment_code()
@@ -7016,7 +6958,6 @@ def create_agent_enrollment_code(
         datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=ttl_hours)
     ).isoformat()
     code_id = "enroll_" + secrets.token_urlsafe(18)
-    provisioning: dict[str, Any] | None = None
     with connect(db_path) as conn:
         user = row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,))
         if not user:
@@ -7042,53 +6983,6 @@ def create_agent_enrollment_code(
                 timestamp,
             ),
         )
-        if provision_transport:
-            key_id = "ssh_" + secrets.token_urlsafe(18)
-            private_key, public_key = generate_provisioning_ssh_keypair(f"cudy-provision-{key_id}")
-            conn.execute(
-                """
-                INSERT INTO agent_provisioning_keys (
-                  id, enrollment_id, user_id, desired_device_id, public_key,
-                  enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-                """,
-                (
-                    key_id,
-                    code_id,
-                    normalized_user_id,
-                    normalized_device_id,
-                    public_key,
-                    timestamp,
-                    timestamp,
-                ),
-            )
-            bundle = {
-                "schema": PROVISIONING_SCHEMA,
-                "platform": normalized_platform,
-                "enrollment_code": code,
-                "device_id": normalized_device_id or "",
-                "display_name": label,
-                "expires_at": expires_at,
-                "control_url": DEFAULT_CONTROL_PRIMARY_URL,
-                "ssh_host": os.environ.get(
-                    "VPN_CONTROL_PRIMARY_SSH_HOST", DEFAULT_CONTROL_PRIMARY_SSH_HOST
-                ).strip(),
-                "ssh_user": os.environ.get(
-                    "VPN_CONTROL_PROVISIONING_SSH_USER", DEFAULT_PROVISIONING_SSH_USER
-                ).strip(),
-                "ssh_host_key_sha256": control_ssh_host_key_sha256(),
-                "ssh_private_key": private_key,
-            }
-            deep_link = encode_provisioning_deep_link(bundle)
-            provisioning = {
-                "bundle": bundle,
-                "deep_link": deep_link,
-                "qr_svg_b64": provisioning_qr_svg_b64(deep_link),
-                "file_name": f"{normalized_device_id or key_id}.cudy-provision.json",
-                "key_id": key_id,
-            }
-    if provisioning is not None:
-        render_provisioning_authorized_keys(db_path)
     result = {
         "ok": True,
         "id": code_id,
@@ -7100,8 +6994,6 @@ def create_agent_enrollment_code(
         "expires_at": expires_at,
         "code": code,
     }
-    if provisioning is not None:
-        result["provisioning"] = provisioning
     return result
 
 
@@ -7183,32 +7075,123 @@ def consume_agent_enrollment_code(
     if not requested_device_id:
         suffix = secrets.token_hex(3)
         requested_device_id = f"{matched['user_id']}-{normalized_platform}-{suffix}"
-    label = display_name or matched.get("display_name") or requested_device_id
-    device = create_agent_device(
-        db_path,
-        inventory_path,
-        user_id=matched["user_id"],
-        device_id=requested_device_id,
-        display_name=label,
-        platform=normalized_platform,
-        enabled=True,
-    )
+    normalized_device_id = normalize_device_id(requested_device_id)
+    label = (display_name or matched.get("display_name") or normalized_device_id).strip()
+    if not label:
+        raise ValueError("device display name is required")
+    token = generate_device_token()
+    token_salt, token_hash = hash_device_token(token)
+    generated_private_key = ""
+    generated_key_id = ""
     with connect(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        current_code = row(
+            conn,
+            """
+            SELECT c.*, u.enabled AS user_enabled
+            FROM agent_enrollment_codes c
+            JOIN users u ON u.id = c.user_id
+            WHERE c.id = ?
+            """,
+            (matched["id"],),
+        )
+        current_expiry = parse_iso_datetime(current_code.get("expires_at") if current_code else None)
+        if (
+            current_code is None
+            or not bool(current_code.get("enabled"))
+            or current_code.get("used_at") is not None
+            or not bool(current_code.get("user_enabled"))
+            or current_expiry is None
+            or current_expiry < datetime.now(timezone.utc)
+            or not verify_device_token(
+                normalized_code,
+                current_code.get("code_salt"),
+                current_code.get("code_hash"),
+            )
+        ):
+            raise PermissionError("Invalid or expired enrollment code")
+
+        existing_key = row(
+            conn,
+            "SELECT id FROM agent_provisioning_keys WHERE enrollment_id = ?",
+            (matched["id"],),
+        )
+        generated_key_id = str(existing_key.get("id") or "") if existing_key else ""
+        if not generated_key_id:
+            generated_key_id = "ssh_" + secrets.token_urlsafe(18)
+        generated_private_key, public_key = generate_provisioning_ssh_keypair(
+            f"cudy-device-{generated_key_id}"
+        )
+        if existing_key is None:
+            conn.execute(
+                """
+                INSERT INTO agent_provisioning_keys (
+                  id, enrollment_id, user_id, desired_device_id, public_key,
+                  enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    generated_key_id,
+                    matched["id"],
+                    matched["user_id"],
+                    normalized_device_id,
+                    public_key,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE agent_provisioning_keys
+                SET desired_device_id = ?, public_key = ?, enabled = 1, updated_at = ?
+                WHERE id = ?
+                """,
+                (normalized_device_id, public_key, timestamp, generated_key_id),
+            )
         conn.execute(
+            """
+            INSERT INTO agent_devices (
+              id, user_id, display_name, platform, token_salt, token_hash,
+              enabled, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              user_id = excluded.user_id,
+              display_name = excluded.display_name,
+              platform = excluded.platform,
+              token_salt = excluded.token_salt,
+              token_hash = excluded.token_hash,
+              enabled = 1,
+              updated_at = excluded.updated_at
+            """,
+            (
+                normalized_device_id,
+                matched["user_id"],
+                label,
+                normalized_platform,
+                token_salt,
+                token_hash,
+                timestamp,
+                timestamp,
+            ),
+        )
+        consumed = conn.execute(
             """
             UPDATE agent_enrollment_codes
             SET used_at = ?, used_device_id = ?, enabled = 0, updated_at = ?
-            WHERE id = ? AND used_at IS NULL
+            WHERE id = ? AND enabled = 1 AND used_at IS NULL
             """,
-            (timestamp, device["id"], timestamp, matched["id"]),
+            (timestamp, normalized_device_id, timestamp, matched["id"]),
         )
+        if consumed.rowcount != 1:
+            raise PermissionError("Invalid or expired enrollment code")
         conn.execute(
             """
             UPDATE agent_provisioning_keys
             SET used_device_id = ?, desired_device_id = ?, updated_at = ?
             WHERE enrollment_id = ?
             """,
-            (device["id"], device["id"], timestamp, matched["id"]),
+            (normalized_device_id, normalized_device_id, timestamp, matched["id"]),
         )
         conn.execute(
             """
@@ -7216,17 +7199,32 @@ def consume_agent_enrollment_code(
             SET enabled = 0, updated_at = ?
             WHERE used_device_id = ? AND enrollment_id <> ?
             """,
-            (timestamp, device["id"], matched["id"]),
+            (timestamp, normalized_device_id, matched["id"]),
         )
     render_provisioning_authorized_keys(db_path)
-    return {
+    result = {
         "ok": True,
-        "user_id": device["user_id"],
-        "device_id": device["id"],
-        "display_name": device["display_name"],
-        "platform": device["platform"],
-        "token": device["token"],
+        "user_id": matched["user_id"],
+        "device_id": normalized_device_id,
+        "display_name": label,
+        "platform": normalized_platform,
+        "token": token,
     }
+    if generated_private_key:
+        result["provisioning"] = {
+            "schema": PROVISIONING_SCHEMA,
+            "control_url": DEFAULT_CONTROL_PRIMARY_URL,
+            "ssh_host": os.environ.get(
+                "VPN_CONTROL_PRIMARY_SSH_HOST", DEFAULT_CONTROL_PRIMARY_SSH_HOST
+            ).strip(),
+            "ssh_user": os.environ.get(
+                "VPN_CONTROL_PROVISIONING_SSH_USER", DEFAULT_PROVISIONING_SSH_USER
+            ).strip(),
+            "ssh_host_key_sha256": control_ssh_host_key_sha256(),
+            "ssh_private_key": generated_private_key,
+            "key_id": generated_key_id,
+        }
+    return result
 
 
 def list_agent_devices(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
@@ -11232,7 +11230,6 @@ class Handler(BaseHTTPRequestHandler):
             platform=str(data.get("platform") or "android"),
             ttl_hours=int(data.get("ttl_hours") or 24),
             enabled=True,
-            provision_transport=data.get("provision_transport") is True,
         )
 
     def api_admin(self) -> dict[str, Any]:
@@ -11696,6 +11693,51 @@ class Server(ThreadingHTTPServer):
         self.app = app
 
 
+class EnrollmentHandler(Handler):
+    """Minimal API exposed only through the restricted enrollment SSH account."""
+
+    attempt_lock = threading.Lock()
+    attempt_times: list[float] = []
+    max_attempts_per_minute = 30
+
+    @classmethod
+    def allow_attempt(cls) -> bool:
+        cutoff = time.monotonic() - 60
+        with cls.attempt_lock:
+            cls.attempt_times = [value for value in cls.attempt_times if value >= cutoff]
+            if len(cls.attempt_times) >= cls.max_attempts_per_minute:
+                return False
+            cls.attempt_times.append(time.monotonic())
+            return True
+
+    def do_GET(self) -> None:
+        if urlparse(self.path).path != "/healthz":
+            self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+            return
+        super().do_GET()
+
+    def do_POST(self) -> None:
+        if urlparse(self.path).path != "/api/agent/enroll":
+            self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+            return
+        if int(self.headers.get("content-length", "0") or "0") > 8192:
+            self.send_error_json("Request is too large", HTTPStatus.REQUEST_ENTITY_TOO_LARGE)
+            return
+        if not self.allow_attempt():
+            self.send_error_json("Too many enrollment attempts", HTTPStatus.TOO_MANY_REQUESTS)
+            return
+        super().do_POST()
+
+    def do_DELETE(self) -> None:
+        self.send_error_json("Not found", HTTPStatus.NOT_FOUND)
+
+
+class EnrollmentServer(ThreadingHTTPServer):
+    def __init__(self, address: tuple[str, int], app: App):
+        super().__init__(address, EnrollmentHandler)
+        self.app = app
+
+
 def print_db_summary(db_path: Path) -> None:
     with connect(db_path) as conn:
         server_count = conn.execute("SELECT count(*) FROM servers").fetchone()[0]
@@ -11803,7 +11845,6 @@ def build_parser() -> argparse.ArgumentParser:
     enrollment_create_parser.add_argument("--display-name")
     enrollment_create_parser.add_argument("--platform", choices=["linux", "windows", "android", "macos", "other"], default="android")
     enrollment_create_parser.add_argument("--ttl-hours", type=int, default=24)
-    enrollment_create_parser.add_argument("--provision-transport", action="store_true")
     enrollment_create_parser.add_argument("--disabled", action="store_true")
     enrollment_create_parser.add_argument("--json", action="store_true", help="Print JSON, including the one-time code.")
 
@@ -12146,6 +12187,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve_parser = sub.add_parser("serve", help="Run local web server.")
     serve_parser.add_argument("--host", default="127.0.0.1")
     serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--enrollment-host", default="127.0.0.1")
+    serve_parser.add_argument("--enrollment-port", type=int, default=8766)
+    serve_parser.add_argument(
+        "--no-enrollment-server",
+        action="store_true",
+        help="Disable the restricted one-time-code enrollment listener.",
+    )
     serve_parser.add_argument("--no-auto-worker", action="store_true", help="Disable background Auto probe job scheduler.")
     serve_parser.add_argument("--auto-worker-interval", type=int, default=300)
     serve_parser.add_argument("--auto-cache-ttl-seconds", type=int, default=3600)
@@ -12317,7 +12365,6 @@ def main() -> int:
             platform=args.platform,
             ttl_hours=args.ttl_hours,
             enabled=not args.disabled,
-            provision_transport=args.provision_transport,
         )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -13285,6 +13332,19 @@ def main() -> int:
     if args.command == "serve":
         app = App(args.db, args.inventory)
         server = Server((args.host, args.port), app)
+        enrollment_server: EnrollmentServer | None = None
+        enrollment_thread: threading.Thread | None = None
+        if not args.no_enrollment_server:
+            enrollment_server = EnrollmentServer(
+                (args.enrollment_host, args.enrollment_port),
+                app,
+            )
+            enrollment_thread = threading.Thread(
+                target=enrollment_server.serve_forever,
+                name="agent-enrollment-api",
+                daemon=True,
+            )
+            enrollment_thread.start()
         worker_stop = threading.Event()
         worker_thread: threading.Thread | None = None
         provider_thread: threading.Thread | None = None
@@ -13344,6 +13404,11 @@ def main() -> int:
         else:
             update_worker_status("provider_refresh", db_path=args.db, enabled=False)
         print(f"Serving on http://{args.host}:{args.port}")
+        if enrollment_server is not None:
+            print(
+                "Enrollment API on "
+                f"http://{args.enrollment_host}:{args.enrollment_port}"
+            )
         try:
             server.serve_forever()
         except KeyboardInterrupt:
@@ -13351,6 +13416,11 @@ def main() -> int:
         finally:
             worker_stop.set()
             server.server_close()
+            if enrollment_server is not None:
+                enrollment_server.shutdown()
+                enrollment_server.server_close()
+            if enrollment_thread:
+                enrollment_thread.join(timeout=3)
             if worker_thread:
                 worker_thread.join(timeout=3)
             if provider_thread:

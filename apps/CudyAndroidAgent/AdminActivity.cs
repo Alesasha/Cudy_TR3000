@@ -3,7 +3,6 @@ namespace CudyAndroidAgent;
 using Android.App;
 using Android.Content;
 using Android.OS;
-using Android.Webkit;
 using Android.Widget;
 using System.Text.Json;
 
@@ -49,12 +48,11 @@ public sealed class AdminActivity : Activity
     private EditText? enrollmentNameInput;
     private EditText? enrollmentTtlInput;
     private TextView? enrollmentResultText;
-    private WebView? provisioningQrView;
     private Button? shareProvisioningButton;
     private CudyAdminSession? session;
     private readonly List<AdminUser> users = [];
     private readonly List<AdminDevice> devices = [];
-    private string provisioningDeepLink = "";
+    private string activationCode = "";
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -80,14 +78,11 @@ public sealed class AdminActivity : Activity
         enrollmentNameInput = RequireView<EditText>(Resource.Id.adminEnrollmentNameInput);
         enrollmentTtlInput = RequireView<EditText>(Resource.Id.adminEnrollmentTtlInput);
         enrollmentResultText = RequireView<TextView>(Resource.Id.adminEnrollmentResultText);
-        provisioningQrView = RequireView<WebView>(Resource.Id.adminProvisioningQrView);
         shareProvisioningButton = RequireView<Button>(Resource.Id.adminShareProvisioningButton);
 
         usernameInput.Text = "admin";
         userRoleSpinner.Adapter = StringAdapter(["user", "admin"]);
         enrollmentPlatformSpinner.Adapter = StringAdapter(["android", "windows", "linux"]);
-        provisioningQrView.Settings.JavaScriptEnabled = false;
-        provisioningQrView.SetBackgroundColor(Android.Graphics.Color.Transparent);
 
         RequireView<Button>(Resource.Id.adminLoginButton).Click += async (_, _) => await LoginAsync();
         RequireView<Button>(Resource.Id.adminRefreshButton).Click += async (_, _) => await RefreshAsync();
@@ -540,29 +535,14 @@ public sealed class AdminActivity : Activity
                     : enrollmentNameInput.Text.Trim(),
                 platform,
                 ttl_hours = Math.Clamp(ttlHours, 1, 168),
-                provision_transport = platform == "android",
             });
             var root = document.RootElement;
             var code = Text(root, "code");
             var expires = Text(root, "expires_at");
-            provisioningDeepLink = "";
+            activationCode = code;
             enrollmentResultText!.Text = $"Code: {code}\nExpires: {expires}";
-            provisioningQrView!.Visibility = Android.Views.ViewStates.Gone;
-            shareProvisioningButton!.Enabled = false;
-            if (root.TryGetProperty("provisioning", out var provisioning))
-            {
-                provisioningDeepLink = Text(provisioning, "deep_link");
-                var qrBase64 = Text(provisioning, "qr_svg_b64");
-                if (!string.IsNullOrWhiteSpace(qrBase64))
-                {
-                    var html = $"<html><body style='margin:0;background:white'>"
-                        + $"<img style='width:100%;height:100%' src='data:image/svg+xml;base64,{qrBase64}'></body></html>";
-                    provisioningQrView.LoadDataWithBaseURL(null, html, "text/html", "UTF-8", null);
-                    provisioningQrView.Visibility = Android.Views.ViewStates.Visible;
-                }
-                shareProvisioningButton.Enabled = !string.IsNullOrWhiteSpace(provisioningDeepLink);
-            }
-            SetStatus("One-time setup created. Share it only with the intended user.");
+            shareProvisioningButton!.Enabled = !string.IsNullOrWhiteSpace(activationCode);
+            SetStatus("One-time activation code created. Share it only with the intended user.");
         }
         catch (Exception ex)
         {
@@ -572,14 +552,14 @@ public sealed class AdminActivity : Activity
 
     private void ShareProvisioning()
     {
-        if (string.IsNullOrWhiteSpace(provisioningDeepLink))
+        if (string.IsNullOrWhiteSpace(activationCode))
         {
             return;
         }
         var share = new Intent(Intent.ActionSend);
         share.SetType("text/plain");
-        share.PutExtra(Intent.ExtraText, provisioningDeepLink);
-        StartActivity(Intent.CreateChooser(share, "Share Android setup"));
+        share.PutExtra(Intent.ExtraText, activationCode);
+        StartActivity(Intent.CreateChooser(share, "Share activation code"));
     }
 
     private async Task<bool> ConfirmAsync(string title, string message)
@@ -608,7 +588,6 @@ public sealed class AdminActivity : Activity
     {
         session?.Dispose();
         session = null;
-        provisioningQrView?.Destroy();
         base.OnDestroy();
     }
 }

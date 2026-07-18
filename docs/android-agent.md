@@ -12,7 +12,10 @@ Verified on the physical test phone:
 - stores control URL, device id, device token, SSH host/user/private key;
 - reaches the uswest control-server through a restricted per-device SSH local
   forward;
-- imports a one-time provisioning QR/deep link or `.cudy-provision.json` file;
+- activates a fresh installation with one one-time code entered in the app;
+- reaches the enrollment-only API through the shared, restricted `cudy-enroll`
+  SSH account, then replaces that bootstrap credential with a unique
+  per-device SSH key and token;
 - pins the uswest Ed25519 host-key fingerprint before sending enrollment or
   device credentials;
 - fetches `/api/agent/config`;
@@ -31,16 +34,22 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest verified release: `1.24 (25)`.
+Latest published release: `1.25 (26)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
 ```
 
-Latest Release APK smoke on the physical phone:
+Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.24-20260718.apk`;
-- SHA256: `0e85bbd48bb55c746b06858eee1efb49d60317c689bf6240255d23efe3aa3f70`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.25-20260718.apk`;
+- SHA256: `8cf3b018298270da379c515c9162d7eaaf844f1299b686ccf95ebbbd702e9517`;
+- the production update manifest and APK have the same SHA256;
+- the production bootstrap and issued per-device SSH channels passed an
+  end-to-end test. Physical-phone installation of 1.25 remains the next check.
+
+The previous 1.24 runtime smoke on the physical phone confirmed that:
+
 - foreground service stayed running;
 - Android VPN was established on `tun0` and reported `VALIDATED`;
 - control-server reported `isasha_X7Pro_Cudy-android` online and healthy;
@@ -73,19 +82,20 @@ Latest Release APK smoke on the physical phone:
   allows it, then opens vendor/app settings for the remaining MIUI-specific
   switch.
 
-Provisioning verification on 2026-07-18:
+Code-only enrollment verification on 2026-07-18:
 
-- the production admin API generated a unique Ed25519 key, one-time enrollment
-  code, host-key pin, QR deep link and downloadable provisioning file;
-- the private bootstrap key was returned only in that one response and was not
-  stored in SQLite;
-- the public key was installed for the shell-less `cudy-tunnel-agent` account,
-  restricted to local forwarding to `127.0.0.1:8765` only;
-- the physical MIUI phone imported the bundle, consumed the code, fetched its
-  user policy through the restricted forward, started the VPN engine and
-  completed two assigned probes;
-- re-enrollment replaces the previous SSH key for the same device; revoking,
-  disabling or deleting the device removes its key from effective SSH access.
+- the universal APK contains a shared bootstrap key for the shell-less
+  `cudy-enroll` account;
+- sshd restricts that account to local forwarding to `127.0.0.1:8766`; the
+  listener exposes only `/healthz` and `/api/agent/enroll` and rate-limits
+  enrollment attempts;
+- a valid one-time code atomically creates the device, token and unique
+  Ed25519 key, disables the code, and returns the private device credential
+  once;
+- the issued key was verified against the ordinary shell-less
+  `cudy-tunnel-agent` account, restricted to `127.0.0.1:8765`;
+- code reuse is rejected, and disabling/deleting the device removes its key
+  from effective SSH access.
 
 Real reboot check on the MIUI test phone:
 
@@ -139,7 +149,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.24-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.25-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -178,8 +188,8 @@ uses logcat/dumpsys diagnostics instead.
 
 ## User Installation And Provisioning
 
-The APK is universal for all users and does not contain a shared control-server
-private key.
+The APK is universal for all users. Its shared bootstrap key cannot reach the
+normal control API or admin UI; it can only forward to the enrollment listener.
 
 1. The administrator either opens `Administration` in an already provisioned
    Android app or opens `http://127.0.0.1:18765/admin` through the operator SSH
@@ -187,20 +197,20 @@ private key.
 2. In `Agents`, select the user, enter the device id/name and keep platform
    `android`.
 3. Click `Create one-time code`.
-4. Send the current Android APK plus either the one-time QR or the downloaded
-   `.cudy-provision.json` file to the intended user.
-5. The user installs the APK and either scans the QR with the phone camera or
-   taps `Import provisioning file` in Cudy Agent.
-6. Cudy Agent validates the expiry and pinned SSH host key, consumes the code,
-   stores its device token locally and starts using its individual SSH key.
+4. Send the current Android APK and the displayed one-time code to the intended
+   user.
+5. The user installs the APK, enters the code under `Activation`, and taps
+   `Activate this device`.
+6. Cudy Agent pins the SSH host key, consumes the code through the isolated
+   enrollment listener, stores the returned token and unique device key, and
+   uses only those individual credentials afterward.
 
-The QR/file contains a per-device private bootstrap key and must be sent only to
-that user. It is shown only once in the admin UI. If it is sent to the wrong
-person, revoke the enrollment row and create another one.
+If a code is sent to the wrong person, revoke it before it is used and create a
+new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.24 (25)` contains a minimal protected administrator screen. Open
+Android `1.25 (26)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 
@@ -209,7 +219,7 @@ the following operations:
 - delete users with confirmation;
 - list, enable/disable and permanently delete devices;
 - create Android/Windows/Linux one-time device codes;
-- display and share the Android QR/deep link.
+- display and share the one-time activation code.
 
 The administrator password is never stored by the app. The screen reuses the
 active agent SSH connection and falls back to a temporary per-device restricted

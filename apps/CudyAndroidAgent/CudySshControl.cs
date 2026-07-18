@@ -16,11 +16,12 @@ public static class CudySshControl
         string method,
         string? token,
         string path,
-        string? body)
+        string? body,
+        uint remotePort = 8765)
     {
         using var client = CreateClient(host, user, privateKey, expectedHostKeySha256);
         client.Connect();
-        return RunControlRequest(client, method, token, path, body);
+        return RunControlRequest(client, method, token, path, body, remotePort);
     }
 
     public static SshClient CreateClient(
@@ -65,9 +66,10 @@ public static class CudySshControl
         string method,
         string? token,
         string path,
-        string? body)
+        string? body,
+        uint remotePort = 8765)
     {
-        var response = RunControlRequestDetailed(client, method, token, null, path, body);
+        var response = RunControlRequestDetailed(client, method, token, null, path, body, remotePort);
         if (response.StatusCode is < 200 or >= 300)
         {
             throw new InvalidOperationException(
@@ -82,14 +84,15 @@ public static class CudySshControl
         string? token,
         string? cookie,
         string path,
-        string? body)
+        string? body,
+        uint remotePort = 8765)
     {
         if (!client.IsConnected)
         {
             throw new InvalidOperationException("SSH control client is not connected.");
         }
 
-        using var forward = new ForwardedPortLocal("127.0.0.1", 0, "127.0.0.1", 8765);
+        using var forward = new ForwardedPortLocal("127.0.0.1", 0, "127.0.0.1", remotePort);
         client.AddForwardedPort(forward);
         forward.Start();
         try

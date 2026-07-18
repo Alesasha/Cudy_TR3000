@@ -37,6 +37,15 @@ def main() -> int:
     assert '"direct-tcpip"' in source
     assert "Archive uploaded in" in source
     assert "Deployment completed in" in source
+    assert "install_agent_provisioning_ssh.py" in source
+    assert (ROOT / "config" / "android_enrollment_bootstrap.pub").is_file()
+    provisioning_installer = (TOOLS / "install_agent_provisioning_ssh.py").read_text(encoding="utf-8")
+    for marker in (
+        'DEFAULT_BOOTSTRAP_USER = "cudy-enroll"',
+        'PermitOpen 127.0.0.1:8766',
+        'DEFAULT_BOOTSTRAP_KEY = Path("/opt/cudy-control/config/android_enrollment_bootstrap.pub")',
+    ):
+        assert marker in provisioning_installer
 
     fallback_code_only = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=False)]
     fallback_with_updates = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=True)]

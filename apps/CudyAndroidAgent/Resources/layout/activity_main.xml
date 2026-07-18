@@ -118,7 +118,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:paddingTop="18dp"
-            android:text="Enrollment"
+            android:text="Activation"
             android:textStyle="bold" />
         <EditText
             android:id="@+id/enrollmentCodeInput"
@@ -131,11 +131,6 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Activate this device" />
-        <Button
-            android:id="@+id/importProvisioningButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Import provisioning file" />
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
