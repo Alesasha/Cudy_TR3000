@@ -15,6 +15,7 @@ import getpass
 import gzip
 import hashlib
 import hmac
+import io
 import ipaddress
 import json
 import os
@@ -34,6 +35,8 @@ from urllib.parse import parse_qs, urlparse
 from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 import paramiko
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +54,10 @@ DEFAULT_CUDY_USER = "root"
 DEFAULT_CONTROL_PRIMARY_URL = "http://127.0.0.1:8765"
 DEFAULT_CONTROL_PRIMARY_SSH_HOST = "95.182.91.203"
 DEFAULT_CONTROL_PRIMARY_SSH_USER = "cudy-tunnel-windows"
+DEFAULT_PROVISIONING_SSH_USER = "cudy-tunnel-agent"
+DEFAULT_CONTROL_SSH_HOST_KEY_SHA256 = "SHA256:iyONyymHdd2Fwun5GIxKFo7eh4sooHpK1hdtLZOmGTM"
+PROVISIONING_SCHEMA = "cudy-agent-provisioning/v1"
+PROVISIONING_AUTHORIZED_KEYS_NAME = "agent_authorized_keys"
 DEFAULT_CONTROL_FALLBACK_URLS = "http://10.77.0.1:8765,http://192.168.8.1:8765"
 AGENT_TOKEN_CACHE_SECONDS = 300
 DEFAULT_CUDY_FRIEND_ENDPOINT = "195.170.35.108:51830"
@@ -420,6 +427,21 @@ CREATE TABLE IF NOT EXISTS agent_enrollment_codes (
   used_device_id TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
+  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY(used_device_id) REFERENCES agent_devices(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_provisioning_keys (
+  id TEXT PRIMARY KEY,
+  enrollment_id TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL,
+  desired_device_id TEXT,
+  used_device_id TEXT,
+  public_key TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(enrollment_id) REFERENCES agent_enrollment_codes(id) ON DELETE CASCADE,
   FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY(used_device_id) REFERENCES agent_devices(id) ON DELETE SET NULL
 );
@@ -1374,6 +1396,19 @@ ADMIN_HTML = r"""<!doctype html>
         <a class="button" href="/api/admin/agent-update-package?platform=android">Download Android APK</a>
       </form>
       <p id="enrollmentStatus" class="status"></p>
+      <div id="provisioningResult" hidden>
+        <h3>Android provisioning</h3>
+        <p class="muted">This QR and file contain a private per-device bootstrap key. Send them only to the intended user. They are shown once.</p>
+        <div class="toolbar">
+          <img id="provisioningQr" alt="Android provisioning QR" width="260" height="260">
+          <div>
+            <p><strong id="provisioningDevice"></strong></p>
+            <p id="provisioningExpiry" class="muted"></p>
+            <button id="downloadProvisioning" type="button">Download provisioning file</button>
+            <button id="copyProvisioningLink" class="secondary" type="button">Copy QR link</button>
+          </div>
+        </div>
+      </div>
       <table>
         <thead><tr><th>Code ID</th><th>User</th><th>Device</th><th>Platform</th><th>State</th><th>Expires</th><th>Updated</th><th></th></tr></thead>
         <tbody id="enrollmentCodesBody"></tbody>
@@ -1427,7 +1462,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
   </main>
   <script>
-    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null };
+    const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null, lastProvisioning: null };
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const adminSections = Array.from(document.querySelectorAll("[data-admin-section]"));
@@ -2348,6 +2383,22 @@ ADMIN_HTML = r"""<!doctype html>
         status.className = "status error";
       }
     });
+    document.getElementById("downloadProvisioning").addEventListener("click", () => {
+      const provisioning = state.lastProvisioning;
+      if (!provisioning || !provisioning.bundle) return;
+      const blob = new Blob([JSON.stringify(provisioning.bundle, null, 2)], { type: "application/vnd.nashvpn.cudy-provisioning+json" });
+      const link = document.createElement("a");
+      link.href = URL.createObjectURL(blob);
+      link.download = provisioning.file_name || "cudy-agent.cudy-provision.json";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+    });
+    document.getElementById("copyProvisioningLink").addEventListener("click", async () => {
+      const provisioning = state.lastProvisioning;
+      if (!provisioning || !provisioning.deep_link) return;
+      await navigator.clipboard.writeText(provisioning.deep_link);
+      document.getElementById("enrollmentStatus").textContent = "Provisioning QR link copied.";
+    });
     document.getElementById("enrollmentForm").addEventListener("submit", async event => {
       event.preventDefault();
       const status = document.getElementById("enrollmentStatus");
@@ -2360,13 +2411,26 @@ ADMIN_HTML = r"""<!doctype html>
             device_id: document.getElementById("enrollmentDeviceId").value,
             display_name: document.getElementById("enrollmentDisplayName").value,
             platform: document.getElementById("enrollmentPlatform").value,
-            ttl_hours: Number(document.getElementById("enrollmentTtlHours").value || 24)
+            ttl_hours: Number(document.getElementById("enrollmentTtlHours").value || 24),
+            provision_transport: document.getElementById("enrollmentPlatform").value === "android"
           })
         });
         document.getElementById("enrollmentDeviceId").value = "";
         document.getElementById("enrollmentDisplayName").value = "";
         status.textContent = `Activation code: ${result.code} (expires ${result.expires_at})`;
         status.className = "status ok";
+        state.lastProvisioning = result.provisioning || null;
+        const provisioningBox = document.getElementById("provisioningResult");
+        provisioningBox.hidden = !state.lastProvisioning;
+        if (state.lastProvisioning) {
+          document.getElementById("provisioningDevice").textContent = result.desired_device_id || result.display_name;
+          document.getElementById("provisioningExpiry").textContent = `Expires: ${result.expires_at}`;
+          const qr = document.getElementById("provisioningQr");
+          qr.hidden = !state.lastProvisioning.qr_svg_b64;
+          qr.src = state.lastProvisioning.qr_svg_b64
+            ? `data:image/svg+xml;base64,${state.lastProvisioning.qr_svg_b64}`
+            : "";
+        }
         await load();
       } catch (error) {
         status.textContent = error.message;
@@ -3359,6 +3423,97 @@ def normalize_device_id(value: str) -> str:
 def normalize_platform(value: str | None) -> str:
     platform = re.sub(r"[^A-Za-z0-9_.+-]+", "-", (value or "").strip().lower())
     return platform[:40]
+
+
+def provisioning_authorized_keys_path(db_path: Path) -> Path:
+    configured = os.environ.get("CUDY_AGENT_AUTHORIZED_KEYS", "").strip()
+    return Path(configured) if configured else db_path.parent / PROVISIONING_AUTHORIZED_KEYS_NAME
+
+
+def generate_provisioning_ssh_keypair(comment: str) -> tuple[str, str]:
+    private_key = Ed25519PrivateKey.generate()
+    private_text = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.OpenSSH,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("ascii")
+    public_text = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH,
+    ).decode("ascii")
+    return private_text.rstrip() + "\n", f"{public_text} {comment}"
+
+
+def control_ssh_host_key_sha256() -> str:
+    configured = os.environ.get("VPN_CONTROL_SSH_HOST_KEY_SHA256", "").strip()
+    if configured:
+        return configured
+    host_key_path = Path("/etc/ssh/ssh_host_ed25519_key.pub")
+    try:
+        fields = host_key_path.read_text(encoding="ascii").split()
+        blob = base64.b64decode(fields[1])
+        digest = base64.b64encode(hashlib.sha256(blob).digest()).decode("ascii").rstrip("=")
+        return "SHA256:" + digest
+    except (OSError, IndexError, ValueError):
+        return DEFAULT_CONTROL_SSH_HOST_KEY_SHA256
+
+
+def render_provisioning_authorized_keys(db_path: Path) -> Path:
+    target = provisioning_authorized_keys_path(db_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    current = now()
+    with connect(db_path) as conn:
+        entries = rows(
+            conn,
+            """
+            SELECT k.id, k.public_key
+            FROM agent_provisioning_keys k
+            JOIN agent_enrollment_codes c ON c.id = k.enrollment_id
+            LEFT JOIN agent_devices d ON d.id = k.used_device_id
+            WHERE k.enabled = 1 AND (
+              (k.used_device_id IS NULL AND c.enabled = 1 AND c.used_at IS NULL AND c.expires_at >= ?)
+              OR (k.used_device_id IS NOT NULL AND d.enabled = 1)
+            )
+            ORDER BY k.created_at, k.id
+            """,
+            (current,),
+        )
+    lines = [
+        'restrict,port-forwarding,permitopen="127.0.0.1:8765" '
+        + str(entry["public_key"]).strip()
+        for entry in entries
+        if str(entry.get("public_key") or "").strip()
+    ]
+    payload = ("\n".join(lines) + ("\n" if lines else "")).encode("ascii")
+    temporary = target.with_name(target.name + ".tmp")
+    temporary.write_bytes(payload)
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, target)
+    return target
+
+
+def encode_provisioning_deep_link(bundle: dict[str, Any]) -> str:
+    raw = json.dumps(bundle, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
+    encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    return f"cudyagent://provision?data={encoded}"
+
+
+def provisioning_qr_svg_b64(deep_link: str) -> str:
+    try:
+        import qrcode
+        import qrcode.image.svg
+
+        image = qrcode.make(
+            deep_link,
+            image_factory=qrcode.image.svg.SvgPathImage,
+            box_size=4,
+            border=4,
+        )
+        output = io.BytesIO()
+        image.save(output)
+        return base64.b64encode(output.getvalue()).decode("ascii")
+    except (ImportError, OSError, ValueError):
+        return ""
 
 
 def normalize_client_ip(value: str | None) -> str | None:
@@ -6644,6 +6799,7 @@ def delete_admin_user(
         conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM auto_candidate_policies WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    render_provisioning_authorized_keys(db_path)
     if not revoke_cudy:
         removed_files = []
         for path in cudy_client_config_candidates(user_id):
@@ -6730,11 +6886,16 @@ def create_agent_enrollment_code(
     platform: str | None = "android",
     ttl_hours: int = 24,
     enabled: bool = True,
+    provision_transport: bool = False,
 ) -> dict[str, Any]:
     init_db(db_path, inventory_path)
     normalized_user_id = user_id.strip()
     normalized_platform = normalize_platform(platform) or "android"
     normalized_device_id = normalize_device_id(device_id) if device_id else None
+    if provision_transport and normalized_device_id is None:
+        normalized_device_id = normalize_device_id(
+            f"{normalized_user_id}-{normalized_platform}-{secrets.token_hex(3)}"
+        )
     label = (display_name or normalized_device_id or f"{normalized_user_id}-{normalized_platform}").strip()
     ttl_hours = max(1, min(int(ttl_hours), 24 * 30))
     code = generate_enrollment_code()
@@ -6744,6 +6905,7 @@ def create_agent_enrollment_code(
         datetime.now(timezone.utc).replace(microsecond=0) + timedelta(hours=ttl_hours)
     ).isoformat()
     code_id = "enroll_" + secrets.token_urlsafe(18)
+    provisioning: dict[str, Any] | None = None
     with connect(db_path) as conn:
         user = row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,))
         if not user:
@@ -6769,7 +6931,54 @@ def create_agent_enrollment_code(
                 timestamp,
             ),
         )
-    return {
+        if provision_transport:
+            key_id = "ssh_" + secrets.token_urlsafe(18)
+            private_key, public_key = generate_provisioning_ssh_keypair(f"cudy-provision-{key_id}")
+            conn.execute(
+                """
+                INSERT INTO agent_provisioning_keys (
+                  id, enrollment_id, user_id, desired_device_id, public_key,
+                  enabled, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+                """,
+                (
+                    key_id,
+                    code_id,
+                    normalized_user_id,
+                    normalized_device_id,
+                    public_key,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            bundle = {
+                "schema": PROVISIONING_SCHEMA,
+                "platform": normalized_platform,
+                "enrollment_code": code,
+                "device_id": normalized_device_id or "",
+                "display_name": label,
+                "expires_at": expires_at,
+                "control_url": DEFAULT_CONTROL_PRIMARY_URL,
+                "ssh_host": os.environ.get(
+                    "VPN_CONTROL_PRIMARY_SSH_HOST", DEFAULT_CONTROL_PRIMARY_SSH_HOST
+                ).strip(),
+                "ssh_user": os.environ.get(
+                    "VPN_CONTROL_PROVISIONING_SSH_USER", DEFAULT_PROVISIONING_SSH_USER
+                ).strip(),
+                "ssh_host_key_sha256": control_ssh_host_key_sha256(),
+                "ssh_private_key": private_key,
+            }
+            deep_link = encode_provisioning_deep_link(bundle)
+            provisioning = {
+                "bundle": bundle,
+                "deep_link": deep_link,
+                "qr_svg_b64": provisioning_qr_svg_b64(deep_link),
+                "file_name": f"{normalized_device_id or key_id}.cudy-provision.json",
+                "key_id": key_id,
+            }
+    if provisioning is not None:
+        render_provisioning_authorized_keys(db_path)
+    result = {
         "ok": True,
         "id": code_id,
         "user_id": normalized_user_id,
@@ -6780,6 +6989,9 @@ def create_agent_enrollment_code(
         "expires_at": expires_at,
         "code": code,
     }
+    if provisioning is not None:
+        result["provisioning"] = provisioning
+    return result
 
 
 def list_agent_enrollment_codes(db_path: Path, inventory_path: Path) -> list[dict[str, Any]]:
@@ -6808,6 +7020,11 @@ def revoke_agent_enrollment_code(db_path: Path, inventory_path: Path, *, code_id
         )
         if cursor.rowcount != 1:
             raise ValueError(f"Unknown enrollment code: {code_id}")
+        conn.execute(
+            "UPDATE agent_provisioning_keys SET enabled = 0, updated_at = ? WHERE enrollment_id = ?",
+            (timestamp, code_id.strip()),
+        )
+    render_provisioning_authorized_keys(db_path)
     return {"ok": True, "id": code_id.strip()}
 
 
@@ -6874,6 +7091,23 @@ def consume_agent_enrollment_code(
             """,
             (timestamp, device["id"], timestamp, matched["id"]),
         )
+        conn.execute(
+            """
+            UPDATE agent_provisioning_keys
+            SET used_device_id = ?, desired_device_id = ?, updated_at = ?
+            WHERE enrollment_id = ?
+            """,
+            (device["id"], device["id"], timestamp, matched["id"]),
+        )
+        conn.execute(
+            """
+            UPDATE agent_provisioning_keys
+            SET enabled = 0, updated_at = ?
+            WHERE used_device_id = ? AND enrollment_id <> ?
+            """,
+            (timestamp, device["id"], matched["id"]),
+        )
+    render_provisioning_authorized_keys(db_path)
     return {
         "ok": True,
         "user_id": device["user_id"],
@@ -6912,6 +7146,7 @@ def revoke_agent_device(db_path: Path, inventory_path: Path, *, device_id: str) 
         )
         if cursor.rowcount != 1:
             raise ValueError(f"Unknown device: {normalized_device_id}")
+    render_provisioning_authorized_keys(db_path)
     return {"ok": True, "device_id": normalized_device_id, "enabled": False}
 
 
@@ -6931,6 +7166,7 @@ def set_agent_device_enabled(
         )
         if cursor.rowcount != 1:
             raise ValueError(f"Unknown device: {normalized_device_id}")
+    render_provisioning_authorized_keys(db_path)
     return {"ok": True, "device_id": normalized_device_id, "enabled": bool(enabled)}
 
 
@@ -6958,6 +7194,7 @@ def delete_agent_device(db_path: Path, inventory_path: Path, *, device_id: str) 
         )
         conn.execute("DELETE FROM agent_status WHERE device_id = ?", (normalized_device_id,))
         conn.execute("DELETE FROM agent_devices WHERE id = ?", (normalized_device_id,))
+    render_provisioning_authorized_keys(db_path)
     return {"ok": True, "device_id": normalized_device_id, "deleted": True}
 
 
@@ -10830,6 +11067,7 @@ class Handler(BaseHTTPRequestHandler):
             platform=str(data.get("platform") or "android"),
             ttl_hours=int(data.get("ttl_hours") or 24),
             enabled=True,
+            provision_transport=data.get("provision_transport") is True,
         )
 
     def api_admin(self) -> dict[str, Any]:
@@ -10965,6 +11203,7 @@ class Handler(BaseHTTPRequestHandler):
         client_ip = normalize_client_ip(str(data.get("client_ip") or ""))
         enabled = int(bool(data.get("enabled")))
         create_cudy_client = bool(data.get("create_cudy_client"))
+        agent_only = bool(data.get("agent_only"))
         password_raw = data.get("password")
         password = None if password_raw in (None, "") else str(password_raw)
         if password is not None:
@@ -10988,7 +11227,7 @@ class Handler(BaseHTTPRequestHandler):
             if cudy_client.get("client_ip"):
                 client_ip = normalize_client_ip(str(cudy_client["client_ip"]))
         if existing is None:
-            if not password and not client_ip:
+            if not password and not client_ip and not agent_only:
                 raise ValueError("Password or client_ip is required for a new user")
             with self.app.conn() as conn:
                 if password:
@@ -11399,6 +11638,7 @@ def build_parser() -> argparse.ArgumentParser:
     enrollment_create_parser.add_argument("--display-name")
     enrollment_create_parser.add_argument("--platform", choices=["linux", "windows", "android", "macos", "other"], default="android")
     enrollment_create_parser.add_argument("--ttl-hours", type=int, default=24)
+    enrollment_create_parser.add_argument("--provision-transport", action="store_true")
     enrollment_create_parser.add_argument("--disabled", action="store_true")
     enrollment_create_parser.add_argument("--json", action="store_true", help="Print JSON, including the one-time code.")
 
@@ -11912,6 +12152,7 @@ def main() -> int:
             platform=args.platform,
             ttl_hours=args.ttl_hours,
             enabled=not args.disabled,
+            provision_transport=args.provision_transport,
         )
         if args.json:
             print(json.dumps(result, ensure_ascii=False, indent=2))

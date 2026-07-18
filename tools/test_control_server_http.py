@@ -300,6 +300,9 @@ def main() -> int:
                 "Delete device",
                 "Revoke one-time enrollment code",
                 "Download Android APK",
+                "Create one-time code",
+                "Download provisioning file",
+                "Android provisioning QR",
                 "/api/admin/agent-update-package?platform=",
             ):
                 if snippet not in admin_page:
@@ -347,6 +350,34 @@ def main() -> int:
                     {"username": "lifecycle-user", "password": "lifecycle-password"},
                 ),
                 401,
+            )
+            agent_only_user = post_json(
+                opener,
+                f"{base_url}/api/admin/users",
+                {
+                    "id": "mobile-agent-only",
+                    "display_name": "Mobile Agent Only",
+                    "role": "user",
+                    "default_server_id": "auto",
+                    "client_ip": "",
+                    "password": "",
+                    "enabled": True,
+                    "agent_only": True,
+                },
+            )
+            if agent_only_user.get("ok") is not True:
+                raise AssertionError(f"agent-only user creation failed: {agent_only_user!r}")
+            agent_only_state = fetch_json_with_opener(opener, f"{base_url}/api/admin")
+            agent_only_row = next(
+                (item for item in agent_only_state["users"] if item["id"] == "mobile-agent-only"),
+                None,
+            )
+            if agent_only_row is None or agent_only_row.get("has_login") not in (0, False):
+                raise AssertionError(f"agent-only user has unexpected login state: {agent_only_row!r}")
+            fetch_json_with_opener(
+                opener,
+                f"{base_url}/api/admin/users?id=mobile-agent-only&revoke_cudy=0",
+                method="DELETE",
             )
             gzip_request = urllib.request.Request(
                 f"{base_url}/api/admin",
@@ -465,10 +496,27 @@ def main() -> int:
                     "display_name": "Admin created Android",
                     "platform": "android",
                     "ttl_hours": 24,
+                    "provision_transport": True,
                 },
             )
             if admin_code.get("ok") is not True or not admin_code.get("code"):
                 raise AssertionError(f"admin enrollment code creation failed: {admin_code!r}")
+            provisioning = admin_code.get("provisioning") or {}
+            bundle = provisioning.get("bundle") or {}
+            if bundle.get("schema") != "cudy-agent-provisioning/v1":
+                raise AssertionError(f"admin provisioning bundle is malformed: {admin_code!r}")
+            if not str(bundle.get("ssh_private_key") or "").startswith("-----BEGIN OPENSSH PRIVATE KEY-----"):
+                raise AssertionError("admin provisioning bundle has no OpenSSH private key")
+            if not str(bundle.get("ssh_host_key_sha256") or "").startswith("SHA256:"):
+                raise AssertionError("admin provisioning bundle has no SSH host-key pin")
+            if not str(provisioning.get("deep_link") or "").startswith("cudyagent://provision?data="):
+                raise AssertionError("admin provisioning deep link is missing")
+            if not provisioning.get("qr_svg_b64"):
+                raise AssertionError("admin provisioning QR is missing")
+            authorized_keys = db_path.parent / "agent_authorized_keys"
+            keys_text = authorized_keys.read_text(encoding="ascii")
+            if 'permitopen="127.0.0.1:8765"' not in keys_text or "cudy-provision-" not in keys_text:
+                raise AssertionError(f"provisioning SSH key was not rendered: {keys_text!r}")
             revoked_code = fetch_json_with_opener(
                 opener,
                 f"{base_url}/api/admin/enrollment-codes?id={admin_code['id']}",
@@ -476,6 +524,8 @@ def main() -> int:
             )
             if revoked_code.get("ok") is not True:
                 raise AssertionError(f"admin enrollment code revoke failed: {revoked_code!r}")
+            if "cudy-provision-" in authorized_keys.read_text(encoding="ascii"):
+                raise AssertionError("revoked provisioning SSH key is still authorized")
             expect_http_error(
                 lambda: post_json_public(
                     f"{base_url}/api/agent/enroll",
@@ -489,6 +539,59 @@ def main() -> int:
                 ),
                 401,
             )
+            first_provisioning = post_json(
+                opener,
+                f"{base_url}/api/admin/enrollment-codes",
+                {
+                    "user_id": "phone-user",
+                    "device_id": "phone-user-provisioned",
+                    "display_name": "Provisioned Android",
+                    "platform": "android",
+                    "ttl_hours": 24,
+                    "provision_transport": True,
+                },
+            )
+            first_key_id = first_provisioning["provisioning"]["key_id"]
+            first_enrolled = post_json_public(
+                f"{base_url}/api/agent/enroll",
+                {
+                    "code": first_provisioning["code"],
+                    "device_id": "phone-user-provisioned",
+                    "display_name": "Provisioned Android",
+                    "platform": "android",
+                },
+                timeout=15,
+            )
+            if first_enrolled.get("ok") is not True or first_key_id not in authorized_keys.read_text(encoding="ascii"):
+                raise AssertionError("consumed provisioning key was not retained for its enabled device")
+            replacement_provisioning = post_json(
+                opener,
+                f"{base_url}/api/admin/enrollment-codes",
+                {
+                    "user_id": "phone-user",
+                    "device_id": "phone-user-provisioned",
+                    "display_name": "Provisioned Android replacement",
+                    "platform": "android",
+                    "ttl_hours": 24,
+                    "provision_transport": True,
+                },
+            )
+            replacement_key_id = replacement_provisioning["provisioning"]["key_id"]
+            replacement_enrolled = post_json_public(
+                f"{base_url}/api/agent/enroll",
+                {
+                    "code": replacement_provisioning["code"],
+                    "device_id": "phone-user-provisioned",
+                    "display_name": "Provisioned Android replacement",
+                    "platform": "android",
+                },
+                timeout=15,
+            )
+            rotated_keys = authorized_keys.read_text(encoding="ascii")
+            if replacement_enrolled.get("ok") is not True or replacement_key_id not in rotated_keys:
+                raise AssertionError("replacement provisioning key was not authorized")
+            if first_key_id in rotated_keys:
+                raise AssertionError("re-enrollment left the previous device SSH key authorized")
             winners = fetch_json_with_opener(opener, f"{base_url}/api/admin/auto-winners?target=telegram&limit=10")
             if "winners" not in winners:
                 raise AssertionError(f"auto winners payload is malformed: {winners!r}")

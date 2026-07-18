@@ -144,10 +144,16 @@ def run_su_script(client: paramiko.SSHClient, *, password: str, script_path: str
 
 def promotion_script(args: argparse.Namespace, *, remote_archive: str, remote_script: str) -> str:
     return f"""set -eu
+if ! python3 -c 'import paramiko, qrcode' >/dev/null 2>&1; then
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y
+  apt-get install -y python3 python3-paramiko python3-qrcode openssh-client curl tar
+fi
 mkdir -p {args.remote_dir} {args.remote_dir}/data
 cd {args.remote_dir}
 tar -xf {remote_archive}
 chown -R {args.service_user}:{args.service_user} {args.remote_dir}
+python3 {args.remote_dir}/tools/install_agent_provisioning_ssh.py --service-user {args.service_user} --keys-path {args.remote_dir}/data/agent_authorized_keys
 cp {args.remote_dir}/deploy/uswest/vpn-control.service /etc/systemd/system/{args.service_name}.service
 systemctl daemon-reload
 systemctl enable --now {args.service_name} >/dev/null

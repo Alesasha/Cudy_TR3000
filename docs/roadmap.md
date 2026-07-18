@@ -1,10 +1,10 @@
 # Roadmap
 
-Updated: 2026-07-17.
+Updated: 2026-07-18.
 
 This roadmap contains remaining work only. The verified baseline is recorded
 in `docs/current-status.md` and frozen by tag
-`snapshot-2026-07-17-agents-android-1.22`.
+`snapshot-2026-07-18-android-mobile-admin-1.24`.
 
 ## Execution Rules
 
@@ -53,7 +53,7 @@ hours. A live cycle accepted a new probe job without changing the unified
 config hash or reloading libbox; the longer soak below remains required.
 
 1. Enroll a second daily-use phone and run a multi-day
-   Wi-Fi/mobile-data/background/locked-screen soak on `1.22 (23)`.
+   Wi-Fi/mobile-data/background/locked-screen soak on `1.24 (25)`.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
 3. Resolve or clearly explain the remaining Doze/battery warning.
 4. Redesign the main screen around a concise state indicator, current/latest
@@ -101,9 +101,12 @@ provider failure moves traffic to the next valid candidate.
    diagnostics and update status in plain language.
 5. Make enrollment and update behavior consistent across Windows, Linux and
    Android.
-6. Add an administrator APK download action and a protected Android provisioning
-   bundle/QR containing a one-time code plus per-device control bootstrap. Do
-   not ship an unrestricted shared SSH private key inside the universal APK.
+6. Extend the implemented APK download and protected Android provisioning flow
+   to equivalent one-click Windows/Linux installers. Android already uses a
+   one-time QR/file with a per-device restricted SSH key; the universal APK has
+   no shared private key.
+   Android `1.24` also has the minimal in-app credential-protected admin surface;
+   extend it only after the current user/device/enrollment workflow is soaked.
 7. Add automated rendered UI regression coverage for desktop and mobile
    widths; the current production UI has passed the equivalent manual check.
    Users/Agents filtering and stale default-server option reduction are now

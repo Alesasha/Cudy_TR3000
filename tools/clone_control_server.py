@@ -142,7 +142,7 @@ def prepare_target(
     command = (
         "set -eu\n"
         "if command -v apt-get >/dev/null 2>&1; then "
-        "apt-get update -y && apt-get install -y python3 python3-paramiko curl tar; "
+        "apt-get update -y && apt-get install -y python3 python3-paramiko python3-qrcode openssh-client curl tar; "
         "fi\n"
         f"id -u {shlex.quote(service_user)} >/dev/null 2>&1 || "
         f"useradd --system --home {shlex.quote(remote_dir)} --shell /usr/sbin/nologin {shlex.quote(service_user)}\n"
@@ -173,6 +173,9 @@ def install_target(
         f"tar -C {shlex.quote(remote_dir)} -xzf {shlex.quote(remote_archive)}\n"
         f"rm -f {shlex.quote(remote_archive)}\n"
         f"chown -R {shlex.quote(service_user)}:{shlex.quote(service_user)} {shlex.quote(remote_dir)}\n"
+        f"python3 {shlex.quote(posixpath.join(remote_dir, 'tools/install_agent_provisioning_ssh.py'))} "
+        f"--service-user {shlex.quote(service_user)} "
+        f"--keys-path {shlex.quote(posixpath.join(remote_dir, 'data/agent_authorized_keys'))}\n"
         f"cp {shlex.quote(posixpath.join(remote_dir, 'deploy/uswest/vpn-control.service'))} "
         f"/etc/systemd/system/{shlex.quote(service_name)}.service\n"
         "systemctl daemon-reload\n"

@@ -1,22 +1,21 @@
 # Current Status
 
-Snapshot date: 2026-07-17.
+Snapshot date: 2026-07-18.
 
-Snapshot tag: `snapshot-2026-07-17-agents-android-1.22`.
+Snapshot tag: `snapshot-2026-07-18-android-mobile-admin-1.24`.
 
 This document records the verified live state. Planned work belongs in
 `docs/roadmap.md`; historical notes are not operating instructions.
 
 ## Repository Baseline
 
-- The tagged snapshot is pushed to GitHub. The current recovery checkpoint
-  consolidates the post-snapshot safety work without tracking local secrets or
-  runtime artifacts.
+- This source tree defines the Android mobile-admin snapshot. Local secrets,
+  APKs, databases, logs and runtime artifacts remain outside version control.
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
-- Current published artifacts:
-  - Android `1.22 (23)`, SHA256
-    `b512b2553aa8cbc1b76a30c00e749eb057fa915c2b71fad9d5b5082bd15a24fa`;
+- Current agent artifacts:
+  - Android `1.24 (25)` release candidate, built and installed locally, SHA256
+    `0e85bbd48bb55c746b06858eee1efb49d60317c689bf6240255d23efe3aa3f70`;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
@@ -54,6 +53,16 @@ Verified on 2026-07-16:
 
 The control-server remains authoritative for policy, provider transport plans,
 Auto cache, probe jobs, enrollment, agent updates and admin/user UI.
+
+Android provisioning is now production-capable. The universal APK has no shared
+SSH secret. Admin creates a one-time QR/file containing a unique device key and
+enrollment code; uswest authorizes only the public key on the shell-less
+`cudy-tunnel-agent` account, restricted to forwarding the local control port.
+The physical phone completed enrollment, pinned host-key verification, policy
+fetch, VPN start, status posting and two probe jobs on Android `1.23 (24)`.
+Android `1.24 (25)` adds an in-app administrator session over the same
+restricted SSH connection: user/device CRUD and one-time device provisioning.
+The password is held only for the login request and is not persisted.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy
@@ -199,7 +208,10 @@ unchanged. The agent is still in `observe` mode.
 
 ## Android Agent
 
-Android `1.22 (23)` is published and installed on the physical MIUI test phone.
+Android `1.24 (25)` is built, signed and installed on the physical MIUI test
+phone. Its control-server update manifest and matching server changes have not
+yet been promoted because every new uswest SSH session currently times out
+during banner exchange; the existing production service remains unchanged.
 
 Verified acceptance:
 
@@ -223,9 +235,12 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
-- the current physical-device check confirms version `1.22 (23)`, an active
+- the current physical-device check confirms version `1.24 (25)`, an active
   foreground `CudyVpnService`, and a device-idle whitelist entry for
   `com.nashvpn.cudyagent`; the production package is not debuggable.
+- the Administration activity opens from the main application, is not exported
+  to other Android applications, and displays its credential-protected login
+  surface. Complete live CRUD verification awaits a healthy uswest SSH session.
 
 Remaining Android concerns:
 
@@ -235,10 +250,10 @@ Remaining Android concerns:
   a clearer user-facing status/version/update design;
 - JavaScript-only geographic decisions still require rendered probes.
 - long-running acceptance on a second, daily-use Android phone has not started;
-- the admin UI can create a one-time device code, but fresh-phone onboarding is
-  not yet fully self-contained: the administrator download and protected SSH
-  bootstrap are still separate steps. A universal APK must not embed an
-  unrestricted shared private key.
+- fresh-phone onboarding is self-contained: the admin UI serves the universal
+  APK and creates a one-time QR/file with a restricted per-device SSH key and
+  host-key pin. Windows/Linux still need the equivalent protected installer
+  flow.
 
 ## Windows Agent
 
@@ -379,10 +394,8 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Enroll the daily-use Android phone as a separate device and begin a multi-day
-Wi-Fi/mobile-data/locked-screen soak on `1.22 (23)`. Until protected bootstrap
-provisioning is integrated into the admin workflow, install the APK and SSH
-bootstrap as explicit administrator steps and use the admin UI for the
-one-time device code. In parallel, have Dima turn the Linux agent ON once and
-confirm automatic recovery to `1.23 (24)`. Do not run another Cudy route trial
-until both platform paths are stable.
+Restore reliable new SSH sessions to uswest, deploy the protected provisioning
+and mobile-admin server changes, publish the Android `1.24 (25)` manifest, and
+complete one live mobile-admin CRUD/enrollment cycle. Then enroll the daily-use
+phone as a separate device and begin the multi-day soak. In parallel, have Dima
+turn the Linux agent ON once and confirm automatic recovery to `1.23 (24)`.

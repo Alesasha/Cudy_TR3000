@@ -16,16 +16,28 @@ using System.Text.Json;
     Label = "@string/app_name",
     MainLauncher = true,
     Exported = true)]
+[IntentFilter(
+    new[] { Intent.ActionView },
+    Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
+    DataScheme = "cudyagent",
+    DataHost = "provision")]
+[IntentFilter(
+    new[] { Intent.ActionView },
+    Categories = new[] { Intent.CategoryDefault, Intent.CategoryBrowsable },
+    DataMimeType = "application/vnd.nashvpn.cudy-provisioning+json")]
 public class MainActivity : Activity
 {
     private const int VpnPrepareRequest = 1001;
     private const int NotificationPermissionRequest = 1002;
+    private const int ProvisioningFileRequest = 1003;
+    private const string ProvisioningSchema = "cudy-agent-provisioning/v1";
     private const string PostNotificationsPermission = "android.permission.POST_NOTIFICATIONS";
     private EditText? controlUrlInput;
     private EditText? deviceIdInput;
     private EditText? tokenInput;
     private EditText? sshHostInput;
     private EditText? sshUserInput;
+    private EditText? sshHostKeyInput;
     private EditText? sshKeyInput;
     private EditText? enrollmentCodeInput;
     private EditText? defaultServerInput;
@@ -61,6 +73,7 @@ public class MainActivity : Activity
         tokenInput = FindViewById<EditText>(Resource.Id.tokenInput);
         sshHostInput = FindViewById<EditText>(Resource.Id.sshHostInput);
         sshUserInput = FindViewById<EditText>(Resource.Id.sshUserInput);
+        sshHostKeyInput = FindViewById<EditText>(Resource.Id.sshHostKeyInput);
         sshKeyInput = FindViewById<EditText>(Resource.Id.sshKeyInput);
         enrollmentCodeInput = FindViewById<EditText>(Resource.Id.enrollmentCodeInput);
         defaultServerInput = FindViewById<EditText>(Resource.Id.defaultServerInput);
@@ -79,7 +92,7 @@ public class MainActivity : Activity
         permissionGuideText = FindViewById<TextView>(Resource.Id.permissionGuideText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
-            || sshHostInput is null || sshUserInput is null || sshKeyInput is null
+            || sshHostInput is null || sshUserInput is null || sshHostKeyInput is null || sshKeyInput is null
             || enrollmentCodeInput is null || defaultServerInput is null || domainInput is null
             || domainServerInput is null || lookupInput is null || autostartCheckBox is null
             || statusText is null || serviceStatusText is null || policyStatusText is null
@@ -95,6 +108,7 @@ public class MainActivity : Activity
         tokenInput.Text = preferences.GetString("token", "");
         sshHostInput.Text = preferences.GetString("ssh_host", "95.182.91.203");
         sshUserInput.Text = preferences.GetString("ssh_user", "cudy-tunnel-windows");
+        sshHostKeyInput.Text = preferences.GetString("ssh_host_key_sha256", "");
         sshKeyInput.Text = preferences.GetString("ssh_key", "");
         defaultServerInput.Text = preferences.GetString("last_default_server_id", "auto");
         autostartCheckBox.Checked = preferences.GetBoolean("autostart_enabled", true);
@@ -104,7 +118,10 @@ public class MainActivity : Activity
         RequireButton(Resource.Id.setupPermissionsButton).Click += (_, _) => SetupBackgroundPermissions();
         RequireButton(Resource.Id.statusButton).Click += (_, _) => RenderStoredStatus();
         RequireButton(Resource.Id.updateButton).Click += async (_, _) => await CheckUpdateAsync();
+        RequireButton(Resource.Id.adminButton).Click += (_, _) =>
+            StartActivity(new Intent(this, typeof(AdminActivity)));
         RequireButton(Resource.Id.enrollButton).Click += async (_, _) => await EnrollDeviceAsync();
+        RequireButton(Resource.Id.importProvisioningButton).Click += (_, _) => OpenProvisioningFile();
         RequireButton(Resource.Id.loadUiButton).Click += async (_, _) => await LoadUserUiAsync();
         RequireButton(Resource.Id.saveDefaultButton).Click += async (_, _) => await SaveDefaultServerAsync();
         RequireButton(Resource.Id.saveDomainButton).Click += async (_, _) => await SaveDomainRouteAsync();
@@ -159,6 +176,7 @@ public class MainActivity : Activity
         editor.PutString("token", tokenInput?.Text ?? "");
         editor.PutString("ssh_host", sshHostInput?.Text?.Trim() ?? "");
         editor.PutString("ssh_user", sshUserInput?.Text?.Trim() ?? "");
+        editor.PutString("ssh_host_key_sha256", sshHostKeyInput?.Text?.Trim() ?? "");
         editor.PutString("ssh_key", sshKeyInput?.Text ?? "");
         editor.PutBoolean("autostart_enabled", autostartCheckBox?.Checked ?? true);
         editor.Apply();
@@ -166,7 +184,29 @@ public class MainActivity : Activity
 
     private async void ApplyIntentSettings(Intent? intent)
     {
-        if (intent?.Extras is null)
+        if (intent is null)
+        {
+            return;
+        }
+
+        if (string.Equals(intent.Data?.Scheme, "cudyagent", StringComparison.OrdinalIgnoreCase)
+            && string.Equals(intent.Data?.Host, "provision", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                var encoded = intent.Data?.GetQueryParameter("data") ?? "";
+                var json = DecodeBase64Url(encoded);
+                await ApplyProvisioningBundleAsync(json, activate: true);
+            }
+            catch (Exception ex)
+            {
+                statusText!.Text = "Provisioning failed";
+                outputText!.Text = ex.Message;
+            }
+            return;
+        }
+
+        if (intent.Extras is null)
         {
             return;
         }
@@ -177,6 +217,7 @@ public class MainActivity : Activity
         changed |= ApplyExtra(intent, "token", tokenInput);
         changed |= ApplyExtra(intent, "ssh_host", sshHostInput);
         changed |= ApplyExtra(intent, "ssh_user", sshUserInput);
+        changed |= ApplyExtra(intent, "ssh_host_key_sha256", sshHostKeyInput);
         changed |= ApplyBase64Extra(intent, "ssh_key_b64", sshKeyInput);
         pendingDebugProbeUrl = intent.GetStringExtra("debug_probe_url") ?? "";
         pendingDebugProbeCandidates = intent.GetStringExtra("debug_probe_candidates") ?? "";
@@ -195,6 +236,74 @@ public class MainActivity : Activity
         {
             StartAgent(intent.GetBooleanExtra("control_only", false));
         }
+    }
+
+    private void OpenProvisioningFile()
+    {
+        var intent = new Intent(Intent.ActionOpenDocument);
+        intent.AddCategory(Intent.CategoryOpenable);
+        intent.SetType("*/*");
+        StartActivityForResult(intent, ProvisioningFileRequest);
+    }
+
+    private static string DecodeBase64Url(string value)
+    {
+        var normalized = value.Replace('-', '+').Replace('_', '/');
+        normalized = normalized.PadRight(normalized.Length + ((4 - normalized.Length % 4) % 4), '=');
+        return Encoding.UTF8.GetString(Convert.FromBase64String(normalized));
+    }
+
+    private async Task ApplyProvisioningBundleAsync(string json, bool activate)
+    {
+        using var document = JsonDocument.Parse(json);
+        var root = document.RootElement;
+        var schema = root.TryGetProperty("schema", out var schemaProperty)
+            ? schemaProperty.GetString() ?? ""
+            : "";
+        if (!string.Equals(schema, ProvisioningSchema, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Unsupported provisioning format.");
+        }
+        var platform = root.TryGetProperty("platform", out var platformProperty)
+            ? platformProperty.GetString() ?? ""
+            : "";
+        if (!string.Equals(platform, "android", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("This provisioning package is not for Android.");
+        }
+        var expiresAt = root.TryGetProperty("expires_at", out var expiryProperty)
+            ? expiryProperty.GetString() ?? ""
+            : "";
+        if (!DateTimeOffset.TryParse(expiresAt, out var expiry) || expiry <= DateTimeOffset.UtcNow)
+        {
+            throw new InvalidOperationException("Provisioning package has expired.");
+        }
+
+        controlUrlInput!.Text = RequiredProvisioningString(root, "control_url");
+        deviceIdInput!.Text = RequiredProvisioningString(root, "device_id");
+        sshHostInput!.Text = RequiredProvisioningString(root, "ssh_host");
+        sshUserInput!.Text = RequiredProvisioningString(root, "ssh_user");
+        sshHostKeyInput!.Text = RequiredProvisioningString(root, "ssh_host_key_sha256");
+        sshKeyInput!.Text = RequiredProvisioningString(root, "ssh_private_key");
+        enrollmentCodeInput!.Text = RequiredProvisioningString(root, "enrollment_code");
+        tokenInput!.Text = "";
+        SaveSettingsToPreferences();
+        statusText!.Text = "Provisioning imported";
+        outputText!.Text = $"device={deviceIdInput.Text}\nexpires={expiresAt}";
+        if (activate)
+        {
+            await EnrollDeviceAsync();
+        }
+    }
+
+    private static string RequiredProvisioningString(JsonElement root, string name)
+    {
+        var value = root.TryGetProperty(name, out var property) ? property.GetString() ?? "" : "";
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException($"Provisioning field is missing: {name}");
+        }
+        return value;
     }
 
     private static bool ApplyExtra(Intent intent, string key, EditText? target)
@@ -273,6 +382,7 @@ public class MainActivity : Activity
                 InputText(sshHostInput).Trim(),
                 InputText(sshUserInput).Trim(),
                 InputText(sshKeyInput),
+                InputText(sshHostKeyInput).Trim(),
                 method,
                 token,
                 path,
@@ -763,6 +873,7 @@ public class MainActivity : Activity
         intent.PutExtra("token", tokenInput!.Text);
         intent.PutExtra("ssh_host", sshHostInput!.Text);
         intent.PutExtra("ssh_user", sshUserInput!.Text);
+        intent.PutExtra("ssh_host_key_sha256", sshHostKeyInput!.Text);
         intent.PutExtra("ssh_key", sshKeyInput!.Text);
         intent.PutExtra("control_only", controlOnly);
         intent.PutExtra("debug_probe_url", pendingDebugProbeUrl);
@@ -792,9 +903,30 @@ public class MainActivity : Activity
         RenderStoredStatus();
     }
 
-    protected override void OnActivityResult(int requestCode, Result resultCode, Intent? data)
+    protected override async void OnActivityResult(int requestCode, Result resultCode, Intent? data)
     {
         base.OnActivityResult(requestCode, resultCode, data);
+        if (requestCode == ProvisioningFileRequest)
+        {
+            if (resultCode != Result.Ok || data?.Data is null)
+            {
+                statusText!.Text = "Provisioning import cancelled";
+                return;
+            }
+            try
+            {
+                using var stream = ContentResolver?.OpenInputStream(data.Data)
+                    ?? throw new InvalidOperationException("Cannot open provisioning file.");
+                using var reader = new StreamReader(stream, Encoding.UTF8);
+                await ApplyProvisioningBundleAsync(await reader.ReadToEndAsync(), activate: true);
+            }
+            catch (Exception ex)
+            {
+                statusText!.Text = "Provisioning failed";
+                outputText!.Text = ex.Message;
+            }
+            return;
+        }
         if (requestCode == VpnPrepareRequest)
         {
             var pendingStart = pendingStartAfterPrepare;

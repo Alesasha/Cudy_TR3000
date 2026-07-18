@@ -99,6 +99,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Check for updates" />
+        <Button
+            android:id="@+id/adminButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Administration" />
         <CheckBox
             android:id="@+id/autostartCheckBox"
             android:layout_width="match_parent"
@@ -126,6 +131,11 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Activate this device" />
+        <Button
+            android:id="@+id/importProvisioningButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Import provisioning file" />
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -212,6 +222,12 @@
             android:layout_height="wrap_content"
             android:hint="SSH user"
             android:inputType="text" />
+        <EditText
+            android:id="@+id/sshHostKeyInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="SSH host key SHA256"
+            android:inputType="textVisiblePassword" />
         <EditText
             android:id="@+id/sshKeyInput"
             android:layout_width="match_parent"

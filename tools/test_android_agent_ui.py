@@ -10,7 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 LAYOUT = ROOT / "apps" / "CudyAndroidAgent" / "Resources" / "layout" / "activity_main.xml"
+ADMIN_LAYOUT = ROOT / "apps" / "CudyAndroidAgent" / "Resources" / "layout" / "activity_admin.xml"
 MAIN_ACTIVITY = ROOT / "apps" / "CudyAndroidAgent" / "MainActivity.cs"
+ADMIN_ACTIVITY = ROOT / "apps" / "CudyAndroidAgent" / "AdminActivity.cs"
+ADMIN_SESSION = ROOT / "apps" / "CudyAndroidAgent" / "CudyAdminSession.cs"
 BOOT_RECEIVER = ROOT / "apps" / "CudyAndroidAgent" / "BootReceiver.cs"
 VPN_SERVICE = ROOT / "apps" / "CudyAndroidAgent" / "CudyVpnService.cs"
 CRITICAL_MONITOR = ROOT / "apps" / "CudyAndroidAgent" / "CudyCriticalServiceMonitor.cs"
@@ -21,8 +24,8 @@ ANDROID_PROBE = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidProbe.cs"
 ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
 
-def layout_ids() -> set[str]:
-    tree = ET.parse(LAYOUT)
+def layout_ids(path: Path) -> set[str]:
+    tree = ET.parse(path)
     found: set[str] = set()
     for element in tree.iter():
         value = element.attrib.get(f"{ANDROID_NS}id")
@@ -39,12 +42,13 @@ def assert_contains(path: Path, needles: list[str]) -> None:
 
 
 def main() -> int:
-    ids = layout_ids()
+    ids = layout_ids(LAYOUT)
     required_ids = {
         "startButton",
         "stopButton",
         "statusButton",
         "updateButton",
+        "adminButton",
         "autostartCheckBox",
         "enrollmentCodeInput",
         "enrollButton",
@@ -61,6 +65,20 @@ def main() -> int:
     if missing:
         raise AssertionError(f"activity_main.xml is missing ids: {', '.join(missing)}")
 
+    admin_ids = layout_ids(ADMIN_LAYOUT)
+    required_admin_ids = {
+        "adminLoginButton",
+        "adminUsersList",
+        "adminDevicesList",
+        "adminSaveUserButton",
+        "adminCreateCodeButton",
+        "adminProvisioningQrView",
+        "adminShareProvisioningButton",
+    }
+    missing_admin = sorted(required_admin_ids - admin_ids)
+    if missing_admin:
+        raise AssertionError(f"activity_admin.xml is missing ids: {', '.join(missing_admin)}")
+
     assert_contains(
         MAIN_ACTIVITY,
         [
@@ -73,6 +91,29 @@ def main() -> int:
             "EnrollDeviceAsync",
             "LoadUserUiAsync",
             "CheckUpdateAsync",
+            "typeof(AdminActivity)",
+        ],
+    )
+    assert_contains(
+        ADMIN_ACTIVITY,
+        [
+            'Exported = false',
+            '"/api/admin/users"',
+            '"/api/admin/agent-devices"',
+            '"/api/admin/enrollment-codes"',
+            'agent_only =',
+            'provision_transport = platform == "android"',
+            'Intent.ActionSend',
+        ],
+    )
+    assert_contains(
+        ADMIN_SESSION,
+        [
+            'CudyVpnService.HasSharedControl',
+            'RunSharedControlRequestAsync',
+            '"/api/login"',
+            '"/api/admin"',
+            'This account does not have the admin role',
         ],
     )
     assert_contains(

@@ -66,6 +66,7 @@ public sealed class BootReceiver : BroadcastReceiver
         var token = preferences?.GetString("token", "") ?? "";
         var sshHost = preferences?.GetString("ssh_host", "")?.Trim() ?? "";
         var sshUser = preferences?.GetString("ssh_user", "")?.Trim() ?? "";
+        var sshHostKeySha256 = preferences?.GetString("ssh_host_key_sha256", "")?.Trim() ?? "";
         var sshKey = preferences?.GetString("ssh_key", "") ?? "";
 
         if (string.IsNullOrWhiteSpace(controlUrl)
@@ -91,6 +92,7 @@ public sealed class BootReceiver : BroadcastReceiver
         serviceIntent.PutExtra("token", token);
         serviceIntent.PutExtra("ssh_host", sshHost);
         serviceIntent.PutExtra("ssh_user", sshUser);
+        serviceIntent.PutExtra("ssh_host_key_sha256", sshHostKeySha256);
         serviceIntent.PutExtra("ssh_key", sshKey);
         serviceIntent.PutExtra("control_only", false);
         if (action == Intent.ActionBootCompleted || action == Intent.ActionUserUnlocked)

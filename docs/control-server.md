@@ -109,12 +109,26 @@ Or use the local helper:
 .\tools\start-uswest-control-tunnel.ps1
 ```
 
-Then open locally:
+Then open locally. If the tunnel maps local `8765`, use:
 
 ```text
 http://127.0.0.1:8765/
 http://127.0.0.1:8765/admin
 ```
+
+The current Windows operator/agent tunnel maps local `18765` to remote `8765`;
+with that tunnel running, the production URLs are:
+
+```text
+http://127.0.0.1:18765/
+http://127.0.0.1:18765/admin
+```
+
+Do not expose the panel as public plain HTTP for phone access. A phone can use
+the minimal in-app admin UI in Android `1.24+`; it uses the provisioned
+per-device restricted SSH tunnel and still requires administrator credentials.
+Normal Android users receive the universal APK plus an admin-generated one-time
+provisioning QR/file and do not need admin access.
 
 For a Linux client agent:
 

@@ -215,10 +215,10 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
         if not args.skip_package_install:
             package_step = (
                 "if command -v apt-get >/dev/null 2>&1; then\n"
-                "  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import paramiko' >/dev/null 2>&1; then\n"
+                "  if ! command -v python3 >/dev/null 2>&1 || ! python3 -c 'import paramiko, qrcode' >/dev/null 2>&1; then\n"
                 "    export DEBIAN_FRONTEND=noninteractive\n"
                 "    apt-get update -y\n"
-                "    apt-get install -y python3 python3-paramiko curl tar\n"
+                "    apt-get install -y python3 python3-paramiko python3-qrcode openssh-client curl tar\n"
                 "  fi\n"
                 "fi\n"
             )
@@ -291,6 +291,9 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             f"chmod 0750 {shlex.quote(args.remote_dir)} {shlex.quote(args.remote_dir + '/data')}\n"
             f"[ ! -f {shlex.quote(args.remote_dir + '/data/vpn_control.db')} ] || chmod 0600 {shlex.quote(args.remote_dir + '/data/vpn_control.db')}\n"
             f"[ ! -d {shlex.quote(args.remote_dir + '/secrets')} ] || chmod -R go-rwx {shlex.quote(args.remote_dir + '/secrets')}\n"
+            f"python3 {shlex.quote(args.remote_dir + '/tools/install_agent_provisioning_ssh.py')} "
+            f"--service-user {shlex.quote(args.service_user)} "
+            f"--keys-path {shlex.quote(args.remote_dir + '/data/agent_authorized_keys')}\n"
             f"cp {shlex.quote(args.remote_dir + '/deploy/uswest/vpn-control.service')} /etc/systemd/system/{shlex.quote(args.service_name)}.service\n"
             "systemctl daemon-reload\n"
             f"systemctl enable --now {shlex.quote(args.service_name)}\n"

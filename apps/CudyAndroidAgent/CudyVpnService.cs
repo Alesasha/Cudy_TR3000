@@ -27,17 +27,21 @@ public class CudyVpnService : VpnService
     private const int NotificationId = 24061;
     private const string NotificationChannelId = "cudy-agent";
     private const string LogTag = "CudyAgent";
+    private static readonly object ActiveInstanceLock = new();
+    private static WeakReference<CudyVpnService>? activeInstance;
 
     private ParcelFileDescriptor? tun;
     private CancellationTokenSource? loopCts;
     private Task? loopTask;
     private SshClient? sshClient;
+    private readonly object sshRequestLock = new();
     private CudyAndroidLibboxEngine? libboxEngine;
     private bool useSshControl;
     private readonly object policyRoutesLock = new();
     private List<(string Address, int Prefix)> policyIpv4Routes = new();
     private string sshControlHost = "";
     private string sshControlUser = "";
+    private string sshControlHostKeySha256 = "";
     private string sshControlKey = "";
     private string debugProbeUrl = "";
     private string debugProbeCandidates = "";
@@ -45,6 +49,45 @@ public class CudyVpnService : VpnService
     private IReadOnlyList<CudyCriticalService> criticalServices = Array.Empty<CudyCriticalService>();
     private int consecutiveCriticalFailures;
     private string activeStartFingerprint = "";
+
+    public override void OnCreate()
+    {
+        base.OnCreate();
+        lock (ActiveInstanceLock)
+        {
+            activeInstance = new WeakReference<CudyVpnService>(this);
+        }
+    }
+
+    public static bool HasSharedControl
+    {
+        get
+        {
+            lock (ActiveInstanceLock)
+            {
+                return activeInstance is not null
+                    && activeInstance.TryGetTarget(out var service)
+                    && service.useSshControl;
+            }
+        }
+    }
+
+    public static Task<CudySshControl.ControlResponse> RunSharedControlRequestAsync(
+        string method,
+        string? cookie,
+        string path,
+        string? body)
+    {
+        CudyVpnService service;
+        lock (ActiveInstanceLock)
+        {
+            if (activeInstance is null || !activeInstance.TryGetTarget(out service!))
+            {
+                throw new InvalidOperationException("The Android agent service is not running.");
+            }
+        }
+        return Task.Run(() => service.RunSharedControlRequest(method, cookie, path, body));
+    }
 
     public override StartCommandResult OnStartCommand(Intent? intent, StartCommandFlags flags, int startId)
     {
@@ -60,6 +103,15 @@ public class CudyVpnService : VpnService
 
     public override void OnDestroy()
     {
+        lock (ActiveInstanceLock)
+        {
+            if (activeInstance is not null
+                && activeInstance.TryGetTarget(out var service)
+                && ReferenceEquals(service, this))
+            {
+                activeInstance = null;
+            }
+        }
         StopAgent("stopped");
         base.OnDestroy();
     }
@@ -71,6 +123,7 @@ public class CudyVpnService : VpnService
         var token = intent?.GetStringExtra("token") ?? "";
         var sshHost = (intent?.GetStringExtra("ssh_host") ?? "").Trim();
         var sshUser = (intent?.GetStringExtra("ssh_user") ?? "").Trim();
+        var sshHostKeySha256 = (intent?.GetStringExtra("ssh_host_key_sha256") ?? "").Trim();
         var sshKey = intent?.GetStringExtra("ssh_key") ?? "";
         var controlOnly = intent?.GetBooleanExtra("control_only", false) ?? false;
         var startupDelaySeconds = Math.Clamp(intent?.GetIntExtra("startup_delay_seconds", 0) ?? 0, 0, 300);
@@ -90,6 +143,7 @@ public class CudyVpnService : VpnService
             deviceId,
             sshHost,
             sshUser,
+            sshHostKeySha256,
             controlOnly);
         if (loopTask is { IsCompleted: false }
             && string.Equals(activeStartFingerprint, startFingerprint, StringComparison.Ordinal))
@@ -105,6 +159,7 @@ public class CudyVpnService : VpnService
         {
             sshControlHost = sshHost;
             sshControlUser = sshUser;
+            sshControlHostKeySha256 = sshHostKeySha256;
             sshControlKey = sshKey;
             useSshControl = true;
             SaveServiceStatus("ssh control pending");
@@ -132,18 +187,23 @@ public class CudyVpnService : VpnService
         libboxEngine?.Stop();
         tun?.Close();
         tun = null;
-        try
+        lock (sshRequestLock)
         {
-            sshClient?.Disconnect();
+            try
+            {
+                sshClient?.Disconnect();
+                sshClient?.Dispose();
+            }
+            catch
+            {
+                // Best effort shutdown.
+            }
+            sshClient = null;
         }
-        catch
-        {
-            // Best effort shutdown.
-        }
-        sshClient = null;
         useSshControl = false;
         sshControlHost = "";
         sshControlUser = "";
+        sshControlHostKeySha256 = "";
         sshControlKey = "";
         debugProbeUrl = "";
         debugProbeCandidates = "";
@@ -161,6 +221,7 @@ public class CudyVpnService : VpnService
         string deviceId,
         string sshHost,
         string sshUser,
+        string sshHostKeySha256,
         bool controlOnly)
     {
         var value = string.Join(
@@ -169,38 +230,84 @@ public class CudyVpnService : VpnService
             deviceId,
             sshHost,
             sshUser,
+            sshHostKeySha256,
             controlOnly ? "control-only" : "vpn");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }
 
-    private void StartSshControl(string host, string user, string privateKey)
+    private void StartSshControl(string host, string user, string privateKey, string hostKeySha256)
     {
-        sshClient?.Disconnect();
-        sshClient = null;
+        lock (sshRequestLock)
+        {
+            sshClient?.Disconnect();
+            sshClient?.Dispose();
+            sshClient = null;
 
-        var client = CudySshControl.CreateClient(host, user, privateKey);
-        Log.Info(LogTag, $"SSH control connecting {host}:22");
-        client.Connect();
+            var client = CudySshControl.CreateClient(host, user, privateKey, hostKeySha256);
+            Log.Info(LogTag, $"SSH control connecting {host}:22");
+            client.Connect();
 
-        sshClient = client;
-        sshControlHost = host;
-        sshControlUser = user;
-        sshControlKey = privateKey;
-        SaveServiceStatus("ssh control ok");
-        Log.Info(LogTag, $"SSH control ok {host}:22 -> 127.0.0.1:8765");
+            sshClient = client;
+            sshControlHost = host;
+            sshControlUser = user;
+            sshControlHostKeySha256 = hostKeySha256;
+            sshControlKey = privateKey;
+            SaveServiceStatus("ssh control ok");
+            Log.Info(LogTag, $"SSH control ok {host}:22 -> 127.0.0.1:8765");
+        }
     }
 
     private string RunSshControlWithRetry(string method, string token, string path, string? body)
     {
-        try
+        lock (sshRequestLock)
         {
-            return RunSshControlOnce(method, token, path, body);
+            try
+            {
+                return RunSshControlOnce(method, token, path, body);
+            }
+            catch (Exception firstError)
+            {
+                Log.Warn(LogTag, $"SSH control request failed, reconnecting once: {firstError.Message}");
+                ReconnectSshControl();
+                return RunSshControlOnce(method, token, path, body);
+            }
         }
-        catch (Exception firstError)
+    }
+
+    private CudySshControl.ControlResponse RunSharedControlRequest(
+        string method,
+        string? cookie,
+        string path,
+        string? body)
+    {
+        lock (sshRequestLock)
         {
-            Log.Warn(LogTag, $"SSH control command failed, reconnecting once: {firstError.Message}");
-            ReconnectSshControl();
-            return RunSshControlOnce(method, token, path, body);
+            try
+            {
+                if (sshClient?.IsConnected != true)
+                {
+                    ReconnectSshControl();
+                }
+                return CudySshControl.RunControlRequestDetailed(
+                    sshClient ?? throw new InvalidOperationException("SSH control client is not connected."),
+                    method,
+                    null,
+                    cookie,
+                    path,
+                    body);
+            }
+            catch (Exception firstError)
+            {
+                Log.Warn(LogTag, $"Shared admin request failed, reconnecting once: {firstError.Message}");
+                ReconnectSshControl();
+                return CudySshControl.RunControlRequestDetailed(
+                    sshClient ?? throw new InvalidOperationException("SSH control client is not connected."),
+                    method,
+                    null,
+                    cookie,
+                    path,
+                    body);
+            }
         }
     }
 
@@ -214,7 +321,7 @@ public class CudyVpnService : VpnService
         {
             ReconnectSshControl();
         }
-        return CudySshControl.RunCurl(
+        return CudySshControl.RunControlRequest(
             sshClient ?? throw new InvalidOperationException("SSH control client is not connected."),
             method,
             token,
@@ -241,7 +348,11 @@ public class CudyVpnService : VpnService
             // Best effort reconnect.
         }
 
-        var client = CudySshControl.CreateClient(sshControlHost, sshControlUser, sshControlKey);
+        var client = CudySshControl.CreateClient(
+            sshControlHost,
+            sshControlUser,
+            sshControlKey,
+            sshControlHostKeySha256);
         client.Connect();
         sshClient = client;
         Log.Info(LogTag, $"SSH control reconnected {sshControlHost}:22");

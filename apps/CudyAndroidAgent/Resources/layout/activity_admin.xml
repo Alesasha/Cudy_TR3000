@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="18dp">
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Administration"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/adminStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingTop="6dp"
+            android:text="Sign in with an administrator account. The password is not stored."
+            android:textSize="14sp" />
+        <EditText
+            android:id="@+id/adminUsernameInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Administrator"
+            android:inputType="text" />
+        <EditText
+            android:id="@+id/adminPasswordInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Password"
+            android:inputType="textPassword" />
+        <Button
+            android:id="@+id/adminLoginButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Sign in" />
+
+        <LinearLayout
+            android:id="@+id/adminManagementContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <Button
+                android:id="@+id/adminRefreshButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Refresh" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="18dp"
+                android:text="Users"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+            <EditText
+                android:id="@+id/adminUserIdInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="User ID" />
+            <EditText
+                android:id="@+id/adminUserNameInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Display name" />
+            <Spinner
+                android:id="@+id/adminUserRoleSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="48dp" />
+            <EditText
+                android:id="@+id/adminUserDefaultServerInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Default server"
+                android:text="auto" />
+            <EditText
+                android:id="@+id/adminUserClientIpInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Client IP (optional)"
+                android:inputType="text" />
+            <EditText
+                android:id="@+id/adminUserPasswordInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="New password (optional, 8+ chars)"
+                android:inputType="textPassword" />
+            <CheckBox
+                android:id="@+id/adminUserEnabledCheckBox"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="Enabled" />
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <Button
+                    android:id="@+id/adminNewUserButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="New" />
+                <Button
+                    android:id="@+id/adminSaveUserButton"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="Save" />
+            </LinearLayout>
+            <LinearLayout
+                android:id="@+id/adminUsersList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="18dp"
+                android:text="Devices"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+            <LinearLayout
+                android:id="@+id/adminDevicesList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="18dp"
+                android:text="New device"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+            <Spinner
+                android:id="@+id/adminEnrollmentUserSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="48dp" />
+            <Spinner
+                android:id="@+id/adminEnrollmentPlatformSpinner"
+                android:layout_width="match_parent"
+                android:layout_height="48dp" />
+            <EditText
+                android:id="@+id/adminEnrollmentDeviceInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Device ID" />
+            <EditText
+                android:id="@+id/adminEnrollmentNameInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Device name" />
+            <EditText
+                android:id="@+id/adminEnrollmentTtlInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="TTL hours"
+                android:inputType="number"
+                android:text="24" />
+            <Button
+                android:id="@+id/adminCreateCodeButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Create one-time code" />
+            <TextView
+                android:id="@+id/adminEnrollmentResultText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="8dp"
+                android:textIsSelectable="true" />
+            <WebView
+                android:id="@+id/adminProvisioningQrView"
+                android:layout_width="260dp"
+                android:layout_height="260dp"
+                android:layout_gravity="center_horizontal"
+                android:visibility="gone" />
+            <Button
+                android:id="@+id/adminShareProvisioningButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:enabled="false"
+                android:text="Share Android setup" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>
