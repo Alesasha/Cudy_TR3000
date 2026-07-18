@@ -202,7 +202,13 @@ def main() -> int:
     assert_contains(installer, "cannot query GitHub release API", label="install_singbox_runtime.sh")
     assert_contains(start_tunnel, "-o BatchMode=yes", label="start_tunnel.sh")
     assert_contains(start_tunnel, "-o IdentitiesOnly=yes", label="start_tunnel.sh")
-    assert_contains(start_tunnel, "-o StrictHostKeyChecking=accept-new", label="start_tunnel.sh")
+    assert_contains(start_tunnel, "STRICT_HOST_KEY_CHECKING=accept-new", label="start_tunnel.sh")
+    assert_contains(start_tunnel, "STRICT_HOST_KEY_CHECKING=yes", label="start_tunnel.sh")
+    assert_contains(
+        start_tunnel,
+        '-o StrictHostKeyChecking="$STRICT_HOST_KEY_CHECKING"',
+        label="start_tunnel.sh",
+    )
     assert_contains(start_tunnel, "CONTROL_CONNECT_TIMEOUT", label="start_tunnel.sh")
     assert_contains(managed, "CONTROL_TUNNEL_WAIT_SECONDS", label="managed_agent.sh")
     assert_contains(managed, "stop_control_tunnel()", label="managed_agent.sh")

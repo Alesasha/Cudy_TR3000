@@ -302,8 +302,7 @@ Remaining Android concerns:
 - JavaScript-only geographic decisions still require rendered probes.
 - long-running acceptance on the two newly activated phones is now in progress;
 - fresh-phone onboarding is self-contained: the admin UI serves the universal
-  APK and creates a copyable one-time code. Windows/Linux still need equivalent
-  code-only bootstrap clients.
+  APK and creates a copyable one-time code.
 
 ## Windows Agent
 
@@ -311,6 +310,12 @@ Remaining Android concerns:
 - Packaging, cached-policy fallback, emergency stop and watchdog regression
   tests exist.
 - The development workstation scheduled task is intentionally disabled.
+- A universal desktop package can now activate a fresh Windows installation
+  with the same one-time code used by Android. The bootstrap SSH key is pinned
+  to the production host key and can forward only to the enrollment listener;
+  successful enrollment stores a unique device token/key and strict
+  `known_hosts` entry. Local packaging and static regression pass; a fresh
+  physical Windows acceptance and production download surface remain.
 - Normal traffic on this workstation must not depend on an unaccepted agent
   build while Codex development is active.
 - A dedicated standalone `OpenAI-USWest` recovery transport is active and
@@ -332,6 +337,11 @@ Remaining Android concerns:
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.
+- A universal Linux package now accepts a one-time code, obtains a unique
+  device token and SSH key through the restricted enrollment listener, writes
+  `agent.env` atomically, pins the control-server host key, and installs the
+  service in the OFF state. Local package and shell/static regressions pass;
+  fresh-machine acceptance and production distribution remain.
 - The systemd-owned control tunnel is now the only SSH tunnel owner. The UI
   and diagnostics wait for it instead of killing and recreating the shared
   forward, while startup removes only exact orphaned forwards left by a crash.

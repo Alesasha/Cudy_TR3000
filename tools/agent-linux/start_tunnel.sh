@@ -18,6 +18,11 @@ CONTROL_REMOTE_PORT="$(strip_cr "${CONTROL_REMOTE_PORT:-8765}")"
 SSH_KEY="$(strip_cr "${SSH_KEY:-./uswest_control_tunnel_ed25519}")"
 CONTROL_CONNECT_TIMEOUT="$(strip_cr "${CONTROL_CONNECT_TIMEOUT:-12}")"
 KNOWN_HOSTS_FILE="$(strip_cr "${KNOWN_HOSTS_FILE:-./known_hosts}")"
+if [ -f "$KNOWN_HOSTS_FILE" ]; then
+  STRICT_HOST_KEY_CHECKING=yes
+else
+  STRICT_HOST_KEY_CHECKING=accept-new
+fi
 
 pin_control_route() {
   local gw_dev gw dev
@@ -64,7 +69,7 @@ exec ssh \
   -o IdentitiesOnly=yes \
   -o PasswordAuthentication=no \
   -o KbdInteractiveAuthentication=no \
-  -o StrictHostKeyChecking=accept-new \
+  -o StrictHostKeyChecking="$STRICT_HOST_KEY_CHECKING" \
   -o UserKnownHostsFile="$KNOWN_HOSTS_FILE" \
   -o ExitOnForwardFailure=yes \
   -o ConnectTimeout="$CONTROL_CONNECT_TIMEOUT" \

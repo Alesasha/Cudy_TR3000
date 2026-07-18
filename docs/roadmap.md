@@ -112,6 +112,10 @@ provider failure moves traffic to the next valid candidate.
    enrollment flow to equivalent one-click Windows/Linux installers. Android
    uses a shared SSH bootstrap account restricted to the enrollment-only port,
    then receives a unique per-device SSH key and token after consuming the code.
+   Universal Windows/Linux packages and enrollment clients are now built
+   locally with pinned SSH host identity and no personalized device material.
+   Production download wiring and one fresh-device acceptance per platform are
+   still required.
    Android `1.26` also has the minimal in-app credential-protected admin surface;
    extend it only after the current user/device/enrollment workflow is soaked.
 7. Add automated rendered UI regression coverage for desktop and mobile

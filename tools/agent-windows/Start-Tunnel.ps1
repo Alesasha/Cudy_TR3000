@@ -2,6 +2,7 @@ param(
     [string]$HostName = "95.182.91.203",
     [string]$User = "cudy-tunnel-windows",
     [string]$KeyPath = "$PSScriptRoot\uswest_control_tunnel_ed25519",
+    [string]$KnownHostsPath = "$PSScriptRoot\known_hosts",
     [int]$LocalPort = 18765,
     [int]$RemotePort = 8765
 )
@@ -62,10 +63,22 @@ if (Test-Admin) {
 Write-Host "Opening SSH tunnel: http://127.0.0.1:$LocalPort -> ${User}@${HostName}:127.0.0.1:$RemotePort"
 Write-Host "Keep this window open while the agent is running."
 
-ssh -i $KeyPath `
-    -o ExitOnForwardFailure=yes `
-    -o ConnectTimeout=60 `
-    -o ServerAliveInterval=30 `
-    -o ServerAliveCountMax=3 `
-    -N -L "${LocalPort}:127.0.0.1:${RemotePort}" `
+$strictHostMode = if (Test-Path -LiteralPath $KnownHostsPath) { "yes" } else { "accept-new" }
+$sshArgs = @(
+    "-i", $KeyPath,
+    "-p", "22",
+    "-o", "BatchMode=yes",
+    "-o", "IdentitiesOnly=yes",
+    "-o", "PasswordAuthentication=no",
+    "-o", "KbdInteractiveAuthentication=no",
+    "-o", "StrictHostKeyChecking=$strictHostMode",
+    "-o", "UserKnownHostsFile=$KnownHostsPath",
+    "-o", "ExitOnForwardFailure=yes",
+    "-o", "ConnectTimeout=12",
+    "-o", "ConnectionAttempts=1",
+    "-o", "ServerAliveInterval=30",
+    "-o", "ServerAliveCountMax=3",
+    "-N", "-L", "${LocalPort}:127.0.0.1:${RemotePort}",
     "${User}@${HostName}"
+)
+& ssh @sshArgs

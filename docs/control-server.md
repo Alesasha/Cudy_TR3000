@@ -133,6 +133,21 @@ forward only to the enrollment listener on `127.0.0.1:8766`; successful
 activation replaces it with a unique per-device key for the normal control
 listener.
 
+Windows and Linux use the same one-time-code contract. Build fresh universal
+desktop archives without any personalized device material:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Build-UniversalAgentPackages.ps1
+```
+
+The resulting `build/universal-agents/Cudy-Agent-*-universal.zip` files contain
+the restricted enrollment bootstrap key and the pinned public SSH host key.
+After extraction, Windows runs `Install-UniversalAgent.ps1`; Linux runs
+`bash ./install_universal.sh`. A successful activation writes the individual
+token, SSH private key and strict `known_hosts` entry locally. Never publish a
+pre-enrolled `agent.env*` or `uswest_control_tunnel_ed25519` file as a universal
+package.
+
 For a Linux client agent:
 
 ```bash
