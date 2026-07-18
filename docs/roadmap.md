@@ -167,8 +167,11 @@ Prerequisite: guarded apply is accepted and stable.
    disabled/unencrypted Cudy Wi-Fi, six forward targets without AirTies DHCP
    reservations, and four maintenance host routes through the old gateway.
 3. Prepare a physical cable and address rollback that does not depend on VPN or
-   the control-server.
-4. Add a router-level watchdog for WAN, LAN, control and user-critical services.
+   the control-server. The independent configuration rollback service is now
+   installed, disarmed and backed up; physical rollback is still required.
+4. Completed for cutover safety: install an independent structural
+   LAN/default-route/WAN-gateway guard with timed rollback. Add non-destructive
+   user-critical service monitoring separately after Cudy owns the LAN.
 5. Move one responsibility at a time, starting with a maintenance window and a
    single test client before changing the whole LAN.
 6. Keep AirTies ready for immediate rollback until a multi-day soak passes.
@@ -178,8 +181,14 @@ tests as the LAN gateway without one-to-two-minute traffic stalls.
 
 ## Phase 7: Disaster Recovery And Control Migration
 
-1. Verify scheduled SQLite/config backups and Cudy state freshness.
+1. Completed on 2026-07-18: the scheduled backup uses the private Cudy path,
+   has a zero last result, and the newest archive passed required-member,
+   metadata, secret-presence and SQLite integrity checks. Cudy fallback state
+   remains independently freshness-checked.
 2. Clone `uswest` to a disposable replacement VPS from a current backup.
+   The local isolated restore rehearsal passed on 2026-07-18, including safe
+   extraction, restored DB summary, `/healthz` and `/readyz`; the clean-VPS
+   network/systemd test remains.
 3. Change the endpoint manifest through Cudy and prove agents discover the new
    primary without individual manual edits.
 4. Exercise primary-down operation and return to the restored primary.

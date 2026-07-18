@@ -6,7 +6,8 @@ param(
     [string]$OutputDir = "$PSScriptRoot\..\backups\control-server",
     [string]$LogPath = "$PSScriptRoot\..\backups\control-server\backup-task.log",
     [int]$KeepLocal = 10,
-    [switch]$ViaTunnelUser
+    [switch]$ViaTunnelUser,
+    [switch]$Direct
 )
 
 $ErrorActionPreference = "Stop"
@@ -36,28 +37,46 @@ if (-not $env:CONTROL_BACKUP_SSH_PASSWORD) {
 try {
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -LiteralPath $logPathResolved -Encoding UTF8 -Value "[$stamp] starting backup host=$HostName"
-    if ($ViaTunnelUser) {
-        $backupOutput = & $Python $script `
-            --host $HostName `
-            --output-dir $outputDirResolved `
-            --keep-local $KeepLocal 2>&1
-    } else {
-        $backupOutput = & $Python $script `
-            --host $HostName `
-            --user $User `
-            --output-dir $outputDirResolved `
-            --keep-local $KeepLocal 2>&1
+    $nativeErrorPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        if ($ViaTunnelUser) {
+            $backupOutput = & $Python $script `
+                --host $HostName `
+                --output-dir $outputDirResolved `
+                --keep-local $KeepLocal 2>&1
+        } elseif ($Direct) {
+            $backupOutput = & $Python $script `
+                --host $HostName `
+                --user $User `
+                --output-dir $outputDirResolved `
+                --keep-local $KeepLocal 2>&1
+        } else {
+            $backupOutput = & $Python $script `
+                --host $HostName `
+                --user $User `
+                --via-cudy `
+                --output-dir $outputDirResolved `
+                --keep-local $KeepLocal 2>&1
+        }
+        $backupExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $nativeErrorPreference
     }
     $backupOutput | ForEach-Object {
         $line = [string]$_
         Write-Host $line
         Add-Content -LiteralPath $logPathResolved -Encoding UTF8 -Value $line
     }
-    if ($LASTEXITCODE -ne 0) {
-        throw "backup_control_server.py failed with exit code $LASTEXITCODE"
+    if ($backupExitCode -ne 0) {
+        throw "backup_control_server.py failed with exit code $backupExitCode"
     }
     $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     Add-Content -LiteralPath $logPathResolved -Encoding UTF8 -Value "[$stamp] backup completed"
+} catch {
+    $stamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Add-Content -LiteralPath $logPathResolved -Encoding UTF8 -Value "[$stamp] backup failed: $($_.Exception.Message)"
+    throw
 } finally {
     if ($setPasswordForProcess) {
         Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD -ErrorAction SilentlyContinue

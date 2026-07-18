@@ -138,3 +138,35 @@ resolve before cutover:
   these disabled on Cudy.
 - Both Cudy Wi-Fi interfaces are currently disabled and configured without
   encryption. Configure encrypted SSIDs and test them before moving LAN clients.
+
+## Independent Cutover Guard
+
+The `cudy-main-router-guard` service is installed on Cudy, starts at boot and is
+inert until explicitly armed. Its current status must remain `armed=no` during
+normal operation:
+
+```powershell
+python tools\deploy_cudy_main_router_guard.py --check-only --json
+```
+
+Immediately before a planned cutover, first create the mandatory full OpenWrt
+`sysupgrade -b` archive and verify the physical rollback. Only then arm the
+on-router guard from an SSH session that does not depend on the route being
+changed:
+
+```sh
+/usr/bin/cudy-main-router-guard arm 900 90
+```
+
+This creates and verifies a fresh root-only backup of network, DHCP, firewall
+and wireless UCI files. The trial must be explicitly accepted after all LAN,
+WAN and local recovery checks pass:
+
+```sh
+/usr/bin/cudy-main-router-guard commit
+```
+
+If the expected LAN address, default route or configured WAN gateway fails
+repeatedly, or the 15-minute deadline expires without `commit`, the guard
+restores the saved files and reboots. A provider or public website outage alone
+does not cause rollback.

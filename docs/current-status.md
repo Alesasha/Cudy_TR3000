@@ -17,8 +17,8 @@ This document records the verified live state. Planned work belongs in
   - Android `1.27 (28)` published APK, SHA256
     `7546c679c9ee0d5b4289867533eb578fdc7d4fabd840046fdd8d7706c18a6213`;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
-  - Windows `1.20 (21)`, SHA256
-    `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
+  - Windows `1.24 (25)`, SHA256
+    `e5cd332ef12a3804b189b3f4d2908cf3e1ec28d418be4a554618db6e5ef1602f`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
   access, bounded fallback retries and the Windows OpenAI-maintenance source.
 
@@ -50,7 +50,9 @@ Verified on 2026-07-18:
   route is removed. A deliberate route-deletion test recovered automatically
   and private SSH then passed end to end;
 - the scheduled operator backup and Cudy fallback-sync tasks both have a zero
-  last result; the latest pulled backup archive is dated 2026-07-16.
+  last result. The backup task now uses the private
+  `PC -> Cudy -> awg2 -> uswest` path by default; the 2026-07-18 archive passed
+  member, metadata, secret-presence and SQLite integrity checks.
 
 The control-server remains authoritative for policy, provider transport plans,
 Auto cache, probe jobs, enrollment, agent updates and admin/user UI.
@@ -235,8 +237,20 @@ its independent on-router timer restored the previous files, 24 PBR rules,
 committed route trial also reached healthy state, retained the generated route
 files and returned the agent to `observe`. Subsequent strict fallback and
 observer checks report live policy, 31 routes, critical health 5/5, zero changed
-files, zero blockers, zero warnings and zero transport actions. Phase 5 guarded
-apply is therefore accepted; ongoing soak remains before DHCP/WAN migration.
+files, zero blockers, zero warnings and zero transport actions at acceptance.
+Phase 5 guarded apply is therefore accepted; ongoing soak remains before
+DHCP/WAN migration. The latest read-only check now reports nine pending PBR
+file differences caused by newer Auto winners, while blockers, warnings and
+transport actions remain zero. They require another guarded apply/commit window
+and are not applied automatically while the agent stays in `observe`.
+
+An independent `cudy-main-router-guard` service is installed and running on
+Cudy. It is currently disarmed and its pre-cutover configuration backup passes
+SHA256 verification. When explicitly armed during a maintenance window, it
+checks only structural LAN/default-route/WAN-gateway health and restores the
+saved OpenWrt network, DHCP, firewall and wireless configuration if the trial
+fails or is not committed before its deadline. It deliberately does not use an
+external website outage as a rollback trigger.
 
 Some router-local TUN diagnostics can produce false failures. For
 `http-proxy-tun` transports the observer now probes the upstream HTTP proxy
@@ -462,5 +476,7 @@ Remaining Android concerns:
 
 Continue the Android `1.27 (28)` daily-use soak across Wi-Fi, mobile data, lock
 and reboot. The fresh Cudy main-router preflight completed with no hard failure;
-prepare encrypted Cudy Wi-Fi, VLAN 2 validation, missing static forward-target
-addresses and an independent physical/config rollback before moving DHCP/WAN.
+prepare encrypted Cudy Wi-Fi, VLAN 2 validation and missing static
+forward-target addresses before moving DHCP/WAN. The independent config
+rollback guard is installed and disarmed; a physical cable/address rollback is
+still mandatory.

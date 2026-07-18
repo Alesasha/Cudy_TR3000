@@ -381,6 +381,16 @@ python tools\backup_control_server.py --connect-attempts 5
 Remove-Item Env:CONTROL_BACKUP_SSH_PASSWORD
 ```
 
+The scheduled wrapper uses the verified private path through Cudy by default,
+so it does not depend on the intermittent public SSH banner:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\Run-ControlBackup.ps1
+```
+
+Use `-Direct` only when intentionally testing public root SSH. The
+`-ViaTunnelUser` switch remains available as a public-SSH fallback.
+
 If direct root SSH is unreliable at the SSH banner stage, use the tunnel-user
 backup path. It connects with the same restricted SSH key used by agents, then
 uses `su root` on the server to create the archive:
@@ -407,6 +417,27 @@ stopped. The archive includes, by default:
 
 Local backup archives are written to `backups/control-server/` and the newest 10
 are kept by default. These files contain secrets and are ignored by git.
+
+Verify the newest archive without exposing its contents:
+
+```powershell
+python tools\verify_control_backup.py
+```
+
+The verifier checks the required restore files and metadata, confirms that a
+full archive contains secret files, extracts only the SQLite database into a
+temporary directory, and runs `PRAGMA integrity_check`.
+
+Rehearse extraction and startup locally in an isolated temporary directory:
+
+```powershell
+python tools\rehearse_control_restore.py
+```
+
+The rehearsal rejects unsafe archive members, runs the restored database
+summary, starts the restored HTTP application with background workers disabled,
+checks `/healthz` and `/readyz`, then deletes the temporary copy including its
+secrets. It does not replace the final clone test on a clean VPS.
 
 Use `--no-secrets` only for a shareable diagnostic archive. A no-secrets backup
 is not sufficient for a seamless restore because provider refresh credentials

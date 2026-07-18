@@ -145,6 +145,12 @@ def run_backup_timeout_contract_check() -> None:
 
     direct_source = (ROOT / "tools" / "backup_control_server.py").read_text(encoding="utf-8")
     tunnel_source = (ROOT / "tools" / "backup_control_server_via_tunnel_user.py").read_text(encoding="utf-8")
+    runner_source = (ROOT / "tools" / "Run-ControlBackup.ps1").read_text(encoding="utf-8-sig")
+    assert "--via-cudy" in direct_source
+    assert "connect_via_cudy" in direct_source
+    assert '"ssh_via_cudy" if args.via_cudy' in direct_source
+    assert "--via-cudy" in runner_source
+    assert "backup failed:" in runner_source
     assert_true("remote command timed out" in direct_source, "direct backup should fail remote commands on timeout")
     assert_true("sftp.get_channel().settimeout(args.timeout)" in direct_source, "direct backup should bound SFTP operations")
     assert_true("sftp.get_channel().settimeout(args.timeout)" in tunnel_source, "tunnel backup should bound SFTP operations")

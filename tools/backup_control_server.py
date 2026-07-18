@@ -27,6 +27,9 @@ DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_OUTPUT_DIR = Path("backups") / "control-server"
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
+DEFAULT_CUDY_HOST = "192.168.8.1"
+DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
+DEFAULT_PRIVATE_HOST = "172.29.172.1"
 
 
 def ssh_password(explicit: str | None, *, host: str) -> str:
@@ -81,6 +84,65 @@ def connect(
                 break
             time.sleep(min(20, 2 * attempt))
     raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error
+
+
+def cudy_password(explicit: str | None, password_file: Path) -> str:
+    if explicit:
+        return explicit
+    value = os.environ.get("CUDY_SSH_PASSWORD", "").strip()
+    if value:
+        return value
+    if password_file.exists():
+        value = password_file.read_text(encoding="utf-8-sig").strip()
+        if value:
+            return value
+    if not sys.stdin.isatty():
+        raise RuntimeError(f"Cudy SSH password is required in {password_file}")
+    return getpass.getpass("Cudy SSH password: ")
+
+
+def connect_via_cudy(
+    args: argparse.Namespace,
+    password: str,
+) -> tuple[paramiko.SSHClient, paramiko.SSHClient]:
+    router = connect(
+        args.cudy_host,
+        args.cudy_user,
+        cudy_password(args.cudy_password, args.cudy_password_file),
+        args.timeout,
+        attempts=args.connect_attempts,
+    )
+    try:
+        ssh_exec(
+            router,
+            f"ip -4 route replace {shlex.quote(args.private_host)}/32 dev {shlex.quote(args.cudy_awg_interface)}",
+            args.timeout,
+        )
+        transport = router.get_transport()
+        if transport is None or not transport.is_active():
+            raise RuntimeError("Cudy SSH transport is not active")
+        channel = transport.open_channel(
+            "direct-tcpip",
+            (args.private_host, args.private_port),
+            ("127.0.0.1", 0),
+            timeout=args.timeout,
+        )
+        try:
+            target = connect(
+                args.private_host,
+                args.user,
+                password,
+                args.timeout,
+                attempts=1,
+                sock=channel,
+            )
+        except Exception:
+            channel.close()
+            raise
+        return router, target
+    except Exception:
+        router.close()
+        raise
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
@@ -188,7 +250,11 @@ def backup(args: argparse.Namespace) -> dict[str, Any]:
     password = ssh_password(args.ssh_password, host=args.host)
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
+    router_client: paramiko.SSHClient | None = None
+    if args.via_cudy:
+        router_client, client = connect_via_cudy(args, password)
+    else:
+        client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
     remote_archive = ""
     local_archive = output_dir / "not-created.tgz"
     size = 0
@@ -219,12 +285,15 @@ def backup(args: argparse.Namespace) -> dict[str, Any]:
             except Exception:
                 pass
         client.close()
+        if router_client is not None:
+            router_client.close()
     return {
         "host": args.host,
         "archive": str(local_archive),
         "bytes": size,
         "removed": [str(path) for path in removed],
         "includes_secrets": not args.no_secrets,
+        "mode": "ssh_via_cudy" if args.via_cudy else "ssh_direct",
     }
 
 
@@ -236,6 +305,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)
+    parser.add_argument("--via-cudy", action="store_true", help="Use the private uswest SSH path through Cudy.")
+    parser.add_argument("--cudy-host", default=DEFAULT_CUDY_HOST)
+    parser.add_argument("--cudy-user", default="root")
+    parser.add_argument("--cudy-password")
+    parser.add_argument("--cudy-password-file", type=Path, default=DEFAULT_CUDY_PASSWORD_FILE)
+    parser.add_argument("--private-host", default=DEFAULT_PRIVATE_HOST)
+    parser.add_argument("--private-port", type=int, default=22)
+    parser.add_argument("--cudy-awg-interface", default="awg2")
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--keep-local", type=int, default=10, help="Keep the newest N local backup archives.")
     parser.add_argument("--keep-remote", action="store_true", help="Do not delete the temporary remote archive.")
@@ -252,6 +329,7 @@ def main() -> int:
         return 1
     print(f"Backup saved: {result['archive']} ({result['bytes']} bytes)")
     print(f"Includes secrets: {result['includes_secrets']}")
+    print(f"Mode: {result['mode']}")
     if result["removed"]:
         print("Pruned old backups:")
         for path in result["removed"]:

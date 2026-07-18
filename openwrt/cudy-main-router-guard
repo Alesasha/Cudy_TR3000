@@ -1,0 +1,169 @@
+#!/bin/sh
+
+# Independent main-router cutover guard. It is inert until explicitly armed.
+set -u
+
+STATE_DIR="${STATE_DIR:-/var/lib/cudy-main-router-guard}"
+BACKUP="$STATE_DIR/pre-cutover-config.tgz"
+BACKUP_SHA="$STATE_DIR/pre-cutover-config.sha256"
+TAG="cudy-main-router-guard"
+INTERVAL="${INTERVAL:-10}"
+
+log() {
+    logger -t "$TAG" "$*"
+}
+
+number_from_file() {
+    path="$1"
+    fallback="$2"
+    value="$(cat "$path" 2>/dev/null || true)"
+    case "$value" in
+        ''|*[!0-9]*) printf '%s' "$fallback" ;;
+        *) printf '%s' "$value" ;;
+    esac
+}
+
+make_backup() {
+    mkdir -p "$STATE_DIR"
+    chmod 0700 "$STATE_DIR"
+    tmp="$BACKUP.tmp.$$"
+    tar -czf "$tmp" -C / \
+        etc/config/network \
+        etc/config/dhcp \
+        etc/config/firewall \
+        etc/config/wireless
+    chmod 0600 "$tmp"
+    sha256sum "$tmp" | awk '{print $1}' > "$BACKUP_SHA.tmp.$$"
+    mv "$tmp" "$BACKUP"
+    mv "$BACKUP_SHA.tmp.$$" "$BACKUP_SHA"
+    date -Iseconds 2>/dev/null > "$STATE_DIR/backup-created-at" || date > "$STATE_DIR/backup-created-at"
+    log "fresh pre-cutover config backup created"
+}
+
+verify_backup() {
+    [ -s "$BACKUP" ] || return 1
+    expected="$(cat "$BACKUP_SHA" 2>/dev/null || true)"
+    actual="$(sha256sum "$BACKUP" 2>/dev/null | awk '{print $1}')"
+    [ -n "$expected" ] && [ "$actual" = "$expected" ]
+}
+
+arm_guard() {
+    trial_seconds="${1:-900}"
+    grace_seconds="${2:-90}"
+    case "$trial_seconds:$grace_seconds" in
+        *[!0-9:]*|'':*) echo "invalid arm duration" >&2; return 2 ;;
+    esac
+    make_backup
+    verify_backup || { echo "backup verification failed" >&2; return 1; }
+    now="$(date +%s)"
+    printf '%s\n' "$((now + trial_seconds))" > "$STATE_DIR/deadline"
+    printf '%s\n' "$((now + grace_seconds))" > "$STATE_DIR/grace-until"
+    printf '0\n' > "$STATE_DIR/failures"
+    rm -f "$STATE_DIR/committed" "$STATE_DIR/rolled-back"
+    date -Iseconds 2>/dev/null > "$STATE_DIR/armed" || date > "$STATE_DIR/armed"
+    log "armed for ${trial_seconds}s with ${grace_seconds}s grace"
+}
+
+commit_guard() {
+    [ -e "$STATE_DIR/armed" ] || { echo "guard is not armed" >&2; return 1; }
+    rm -f "$STATE_DIR/armed" "$STATE_DIR/failures" "$STATE_DIR/deadline" "$STATE_DIR/grace-until"
+    date -Iseconds 2>/dev/null > "$STATE_DIR/committed" || date > "$STATE_DIR/committed"
+    log "cutover committed; automatic config rollback disarmed"
+}
+
+rollback_guard() {
+    reason="$1"
+    verify_backup || {
+        log "rollback requested but backup verification failed: $reason"
+        printf '%s\n' "$reason" > "$STATE_DIR/rollback-backup-invalid"
+        return 1
+    }
+    log "restoring pre-cutover config: $reason"
+    tar -xzf "$BACKUP" -C /
+    printf '%s\n' "$reason" > "$STATE_DIR/rolled-back"
+    rm -f "$STATE_DIR/armed" "$STATE_DIR/failures" "$STATE_DIR/deadline" "$STATE_DIR/grace-until"
+    sync
+    (sleep 2; /sbin/reboot) >/dev/null 2>&1 &
+}
+
+structural_health() {
+    expected_lan="$(uci -q get cudy-main-router-guard.main.expected_lan_ip || true)"
+    expected_gateway="$(uci -q get cudy-main-router-guard.main.expected_wan_gateway || true)"
+    [ -n "$expected_lan" ] || expected_lan="192.168.1.1"
+
+    ip -4 addr show dev br-lan 2>/dev/null | grep -Fq "inet $expected_lan/" || {
+        HEALTH_REASON="expected LAN address $expected_lan missing on br-lan"
+        return 1
+    }
+    ip -4 route show default 2>/dev/null | grep -q '^default ' || {
+        HEALTH_REASON="IPv4 default route missing"
+        return 1
+    }
+    if [ -n "$expected_gateway" ]; then
+        ping -c 1 -W 2 "$expected_gateway" >/dev/null 2>&1 || {
+            HEALTH_REASON="WAN gateway $expected_gateway unreachable"
+            return 1
+        }
+    fi
+    HEALTH_REASON=""
+    return 0
+}
+
+check_guard() {
+    [ -e "$STATE_DIR/armed" ] || return 0
+    now="$(date +%s)"
+    deadline="$(number_from_file "$STATE_DIR/deadline" 0)"
+    grace_until="$(number_from_file "$STATE_DIR/grace-until" 0)"
+    if [ "$deadline" -gt 0 ] && [ "$now" -ge "$deadline" ]; then
+        rollback_guard "cutover was not committed before deadline"
+        return
+    fi
+    [ "$now" -ge "$grace_until" ] || return 0
+
+    if structural_health; then
+        printf '0\n' > "$STATE_DIR/failures"
+        return 0
+    fi
+
+    failures="$(number_from_file "$STATE_DIR/failures" 0)"
+    failures=$((failures + 1))
+    printf '%s\n' "$failures" > "$STATE_DIR/failures"
+    threshold="$(uci -q get cudy-main-router-guard.main.failure_threshold || true)"
+    case "$threshold" in ''|*[!0-9]*) threshold=3 ;; esac
+    log "structural health failure ${failures}/${threshold}: $HEALTH_REASON"
+    if [ "$failures" -ge "$threshold" ]; then
+        rollback_guard "$HEALTH_REASON"
+    fi
+}
+
+show_status() {
+    if [ -e "$STATE_DIR/armed" ]; then armed=yes; else armed=no; fi
+    if verify_backup; then backup=valid; else backup=missing-or-invalid; fi
+    printf 'armed=%s\nbackup=%s\n' "$armed" "$backup"
+    printf 'deadline=%s\n' "$(number_from_file "$STATE_DIR/deadline" 0)"
+    printf 'grace_until=%s\n' "$(number_from_file "$STATE_DIR/grace-until" 0)"
+    printf 'failures=%s\n' "$(number_from_file "$STATE_DIR/failures" 0)"
+    [ ! -s "$STATE_DIR/rolled-back" ] || printf 'rolled_back=%s\n' "$(cat "$STATE_DIR/rolled-back")"
+    [ ! -s "$STATE_DIR/committed" ] || printf 'committed=%s\n' "$(cat "$STATE_DIR/committed")"
+}
+
+run_loop() {
+    mkdir -p "$STATE_DIR"
+    chmod 0700 "$STATE_DIR"
+    while true; do
+        check_guard || true
+        sleep "$INTERVAL"
+    done
+}
+
+command="${1:-check}"
+case "$command" in
+    backup) make_backup ;;
+    arm) arm_guard "${2:-900}" "${3:-90}" ;;
+    commit) commit_guard ;;
+    rollback) rollback_guard "${2:-manual rollback}" ;;
+    check) check_guard ;;
+    status) show_status ;;
+    run) run_loop ;;
+    *) echo "usage: $0 {backup|arm [trial_seconds] [grace_seconds]|commit|rollback [reason]|check|status|run}" >&2; exit 2 ;;
+esac
