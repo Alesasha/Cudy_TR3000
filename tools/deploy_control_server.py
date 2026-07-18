@@ -29,6 +29,9 @@ DEFAULT_USER = "root"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control"
 DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
+DEFAULT_CUDY_HOST = "192.168.8.1"
+DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
+DEFAULT_PRIVATE_HOST = "172.29.172.1"
 
 UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
 AGENT_UPDATE_DIR = "build/agent-updates"
@@ -64,7 +67,15 @@ def ssh_password(explicit: str | None) -> str:
     return getpass.getpass("SSH password for uswest: ")
 
 
-def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+def connect(
+    host: str,
+    user: str,
+    password: str,
+    timeout: int,
+    *,
+    attempts: int,
+    sock: object | None = None,
+) -> paramiko.SSHClient:
     last_error: Exception | None = None
     for attempt in range(1, max(1, attempts) + 1):
         client = paramiko.SSHClient()
@@ -79,6 +90,7 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
                 auth_timeout=timeout,
                 look_for_keys=False,
                 allow_agent=False,
+                sock=sock,
             )
             return client
         except Exception as exc:
@@ -88,6 +100,60 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
                 break
             time.sleep(min(20, 2 * attempt))
     raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error
+
+
+def cudy_password(explicit: str | None, password_file: Path) -> str:
+    if explicit:
+        return explicit
+    value = os.environ.get("CUDY_SSH_PASSWORD", "").strip()
+    if value:
+        return value
+    if password_file.exists():
+        value = password_file.read_text(encoding="utf-8-sig").strip()
+        if value:
+            return value
+    return getpass.getpass("SSH password for Cudy: ")
+
+
+def connect_via_cudy(args: argparse.Namespace, password: str) -> tuple[paramiko.SSHClient, paramiko.SSHClient]:
+    router = connect(
+        args.cudy_host,
+        args.cudy_user,
+        cudy_password(args.cudy_password, args.cudy_password_file),
+        args.timeout,
+        attempts=args.connect_attempts,
+    )
+    try:
+        ssh_exec(
+            router,
+            f"ip -4 route replace {shlex.quote(args.private_host)}/32 dev {shlex.quote(args.cudy_awg_interface)}",
+            args.timeout,
+        )
+        transport = router.get_transport()
+        if transport is None or not transport.is_active():
+            raise RuntimeError("Cudy SSH transport is not active")
+        channel = transport.open_channel(
+            "direct-tcpip",
+            (args.private_host, args.private_port),
+            ("127.0.0.1", 0),
+            timeout=args.timeout,
+        )
+        try:
+            target = connect(
+                args.private_host,
+                args.user,
+                password,
+                args.timeout,
+                attempts=1,
+                sock=channel,
+            )
+        except Exception:
+            channel.close()
+            raise
+        return router, target
+    except Exception:
+        router.close()
+        raise
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> str:
@@ -206,9 +272,21 @@ def remote_file_exists(sftp: paramiko.SFTPClient, path: str) -> bool:
 
 
 def deploy(args: argparse.Namespace) -> dict[str, object]:
+    deploy_started = time.monotonic()
+    connect_started = time.monotonic()
     password = ssh_password(args.ssh_password)
-    print(f"Connecting to {args.user}@{args.host}...", flush=True)
-    client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
+    cudy_client: paramiko.SSHClient | None = None
+    if getattr(args, "via_cudy", False):
+        print(
+            f"Connecting to {args.user}@{args.private_host} through "
+            f"{args.cudy_user}@{args.cudy_host} ({args.cudy_awg_interface})...",
+            flush=True,
+        )
+        cudy_client, client = connect_via_cudy(args, password)
+    else:
+        print(f"Connecting to {args.user}@{args.host}...", flush=True)
+        client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
+    print(f"Connected in {time.monotonic() - connect_started:.1f}s.", flush=True)
     uploaded = 0
     try:
         package_step = ""
@@ -223,6 +301,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
                 "fi\n"
             )
         print("Preparing remote directory and service user...", flush=True)
+        prepare_started = time.monotonic()
         ssh_exec(
             client,
             "set -eu\n"
@@ -232,6 +311,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             f"mkdir -p {shlex.quote(args.remote_dir)} {shlex.quote(args.remote_dir + '/data')}\n",
             args.timeout * 6,
         )
+        print(f"Remote preparation completed in {time.monotonic() - prepare_started:.1f}s.", flush=True)
         print("Opening SFTP...", flush=True)
         sftp = client.open_sftp()
         sftp.get_channel().settimeout(args.timeout)
@@ -239,10 +319,21 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             if args.archive_upload:
                 with tempfile.TemporaryDirectory(prefix="cudy-control-deploy-") as temp_dir:
                     archive = Path(temp_dir) / "cudy-control-deploy.tar"
+                    archive_started = time.monotonic()
                     uploaded = build_archive(archive, include_agent_updates=not args.skip_agent_updates)
+                    archive_seconds = time.monotonic() - archive_started
+                    archive_size = archive.stat().st_size
                     remote_archive = f"/tmp/cudy-control-deploy-{int(time.time())}.tar"
-                    print(f"Uploading archive ({archive.stat().st_size} bytes, {uploaded} files)...", flush=True)
+                    print(
+                        f"Built archive ({archive_size} bytes, {uploaded} files) in {archive_seconds:.1f}s. Uploading...",
+                        flush=True,
+                    )
+                    upload_started = time.monotonic()
                     sftp.put(str(archive), remote_archive)
+                    upload_seconds = time.monotonic() - upload_started
+                    upload_mbps = archive_size * 8 / 1_000_000 / max(upload_seconds, 0.001)
+                    print(f"Archive uploaded in {upload_seconds:.1f}s ({upload_mbps:.2f} Mbit/s).", flush=True)
+                    extract_started = time.monotonic()
                     ssh_exec(
                         client,
                         "set -eu\n"
@@ -251,6 +342,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
                         f"rm -f {shlex.quote(remote_archive)}\n",
                         args.timeout * 2,
                     )
+                    print(f"Remote extraction completed in {time.monotonic() - extract_started:.1f}s.", flush=True)
             else:
                 for dirname in selected_upload_dirs(include_agent_updates=not args.skip_agent_updates):
                     local_dir = ROOT / dirname
@@ -277,6 +369,7 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             sftp.close()
 
         print("Installing systemd service and restarting...", flush=True)
+        install_started = time.monotonic()
         output = ssh_exec(
             client,
             "set -eu\n"
@@ -307,9 +400,14 @@ def deploy(args: argparse.Namespace) -> dict[str, object]:
             args.timeout * 3,
         )
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        print(f"Service installation completed in {time.monotonic() - install_started:.1f}s.", flush=True)
     finally:
         client.close()
-    return {"host": args.host, "remote_dir": args.remote_dir, "uploaded_files": uploaded}
+        if cudy_client is not None:
+            cudy_client.close()
+    elapsed = time.monotonic() - deploy_started
+    print(f"Deployment completed in {elapsed:.1f}s.", flush=True)
+    return {"host": args.host, "remote_dir": args.remote_dir, "uploaded_files": uploaded, "elapsed_seconds": elapsed}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -317,6 +415,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=DEFAULT_HOST)
     parser.add_argument("--user", default=DEFAULT_USER)
     parser.add_argument("--ssh-password")
+    parser.add_argument("--via-cudy", action="store_true", help="Reach uswest through Cudy and the verified private AWG management path.")
+    parser.add_argument("--cudy-host", default=DEFAULT_CUDY_HOST)
+    parser.add_argument("--cudy-user", default="root")
+    parser.add_argument("--cudy-password")
+    parser.add_argument("--cudy-password-file", type=Path, default=DEFAULT_CUDY_PASSWORD_FILE)
+    parser.add_argument("--private-host", default=DEFAULT_PRIVATE_HOST)
+    parser.add_argument("--private-port", type=int, default=22)
+    parser.add_argument("--cudy-awg-interface", default="awg2")
     parser.add_argument("--connect-attempts", type=int, default=3)
     parser.add_argument("--timeout", type=int, default=60)
     parser.add_argument("--remote-dir", default=DEFAULT_REMOTE_DIR)

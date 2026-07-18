@@ -248,6 +248,7 @@ public sealed class AdminActivity : Activity
                 $"{device.DisplayName} ({device.Id})\n{device.UserId} | {device.Platform} | "
                 + $"{(device.Enabled ? "enabled" : "disabled")} | seen {lastSeen}"));
             var actions = NewActions();
+            actions.AddView(NewActionButton("Edit", async () => await EditDeviceAsync(device)));
             actions.AddView(NewActionButton(device.Enabled ? "Disable" : "Enable", async () =>
                 await SetDeviceEnabledAsync(device, !device.Enabled)));
             actions.AddView(NewActionButton("Delete", async () => await DeleteDeviceAsync(device)));
@@ -404,6 +405,84 @@ public sealed class AdminActivity : Activity
         {
             SetStatus(ex.Message, error: true);
         }
+    }
+
+    private async Task EditDeviceAsync(AdminDevice device)
+    {
+        if (session is null)
+        {
+            return;
+        }
+
+        var userSpinner = new Spinner(this)
+        {
+            Adapter = StringAdapter(users.Select(item => item.Id).ToList()),
+        };
+        userSpinner.SetSelection(Math.Max(0, users.FindIndex(item => item.Id == device.UserId)));
+        var nameInput = NewDialogInput("Name", device.DisplayName);
+        var platformInput = NewDialogInput("Platform", device.Platform);
+        var enabledInput = new CheckBox(this) { Text = "Enabled", Checked = device.Enabled };
+        var panel = new LinearLayout(this) { Orientation = Orientation.Vertical };
+        panel.SetPadding(Dp(20), Dp(8), Dp(20), Dp(8));
+        panel.AddView(NewDialogLabel($"Device ID: {device.Id}"));
+        panel.AddView(NewDialogLabel("User"));
+        panel.AddView(userSpinner);
+        panel.AddView(nameInput);
+        panel.AddView(platformInput);
+        panel.AddView(enabledInput);
+
+        var completion = new TaskCompletionSource<bool>();
+        var dialogBuilder = new AlertDialog.Builder(this);
+        dialogBuilder.SetTitle("Edit device");
+        dialogBuilder.SetView(panel);
+        dialogBuilder.SetNegativeButton("Cancel", (_, _) => completion.TrySetResult(false));
+        dialogBuilder.SetPositiveButton("Save", (_, _) => completion.TrySetResult(true));
+        var dialog = dialogBuilder.Create()
+            ?? throw new InvalidOperationException("Cannot create device editor.");
+        dialog.CancelEvent += (_, _) => completion.TrySetResult(false);
+        dialog.Show();
+        if (!await completion.Task)
+        {
+            return;
+        }
+
+        SetStatus("Saving device...");
+        try
+        {
+            using var result = await session.PostAsync("/api/admin/agent-devices", new
+            {
+                id = device.Id,
+                user_id = userSpinner.SelectedItem?.ToString() ?? device.UserId,
+                display_name = string.IsNullOrWhiteSpace(nameInput.Text) ? device.Id : nameInput.Text.Trim(),
+                platform = string.IsNullOrWhiteSpace(platformInput.Text) ? "other" : platformInput.Text.Trim(),
+                enabled = enabledInput.Checked,
+            });
+            await RefreshAsync();
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message, error: true);
+        }
+    }
+
+    private EditText NewDialogInput(string hint, string value)
+    {
+        var input = new EditText(this)
+        {
+            Hint = hint,
+            Text = value,
+        };
+        input.SetSingleLine(true);
+        return input;
+    }
+
+    private TextView NewDialogLabel(string text)
+    {
+        return new TextView(this)
+        {
+            Text = text,
+            TextSize = 14,
+        };
     }
 
     private async Task DeleteDeviceAsync(AdminDevice device)

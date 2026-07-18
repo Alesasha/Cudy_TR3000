@@ -101,6 +101,8 @@ def main() -> int:
             '"/api/admin/users"',
             '"/api/admin/agent-devices"',
             '"/api/admin/enrollment-codes"',
+            "EditDeviceAsync",
+            "display_name =",
             'agent_only =',
             'provision_transport = platform == "android"',
             'Intent.ActionSend',

@@ -27,6 +27,16 @@ def main() -> int:
     assert not defaults.skip_agent_updates
     selected = deploy.build_parser().parse_args(["--skip-agent-updates"])
     assert selected.skip_agent_updates
+    private = deploy.build_parser().parse_args(["--via-cudy"])
+    assert private.via_cudy
+    assert private.cudy_host == "192.168.8.1"
+    assert private.private_host == "172.29.172.1"
+    assert private.cudy_awg_interface == "awg2"
+    assert not private.upload_db
+    source = (TOOLS / "deploy_control_server.py").read_text(encoding="utf-8")
+    assert '"direct-tcpip"' in source
+    assert "Archive uploaded in" in source
+    assert "Deployment completed in" in source
 
     fallback_code_only = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=False)]
     fallback_with_updates = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=True)]
@@ -46,9 +56,9 @@ def main() -> int:
     )
     assert "systemctl restart vpn-control" in script
     assert "rm -f /tmp/control.tar /tmp/promote.sh" in script
-    source = (TOOLS / "deploy_control_server_via_tunnel_user.py").read_text(encoding="utf-8")
-    assert 'script -qec' in source
-    assert '["ssh", "-tt"' not in source
+    fallback_source = (TOOLS / "deploy_control_server_via_tunnel_user.py").read_text(encoding="utf-8")
+    assert 'script -qec' in fallback_source
+    assert '["ssh", "-tt"' not in fallback_source
     print("Control-server deploy payload regression passed.")
     return 0
 

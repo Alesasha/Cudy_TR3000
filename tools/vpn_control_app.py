@@ -593,6 +593,10 @@ LOGIN_HTML = r"""<!doctype html>
       color: #fff;
       cursor: pointer;
     }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
     .status { min-height: 20px; margin-top: 12px; color: var(--muted); }
     .error { color: var(--danger); }
   </style>
@@ -1140,6 +1144,10 @@ ADMIN_HTML = r"""<!doctype html>
       padding: 6px 10px;
       cursor: pointer;
     }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
     .muted { color: var(--muted); }
     .status { min-height: 20px; color: var(--muted); }
     .status.error { color: var(--danger); }
@@ -1208,9 +1216,8 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
         <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
         <div class="field"><label>Client IP</label><input id="newUserClientIp" type="text" placeholder="10.77.0.x" autocomplete="off"></div>
-        <label class="inline muted"><input id="newUserCreateCudy" type="checkbox"> Create legacy Cudy peer</label>
         <div class="field">
-          <label>Password</label>
+          <label>Password (optional for user)</label>
           <div class="inline">
             <input id="newUserPassword" type="password" autocomplete="new-password" placeholder="new password">
             <button class="secondary" type="button" data-toggle-password="newUserPassword" title="Show/hide the password typed here. Stored passwords cannot be viewed.">Show typed</button>
@@ -1222,6 +1229,7 @@ ADMIN_HTML = r"""<!doctype html>
       <p id="userStatus" class="status"></p>
       <div class="toolbar">
         <div class="field"><label>Find user</label><input id="userFilter" type="search" placeholder="ID, name, IP or role" autocomplete="off"></div>
+        <button id="clearUserFilter" class="secondary" type="button">Clear filter</button>
         <span id="userFilterStatus" class="muted"></span>
       </div>
       <table>
@@ -1371,21 +1379,19 @@ ADMIN_HTML = r"""<!doctype html>
         <tbody id="autoCacheBody"></tbody>
       </table>
     </section>
-    <section id="admin-agents" data-admin-section="agents" data-admin-label="Agents">
-      <h2>Auto Probe Jobs</h2>
+    <section id="admin-agents" data-admin-section="agents" data-admin-label="Devices">
+      <h2>Devices</h2>
+      <p class="muted">Enable, disable or permanently delete enrolled agent devices.</p>
       <div class="toolbar">
-        <button id="runAutoWorker" type="button">Run Worker Once</button>
-        <button id="refreshAutoJobs" class="secondary" type="button">Refresh</button>
-        <div class="field"><label>Max Jobs</label><input id="autoWorkerMaxJobs" type="number" min="1" max="50" step="1" value="5"></div>
-        <div class="field"><label>Max Candidates</label><input id="autoWorkerMaxCandidates" type="number" min="1" max="50" step="1" value="4"></div>
-        <div class="field"><label>Cache TTL sec</label><input id="autoWorkerCacheTtl" type="number" min="0" step="60" value="3600"></div>
+        <div class="field"><label>Find device</label><input id="agentFilter" type="search" placeholder="Device, user or platform" autocomplete="off"></div>
+        <button id="clearAgentFilter" class="secondary" type="button">Clear filter</button>
+        <span id="agentFilterStatus" class="muted"></span>
       </div>
-      <p id="autoProbeStatus" class="status"></p>
       <table>
-        <thead><tr><th>Status</th><th>Domain</th><th>Candidates</th><th>Assigned</th><th>Claimed</th><th>Winner</th><th>Score</th><th>Updated</th></tr></thead>
-        <tbody id="autoProbeJobsBody"></tbody>
+        <thead><tr><th>Device ID</th><th>User</th><th>Name</th><th>Platform</th><th>State</th><th>Last Seen</th><th>Health</th><th>Errors</th><th>Actions</th></tr></thead>
+        <tbody id="agentStatusBody"></tbody>
       </table>
-      <h3>Agents</h3>
+      <h3>Add Device</h3>
       <form id="enrollmentForm" class="toolbar">
         <div class="field"><label>User</label><select id="enrollmentUser"></select></div>
         <div class="field"><label>Platform</label><select id="enrollmentPlatform"><option value="android">Android</option><option value="windows">Windows</option><option value="linux">Linux</option><option value="macos">macOS</option><option value="other">Other</option></select></div>
@@ -1418,13 +1424,18 @@ ADMIN_HTML = r"""<!doctype html>
         <thead><tr><th>Platform</th><th>Version</th><th>Code</th><th>Package</th><th>SHA256</th><th>Notes</th></tr></thead>
         <tbody id="agentUpdatesBody"></tbody>
       </table>
+      <h3>Auto Probe Jobs</h3>
       <div class="toolbar">
-        <div class="field"><label>Find device</label><input id="agentFilter" type="search" placeholder="Device, user or platform" autocomplete="off"></div>
-        <span id="agentFilterStatus" class="muted"></span>
+        <button id="runAutoWorker" type="button">Run Worker Once</button>
+        <button id="refreshAutoJobs" class="secondary" type="button">Refresh</button>
+        <div class="field"><label>Max Jobs</label><input id="autoWorkerMaxJobs" type="number" min="1" max="50" step="1" value="5"></div>
+        <div class="field"><label>Max Candidates</label><input id="autoWorkerMaxCandidates" type="number" min="1" max="50" step="1" value="4"></div>
+        <div class="field"><label>Cache TTL sec</label><input id="autoWorkerCacheTtl" type="number" min="0" step="60" value="3600"></div>
       </div>
+      <p id="autoProbeStatus" class="status"></p>
       <table>
-        <thead><tr><th>Device</th><th>User</th><th>Platform</th><th>Enabled</th><th>Last Seen</th><th>Reported</th><th>Health</th><th>Applied</th><th>Errors</th><th></th></tr></thead>
-        <tbody id="agentStatusBody"></tbody>
+        <thead><tr><th>Status</th><th>Domain</th><th>Candidates</th><th>Assigned</th><th>Claimed</th><th>Winner</th><th>Score</th><th>Updated</th></tr></thead>
+        <tbody id="autoProbeJobsBody"></tbody>
       </table>
       <h3>Diagnostics</h3>
       <table>
@@ -1483,6 +1494,15 @@ ADMIN_HTML = r"""<!doctype html>
         button.addEventListener("click", () => activateAdminSection(button.dataset.adminTab));
       });
       activateAdminSection(location.hash.replace(/^#/, "") || "status", false);
+    }
+    function updateAdminTabCounts() {
+      const counts = { users: state.users.length, agents: state.agentStatus.length };
+      document.querySelectorAll("[data-admin-tab]").forEach(button => {
+        const section = adminSections.find(item => item.dataset.adminSection === button.dataset.adminTab);
+        if (!section) return;
+        const count = counts[button.dataset.adminTab];
+        button.textContent = count === undefined ? section.dataset.adminLabel : `${section.dataset.adminLabel} (${count})`;
+      });
     }
     initializeAdminTabs();
     window.addEventListener("hashchange", () => activateAdminSection(location.hash.replace(/^#/, ""), false));
@@ -1784,10 +1804,11 @@ ADMIN_HTML = r"""<!doctype html>
           <td>${s.transport_required ? (s.candidate_available ? "transport ok" : (s.transport_config_present ? `stale ${fmtAge(s.transport_age_seconds)}` : "missing transport")) : "ok"}</td>
           <td><input type="checkbox" data-field="enabled" ${s.enabled ? "checked" : ""}></td>
           <td><input type="checkbox" data-field="user_visible" ${s.user_visible ? "checked" : ""}></td>
-          <td><button data-save="${s.id}">Save</button></td>
+          <td><button data-save="${s.id}" disabled>Save</button></td>
         </tr>
       `).join("");
       body.querySelectorAll("[data-save]").forEach(button => {
+        armRowSave(button.closest("tr"), button, '[data-field="label"], [data-field="enabled"], [data-field="user_visible"]');
         button.addEventListener("click", async () => {
           const row = button.closest("tr");
           const payload = {
@@ -1831,7 +1852,7 @@ ADMIN_HTML = r"""<!doctype html>
             <button class="secondary" data-password="${u.id}">Set</button>
           </td>
           <td class="inline">
-            <button data-save-user="${u.id}">Save</button>
+            <button data-save-user="${u.id}" disabled>Save</button>
             <select data-delete-user-mode="${u.id}" title="Choose whether a legacy Cudy VPN peer should also be revoked.">
               <option value="local">Delete account only</option>
               <option value="revoke">Delete + revoke Cudy peer</option>
@@ -1841,6 +1862,11 @@ ADMIN_HTML = r"""<!doctype html>
         </tr>
       `).join("");
       body.querySelectorAll("[data-save-user]").forEach(button => {
+        armRowSave(
+          button.closest("tr"),
+          button,
+          '[data-field="display_name"], [data-field="role"], [data-field="client_ip"], [data-field="default_server_id"], [data-field="enabled"]'
+        );
         button.addEventListener("click", async () => {
           const row = button.closest("tr");
           const status = document.getElementById("userStatus");
@@ -2140,39 +2166,62 @@ ADMIN_HTML = r"""<!doctype html>
         const errors = ((item.status || {}).errors || []).concat((item.status || {}).status_errors || []);
         return `
           <tr>
-            <td>${item.device_id}</td>
-            <td>${item.user_id}</td>
-            <td>${item.platform || ""}</td>
-            <td><input type="checkbox" data-agent-enabled="${item.device_id}" ${item.enabled ? "checked" : ""}></td>
+            <td><code>${escapeHtml(item.device_id)}</code></td>
+            <td><select data-agent-user>${userOptions(item.user_id)}</select></td>
+            <td><input data-agent-name type="text" value="${escapeHtml(item.display_name || item.device_id)}"></td>
+            <td><input data-agent-platform type="text" value="${escapeHtml(item.platform || "other")}"></td>
+            <td>${badge(Boolean(item.enabled), item.enabled ? "enabled" : "disabled")}</td>
             <td>${item.last_seen_at || ""}</td>
-            <td>${item.reported_at || ""}</td>
             <td>${health.ok === true ? "ok" : health.ok === false ? "fail" : ""}</td>
-            <td>${health.applied ?? ""}</td>
             <td>${errors.length ? errors.slice(0, 2).join("; ") : ""}</td>
             <td class="inline">
-              <button data-save-agent="${item.device_id}">Apply state</button>
+              <button data-save-agent="${item.device_id}" disabled>Save</button>
+              <button class="secondary" data-toggle-agent="${item.device_id}" data-enable="${item.enabled ? "0" : "1"}">${item.enabled ? "Disable" : "Enable"}</button>
               <button class="danger" data-delete-agent="${item.device_id}">Delete device</button>
             </td>
           </tr>
         `;
       }).join("") : '<tr><td colspan="10" class="muted">No agent status.</td></tr>';
       body.querySelectorAll("[data-save-agent]").forEach(button => {
+        armRowSave(button.closest("tr"), button, "[data-agent-user], [data-agent-name], [data-agent-platform]");
         button.addEventListener("click", async () => {
           const deviceId = button.dataset.saveAgent;
-          const enabled = button.closest("tr").querySelector("[data-agent-enabled]").checked;
+          const row = button.closest("tr");
           const previous = state.agentStatus.find(item => item.device_id === deviceId);
-          if (previous && Boolean(previous.enabled) !== enabled) {
-            const action = enabled ? "enable" : "disable";
-            if (!confirm(`${action[0].toUpperCase() + action.slice(1)} agent device ${deviceId}?`)) return;
-          }
           const status = document.getElementById("enrollmentStatus");
           status.className = "status";
           try {
             await api("/api/admin/agent-devices", {
               method: "POST",
+              body: JSON.stringify({
+                id: deviceId,
+                user_id: row.querySelector("[data-agent-user]").value,
+                display_name: row.querySelector("[data-agent-name]").value,
+                platform: row.querySelector("[data-agent-platform]").value,
+                enabled: Boolean(previous && previous.enabled)
+              })
+            });
+            status.textContent = `Device saved: ${deviceId}`;
+            status.className = "status ok";
+            await load();
+          } catch (error) {
+            status.textContent = error.message;
+            status.className = "status error";
+          }
+        });
+      });
+      body.querySelectorAll("[data-toggle-agent]").forEach(button => {
+        button.addEventListener("click", async () => {
+          const deviceId = button.dataset.toggleAgent;
+          const enabled = button.dataset.enable === "1";
+          if (!confirm(`${enabled ? "Enable" : "Disable"} device ${deviceId}?`)) return;
+          const status = document.getElementById("enrollmentStatus");
+          try {
+            await api("/api/admin/agent-devices", {
+              method: "POST",
               body: JSON.stringify({ id: deviceId, enabled })
             });
-            status.textContent = `Agent device ${enabled ? "enabled" : "disabled"}: ${deviceId}`;
+            status.textContent = `Device ${enabled ? "enabled" : "disabled"}: ${deviceId}`;
             status.className = "status ok";
             await load();
           } catch (error) {
@@ -2291,6 +2340,57 @@ ADMIN_HTML = r"""<!doctype html>
     }
     document.getElementById("userFilter").addEventListener("input", renderUsers);
     document.getElementById("agentFilter").addEventListener("input", renderAgentStatus);
+    document.getElementById("clearUserFilter").addEventListener("click", () => {
+      document.getElementById("userFilter").value = "";
+      renderUsers();
+    });
+    document.getElementById("clearAgentFilter").addEventListener("click", () => {
+      document.getElementById("agentFilter").value = "";
+      renderAgentStatus();
+    });
+    const formSaveBaselines = new WeakMap();
+    function controlValue(control) {
+      if (control.type === "checkbox" || control.type === "radio") return control.checked ? "1" : "0";
+      return control.value;
+    }
+    function formSnapshot(form) {
+      return JSON.stringify([...form.querySelectorAll("input, select, textarea")].map(control => [control.id || control.name || control.type, controlValue(control)]));
+    }
+    function saveButtons(form) {
+      return [...form.querySelectorAll('button[type="submit"]')].filter(button => button.textContent.trim().toLowerCase().startsWith("save"));
+    }
+    function refreshFormSaveState(form) {
+      const baseline = formSaveBaselines.get(form);
+      if (baseline === undefined) return;
+      const dirty = formSnapshot(form) !== baseline;
+      saveButtons(form).forEach(button => { button.disabled = !dirty; });
+    }
+    function resetFormSaveStates() {
+      document.querySelectorAll("form").forEach(form => {
+        if (!saveButtons(form).length) return;
+        formSaveBaselines.set(form, formSnapshot(form));
+        refreshFormSaveState(form);
+      });
+    }
+    function armRowSave(row, button, selector) {
+      const controls = [...row.querySelectorAll(selector)];
+      const snapshot = () => JSON.stringify(controls.map(controlValue));
+      const baseline = snapshot();
+      const refresh = () => { button.disabled = snapshot() === baseline; };
+      controls.forEach(control => {
+        control.addEventListener("input", refresh);
+        control.addEventListener("change", refresh);
+      });
+      refresh();
+    }
+    document.addEventListener("input", event => {
+      const form = event.target.closest("form");
+      if (form) refreshFormSaveState(form);
+    });
+    document.addEventListener("change", event => {
+      const form = event.target.closest("form");
+      if (form) refreshFormSaveState(form);
+    });
     async function load() {
       const [data, statusResult] = await Promise.all([
         api("/api/admin"),
@@ -2312,6 +2412,7 @@ ADMIN_HTML = r"""<!doctype html>
       state.serviceAliases = data.service_aliases || [];
       state.criticalServices = data.critical_services || [];
       state.domainDiscovery = data.domain_discovery || [];
+      updateAdminTabCounts();
       renderServers();
       renderUsers();
       renderServiceAliases();
@@ -2339,6 +2440,7 @@ ADMIN_HTML = r"""<!doctype html>
       syncAutoEditorFromExisting("userDefault");
       renderAutoEditor("globalRoute");
       renderAutoEditor("adminRoute");
+      resetFormSaveStates();
     }
     document.getElementById("newUserForm").addEventListener("submit", async event => {
       event.preventDefault();
@@ -2354,7 +2456,8 @@ ADMIN_HTML = r"""<!doctype html>
             client_ip: document.getElementById("newUserClientIp").value,
             default_server_id: "auto",
             enabled: true,
-            create_cudy_client: document.getElementById("newUserCreateCudy").checked,
+            create_cudy_client: false,
+            agent_only: document.getElementById("newUserRole").value === "user",
             password: document.getElementById("newUserPassword").value
           })
         });
@@ -6224,6 +6327,7 @@ def auto_probe_worker_loop(
     connect_timeout: int,
     max_time: int,
     active_domain_limit: int,
+    initial_delay_seconds: int = 5,
 ) -> None:
     update_worker_status(
         "auto_probe",
@@ -6233,7 +6337,9 @@ def auto_probe_worker_loop(
         last_error=None,
         last_result=None,
     )
-    while not stop_event.wait(interval_seconds):
+    if stop_event.wait(max(0, initial_delay_seconds)):
+        return
+    while not stop_event.is_set():
         update_worker_status("auto_probe", db_path=db_path, started=True)
         try:
             result = create_auto_probe_jobs_once(
@@ -6268,6 +6374,8 @@ def auto_probe_worker_loop(
         except Exception as exc:
             update_worker_status("auto_probe", db_path=db_path, finished=True, last_error=str(exc))
             print(f"auto-probe worker failed: {exc}", file=sys.stderr)
+        if stop_event.wait(interval_seconds):
+            break
 
 
 def provider_refresh_worker_loop(
@@ -6280,6 +6388,7 @@ def provider_refresh_worker_loop(
     skip_verify: bool,
     connect_timeout: int,
     max_time: int,
+    initial_delay_seconds: int = 30,
 ) -> None:
     update_worker_status(
         "provider_refresh",
@@ -6290,6 +6399,8 @@ def provider_refresh_worker_loop(
         last_error=None,
         last_result=None,
     )
+    if stop_event.wait(max(0, initial_delay_seconds)):
+        return
     while not stop_event.is_set():
         update_worker_status("provider_refresh", db_path=db_path, started=True)
         try:
@@ -7168,6 +7279,57 @@ def set_agent_device_enabled(
             raise ValueError(f"Unknown device: {normalized_device_id}")
     render_provisioning_authorized_keys(db_path)
     return {"ok": True, "device_id": normalized_device_id, "enabled": bool(enabled)}
+
+
+def update_agent_device(
+    db_path: Path,
+    inventory_path: Path,
+    *,
+    device_id: str,
+    user_id: str | None = None,
+    display_name: str | None = None,
+    platform: str | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    init_db(db_path, inventory_path)
+    normalized_device_id = normalize_device_id(device_id)
+    timestamp = now()
+    with connect(db_path) as conn:
+        existing = row(conn, "SELECT * FROM agent_devices WHERE id = ?", (normalized_device_id,))
+        if not existing:
+            raise ValueError(f"Unknown device: {normalized_device_id}")
+        normalized_user_id = (user_id or str(existing["user_id"])).strip()
+        if not row(conn, "SELECT id FROM users WHERE id = ?", (normalized_user_id,)):
+            raise ValueError(f"Unknown user: {normalized_user_id}")
+        normalized_name = (display_name if display_name is not None else str(existing["display_name"] or "")).strip()
+        if not normalized_name:
+            normalized_name = normalized_device_id
+        normalized_platform = normalize_platform(platform if platform is not None else str(existing["platform"] or "other")) or "other"
+        normalized_enabled = bool(existing["enabled"]) if enabled is None else bool(enabled)
+        conn.execute(
+            """
+            UPDATE agent_devices
+            SET user_id = ?, display_name = ?, platform = ?, enabled = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (
+                normalized_user_id,
+                normalized_name[:120],
+                normalized_platform,
+                int(normalized_enabled),
+                timestamp,
+                normalized_device_id,
+            ),
+        )
+    render_provisioning_authorized_keys(db_path)
+    return {
+        "ok": True,
+        "device_id": normalized_device_id,
+        "user_id": normalized_user_id,
+        "display_name": normalized_name[:120],
+        "platform": normalized_platform,
+        "enabled": normalized_enabled,
+    }
 
 
 def delete_agent_device(db_path: Path, inventory_path: Path, *, device_id: str) -> dict[str, Any]:
@@ -10740,11 +10902,14 @@ class Handler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/admin/agent-devices":
                 self.require_admin()
                 device_id = str(data.get("id") or "")
-                result = set_agent_device_enabled(
+                result = update_agent_device(
                     self.app.db_path,
                     self.app.inventory_path,
                     device_id=device_id,
-                    enabled=bool(data.get("enabled")),
+                    user_id=str(data.get("user_id") or "") or None,
+                    display_name=str(data.get("display_name") or "") if "display_name" in data else None,
+                    platform=str(data.get("platform") or "") if "platform" in data else None,
+                    enabled=bool(data.get("enabled")) if "enabled" in data else None,
                 )
                 result["cached_tokens_invalidated"] = self.app.invalidate_agent(
                     device_id,
@@ -11227,8 +11392,8 @@ class Handler(BaseHTTPRequestHandler):
             if cudy_client.get("client_ip"):
                 client_ip = normalize_client_ip(str(cudy_client["client_ip"]))
         if existing is None:
-            if not password and not client_ip and not agent_only:
-                raise ValueError("Password or client_ip is required for a new user")
+            if role == "admin" and not password and not client_ip and not agent_only:
+                raise ValueError("Password or client_ip is required for a new admin")
             with self.app.conn() as conn:
                 if password:
                     salt, password_hash = hash_password(password)
@@ -13131,40 +13296,6 @@ def main() -> int:
                 interval_seconds=max(30, args.auto_worker_interval),
                 last_error=None,
             )
-            try:
-                update_worker_status("auto_probe", db_path=args.db, started=True)
-                initial = create_auto_probe_jobs_once(
-                    args.db,
-                    args.inventory,
-                    cache_ttl_seconds=args.auto_cache_ttl_seconds,
-                    job_stale_seconds=args.auto_worker_job_stale_seconds,
-                    agent_stale_seconds=args.auto_worker_agent_stale_seconds,
-                    max_jobs=args.auto_worker_max_jobs,
-                    max_candidates_per_job=args.auto_worker_max_candidates_per_job,
-                    connect_timeout=args.auto_worker_connect_timeout,
-                    max_time=args.auto_worker_max_time,
-                    active_domain_limit=args.auto_worker_active_domain_limit,
-                )
-                update_worker_status(
-                    "auto_probe",
-                    db_path=args.db,
-                    finished=True,
-                    last_error=None,
-                    last_result={
-                        "initial": True,
-                        "created": len(initial.get("created") or []),
-                        "skipped": len(initial.get("skipped") or []),
-                        "active_agents": initial.get("active_agents"),
-                        "active_auto_domains": initial.get("active_auto_domains"),
-                        "total_auto_domains": initial.get("total_auto_domains"),
-                        "active_domain_limit": initial.get("active_domain_limit"),
-                    },
-                )
-                if initial.get("created"):
-                    print(f"auto-probe worker: created {len(initial['created'])} initial job(s)", file=sys.stderr)
-            except Exception as exc:
-                update_worker_status("auto_probe", db_path=args.db, finished=True, last_error=str(exc))
-                print(f"auto-probe worker initial run failed: {exc}", file=sys.stderr)
             worker_thread = threading.Thread(
                 target=auto_probe_worker_loop,
                 kwargs={

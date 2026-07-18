@@ -118,6 +118,17 @@ def wait_for_healthz(base_url: str, *, timeout_seconds: int = 20) -> None:
 
 
 def main() -> int:
+    source = (ROOT / "tools" / "vpn_control_app.py").read_text(encoding="utf-8")
+    serve_source = source[source.index('if args.command == "serve":') :]
+    if "initial = create_auto_probe_jobs_once" in serve_source:
+        raise AssertionError("serve startup still schedules Auto probes synchronously")
+    for marker in (
+        "initial_delay_seconds: int = 5",
+        "initial_delay_seconds: int = 30",
+    ):
+        if marker not in source:
+            raise AssertionError(f"worker startup delay is missing: {marker}")
+
     with tempfile.TemporaryDirectory(prefix="cudy-control-http-") as tmp:
         port = free_port()
         db_path = Path(tmp) / "vpn_control.db"
@@ -292,11 +303,16 @@ def main() -> int:
                 "adminCriticalServiceCandidates",
                 "scheduleAutoHistory",
                 "data-save-agent",
+                "armRowSave",
+                "resetFormSaveStates",
+                'agent_only: document.getElementById("newUserRole").value === "user"',
+                "data-toggle-agent",
                 "data-delete-agent",
                 "data-delete-user-mode",
                 "Delete account only",
                 "Delete + revoke Cudy peer",
-                "Apply state",
+                "Clear filter",
+                "Disable",
                 "Delete device",
                 "Revoke one-time enrollment code",
                 "Download Android APK",
@@ -307,7 +323,13 @@ def main() -> int:
             ):
                 if snippet not in admin_page:
                     raise AssertionError(f"admin page is missing {snippet!r}")
-            for forbidden in ("Auto Candidate Lists", "autoCandidatesForm", "/api/admin/client-config", "data-disable-agent"):
+            for forbidden in (
+                "Auto Candidate Lists",
+                "autoCandidatesForm",
+                "/api/admin/client-config",
+                "data-disable-agent",
+                'id="newUserCreateCudy"',
+            ):
                 if forbidden in admin_page:
                     raise AssertionError(f"admin page exposes obsolete UI: {forbidden}")
             admin_payload = fetch_json_with_opener(opener, f"{base_url}/api/admin")
@@ -316,6 +338,27 @@ def main() -> int:
                     raise AssertionError(f"/api/admin is missing {key!r}")
             if "agent_enrollment_codes" not in admin_payload:
                 raise AssertionError("/api/admin is missing 'agent_enrollment_codes'")
+            passwordless_user = post_json(
+                opener,
+                f"{base_url}/api/admin/users",
+                {
+                    "id": "passwordless-agent-user",
+                    "display_name": "Passwordless Agent User",
+                    "role": "user",
+                    "default_server_id": "auto",
+                    "client_ip": "",
+                    "password": "",
+                    "enabled": True,
+                    "create_cudy_client": False,
+                },
+            )
+            if passwordless_user.get("ok") is not True:
+                raise AssertionError(f"passwordless agent user creation failed: {passwordless_user!r}")
+            fetch_json_with_opener(
+                opener,
+                f"{base_url}/api/admin/users?id=passwordless-agent-user&revoke_cudy=0",
+                method="DELETE",
+            )
             lifecycle_user = {
                 "id": "lifecycle-user",
                 "display_name": "Lifecycle User",
@@ -715,6 +758,30 @@ def main() -> int:
             )
             if enabled_device.get("ok") is not True or enabled_device.get("enabled") is not True:
                 raise AssertionError(f"agent device enable failed: {enabled_device!r}")
+            edited_device = post_json(
+                opener,
+                f"{base_url}/api/admin/agent-devices",
+                {
+                    "id": "phone-user-enrolled",
+                    "user_id": "phone-user",
+                    "display_name": "Edited phone",
+                    "platform": "android-test",
+                    "enabled": True,
+                },
+            )
+            if (
+                edited_device.get("display_name") != "Edited phone"
+                or edited_device.get("platform") != "android-test"
+                or edited_device.get("user_id") != "phone-user"
+            ):
+                raise AssertionError(f"agent device edit failed: {edited_device!r}")
+            edited_admin = fetch_json_with_opener(opener, f"{base_url}/api/admin")
+            edited_row = next(
+                item for item in edited_admin["agent_devices"]
+                if item["id"] == "phone-user-enrolled"
+            )
+            if edited_row.get("display_name") != "Edited phone" or edited_row.get("platform") != "android-test":
+                raise AssertionError(f"edited agent device was not persisted: {edited_row!r}")
             reenabled_bootstrap = fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", enrolled_token)
             if reenabled_bootstrap.get("user", {}).get("id") != "phone-user":
                 raise AssertionError(f"re-enabled agent token did not recover: {reenabled_bootstrap!r}")

@@ -15,7 +15,7 @@ This document records the verified live state. Planned work belongs in
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
   - Android `1.24 (25)` release candidate, built and installed locally, SHA256
-    `0e85bbd48bb55c746b06858eee1efb49d60317c689bf6240255d23efe3aa3f70`;
+    `ea1ed7a30517bfdbfb68a9a9a95bcbfb515046edd3235ba969f3283a9e19de9d`;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
@@ -53,6 +53,36 @@ Verified on 2026-07-16:
 
 The control-server remains authoritative for policy, provider transport plans,
 Auto cache, probe jobs, enrollment, agent updates and admin/user UI.
+
+The 2026-07-18 production deploy uses the verified private management route
+`PC -> Cudy -> awg2 -> 172.29.172.1:22`, so it no longer depends on the
+intermittent public SSH banner. The production database was preserved and
+contains 11 users and 4 devices. The Users page accepts agent-only users without
+a web password or legacy Cudy peer. The Devices page exposes edit, enable,
+disable and permanent-delete actions; row and form Save buttons remain disabled
+until a field actually changes.
+
+The private management path is reliable but slow. Controlled tests measured
+about 73-76 Mbit/s between the workstation and Cudy, but only 2-5 Mbit/s through
+the Cudy-uswest AWG path. Cudy remained 82-95% idle. On uswest, independent
+`top` and `vmstat` samples recorded 21-91% CPU steal, TCP RTT inflation from a
+170 ms minimum to roughly 700-750 ms, retransmissions and 1.85-3.9 Mbit/s
+effective throughput. A 4 MiB TCP window and lower AWG MTUs did not remove the
+bottleneck. This identifies the oversubscribed uswest KVM host/path as the
+current deployment-speed and SSH-stability risk; contact the provider or move
+the clone to a better VPS rather than tuning Cudy further.
+
+Control-server startup no longer runs Auto scheduling or provider refresh
+synchronously before opening the HTTP listener. Auto receives a five-second
+startup delay and provider refresh a 30-second delay; their normal recurring
+intervals are unchanged. In the production verification on 2026-07-18,
+systemd started the service at `05:08:18 UTC`, HTTP began serving at
+`05:08:30 UTC` instead of taking about 28 seconds, and the complete private
+code-only deployment fell from 76.5 to 54.6 seconds. Auto then completed its
+first cycle without error while the UI and agent API remained available. The
+delayed provider cycle also finished normally, refreshing 18 transport records;
+six individual provider endpoint checks failed and remain visible as provider
+results rather than blocking service readiness.
 
 Android provisioning is now production-capable. The universal APK has no shared
 SSH secret. Admin creates a one-time QR/file containing a unique device key and
@@ -208,10 +238,10 @@ unchanged. The agent is still in `observe` mode.
 
 ## Android Agent
 
-Android `1.24 (25)` is built, signed and installed on the physical MIUI test
-phone. Its control-server update manifest and matching server changes have not
-yet been promoted because every new uswest SSH session currently times out
-during banner exchange; the existing production service remains unchanged.
+Android `1.24 (25)` is built, signed, installed on the physical MIUI test
+phone and published on the production control-server through the private Cudy
+management path. The production APK and update manifest both have SHA256
+`ea1ed7a30517bfdbfb68a9a9a95bcbfb515046edd3235ba969f3283a9e19de9d`.
 
 Verified acceptance:
 
@@ -240,7 +270,8 @@ Verified acceptance:
   `com.nashvpn.cudyagent`; the production package is not debuggable.
 - the Administration activity opens from the main application, is not exported
   to other Android applications, and displays its credential-protected login
-  surface. Complete live CRUD verification awaits a healthy uswest SSH session.
+  surface. It supports user/device create, edit, enable/disable, delete and
+  one-time enrollment over the shared restricted SSH connection.
 
 Remaining Android concerns:
 

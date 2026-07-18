@@ -342,6 +342,17 @@ server-side `script(1)` to provide the terminal required by `su`.
 This path intentionally does not upload the local SQLite database or local
 `secrets/` tree.
 
+If the public TCP/22 path itself is intermittent, use the verified private
+management route through Cudy. It opens SFTP/SSH over
+`Cudy -> awg2 -> 172.29.172.1:22` and leaves the production database in place:
+
+```powershell
+python tools\deploy_control_server.py --via-cudy --private-host 172.29.172.1
+```
+
+Add `--skip-agent-updates` for a smaller code-only promotion. Never add
+`--upload-db` during an ordinary production deployment.
+
 ## Backups
 
 Create a local disaster-recovery archive from the live uswest control-server:
