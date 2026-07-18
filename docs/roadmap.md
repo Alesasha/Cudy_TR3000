@@ -189,8 +189,11 @@ tests as the LAN gateway without one-to-two-minute traffic stalls.
    The local isolated restore rehearsal passed on 2026-07-18, including safe
    extraction, restored DB summary, `/healthz` and `/readyz`; the clean-VPS
    network/systemd test remains.
-3. Change the endpoint manifest through Cudy and prove agents discover the new
-   primary without individual manual edits.
+3. In progress: Android, Linux and Windows cache a primary endpoint and SSH
+   fingerprint received through authenticated agent policy, preserving each
+   device's SSH user/key. Build and publish the updated agents, then prove a
+   controlled endpoint rotation without individual manual edits. A signed
+   public discovery contract remains for unplanned loss before policy delivery.
 4. Exercise primary-down operation and return to the restored primary.
 5. Document the one-click clone/restore timing and operator checklist.
 

@@ -32,6 +32,10 @@ def test_default_manifest_has_short_live_api_ttl() -> None:
     assert ttl_seconds(manifest) == 600
     assert manifest["cache_seconds"] == 300
     assert manifest["endpoints"]
+    ssh_tunnel = manifest["endpoints"][0]["ssh_tunnel"]
+    assert ssh_tunnel["host"]
+    assert ssh_tunnel["user"]
+    assert ssh_tunnel["host_key_sha256"].startswith("SHA256:")
 
 
 def test_cudy_static_manifest_has_long_fallback_ttl() -> None:

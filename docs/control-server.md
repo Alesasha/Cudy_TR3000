@@ -517,9 +517,12 @@ Before exposing it directly to the internet:
 - `auto_candidates`: candidate server policies;
 - `control.reserved_targets`: currently `direct` and `auto`.
 
-The first Linux/Windows agents should treat this as desired state and keep a
-local cache so routing can continue when the control server is temporarily
-unavailable.
+Android, Linux and Windows agents treat this as desired state and keep a local
+cache so routing can continue when the control server is temporarily
+unavailable. The authenticated response also carries the primary SSH host and
+its `SHA256` host-key fingerprint. Agents cache both values without interrupting
+the current session, then use and verify them on the next reconnect. The
+per-device SSH user and private key are never replaced by this policy.
 
 The endpoint manifest is also available without agent auth:
 
@@ -547,15 +550,25 @@ Agents can use the static URLs as discovery fallbacks:
 $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS = "http://10.77.0.1/cudy-control/endpoints.json,http://192.168.8.1/cudy-control/endpoints.json"
 ```
 
-Windows `Start-ManagedAgent.ps1` reads this manifest before opening the SSH
-control tunnel. If the manifest advertises a different
-`endpoints[].ssh_tunnel.host`, the agent starts the tunnel to that host. This is
-the intended migration path after `uswest` is rebuilt or receives a new IP:
+The static files are a last-resort discovery hint. The preferred planned
+migration path is the endpoint manifest embedded in authenticated
+`/api/agent/config`: Android, Linux and Windows cache a different
+`endpoints[].ssh_tunnel.host` together with
+`endpoints[].ssh_tunnel.host_key_sha256`, verify the host key, and use the new
+host on the next reconnect. Publish the replacement only after its SSH users,
+authorized keys and control service are ready, then leave the old primary alive
+until agents have reported another policy cycle:
 
 ```powershell
 $env:VPN_CONTROL_PRIMARY_SSH_HOST = "<new-uswest-ip>"
+$env:VPN_CONTROL_SSH_HOST_KEY_SHA256 = "SHA256:<new-host-key-fingerprint>"
 python tools\sync_control_manifest_to_cudy.py
 ```
+
+An unexpected loss of the old primary before agents receive this authenticated
+policy still requires the Cudy fallback path. A future signed public discovery
+manifest is deliberately tracked separately; agents must not trust an arbitrary
+public HTTP document to replace both the SSH host and its fingerprint.
 
 Replicate the full control-state archive to Cudy fallback storage:
 

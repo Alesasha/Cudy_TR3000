@@ -12,6 +12,7 @@ strip_cr() {
 
 POLL_SECONDS="$(strip_cr "${POLL_SECONDS:-60}")"
 CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-95.182.91.203}")"
+CONTROL_HOST_KEY_SHA256="$(strip_cr "${CONTROL_HOST_KEY_SHA256:-}")"
 CONTROL_USER="$(strip_cr "${CONTROL_USER:-cudy-tunnel-linux}")"
 CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
 CONTROL_REMOTE_PORT="$(strip_cr "${CONTROL_REMOTE_PORT:-8765}")"
@@ -27,6 +28,57 @@ export VPN_CONTROL_URL="http://127.0.0.1:${CONTROL_LOCAL_PORT}"
 
 log() {
   printf '[%s] %s\n' "$(date -Is)" "$*" | tee -a "$LOG_PATH"
+}
+
+load_cached_control_endpoint() {
+  if [ -f run/control-endpoint.env ]; then
+    # Generated locally from an authenticated /api/agent/config response.
+    . run/control-endpoint.env
+    CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-}")"
+    CONTROL_HOST_KEY_SHA256="$(strip_cr "${CONTROL_HOST_KEY_SHA256:-}")"
+    export CONTROL_HOST CONTROL_HOST_KEY_SHA256
+  fi
+}
+
+cache_authenticated_control_endpoint() {
+  local config_file="$1"
+  python3 - "$config_file" run/control-endpoint.env.tmp <<'PY'
+import json
+import re
+import shlex
+import sys
+
+config_path, output_path = sys.argv[1:]
+root = json.load(open(config_path, encoding="utf-8"))
+manifest = ((root.get("control") or {}).get("endpoints") or {})
+selected = None
+for endpoint in manifest.get("endpoints") or []:
+    if not isinstance(endpoint, dict) or str(endpoint.get("role") or "").lower() != "primary":
+        continue
+    tunnel = endpoint.get("ssh_tunnel") or {}
+    host = str(tunnel.get("host") or "").strip()
+    fingerprint = str(tunnel.get("host_key_sha256") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", host):
+        continue
+    if not re.fullmatch(r"SHA256:[A-Za-z0-9+/]{20,}={0,2}", fingerprint):
+        continue
+    priority = int(endpoint.get("priority") or 1000)
+    candidate = (priority, host, fingerprint)
+    if selected is None or candidate[0] < selected[0]:
+        selected = candidate
+if selected is None:
+    raise SystemExit(0)
+_, host, fingerprint = selected
+with open(output_path, "w", encoding="ascii", newline="\n") as handle:
+    handle.write("CONTROL_HOST=" + shlex.quote(host) + "\n")
+    handle.write("CONTROL_HOST_KEY_SHA256=" + shlex.quote(fingerprint) + "\n")
+PY
+  if [ -s run/control-endpoint.env.tmp ]; then
+    chmod 600 run/control-endpoint.env.tmp
+    mv run/control-endpoint.env.tmp run/control-endpoint.env
+  else
+    rm -f run/control-endpoint.env.tmp
+  fi
 }
 
 stop_control_tunnel() {
@@ -188,10 +240,12 @@ stop_unused_transports() {
 }
 
 mkdir -p run logs transports
+load_cached_control_endpoint
 log "managed linux agent starting pid=$$ control=${VPN_CONTROL_URL}"
 
 while true; do
   mkdir -p run logs transports
+  load_cached_control_endpoint
   cycle_ok=0
   control_online=0
   if ensure_tunnel; then
@@ -210,6 +264,7 @@ while true; do
     fi
     if python3 ./route_agent.py config --json > run/fresh-config.json.tmp; then
       mv run/fresh-config.json.tmp run/fresh-config.json
+      cache_authenticated_control_endpoint run/fresh-config.json
       apply_config run/fresh-config.json "$control_online"
       cycle_ok=1
     else
@@ -219,6 +274,7 @@ while true; do
     log "control tunnel failed; trying cached policy"
     if python3 ./route_agent.py config --cached --json > run/fresh-config.json.tmp; then
       mv run/fresh-config.json.tmp run/fresh-config.json
+      cache_authenticated_control_endpoint run/fresh-config.json
       apply_config run/fresh-config.json "$control_online"
       cycle_ok=1
     else

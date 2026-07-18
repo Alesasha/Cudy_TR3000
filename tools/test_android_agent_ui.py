@@ -124,8 +124,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>28</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.27</ApplicationDisplayVersion>",
+            "<ApplicationVersion>29</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.28</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -181,6 +181,10 @@ def main() -> int:
             "app_version_name = installedAppVersion.Name",
             "app_version_code = installedAppVersion.Code",
             "InstalledAppVersion()",
+            "ApplyAuthenticatedControlEndpoint(root)",
+            'PutString("ssh_host", selectedHost)',
+            'PutString("ssh_host_key_sha256", selectedHostKey)',
+            "active SSH session is kept until reconnect",
         ],
     )
     assert_contains(

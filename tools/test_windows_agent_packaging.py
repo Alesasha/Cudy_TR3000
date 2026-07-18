@@ -37,6 +37,14 @@ def main() -> int:
     assert_contains(starter, "Update-AgentPackage.ps1", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "-FromAgent", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "exit=$exitCode", label="Start-ManagedAgent.ps1")
+    assert_contains(starter, "Save-AuthenticatedControlEndpoint", label="Start-ManagedAgent.ps1")
+    assert_contains(starter, "run\\control-endpoint.json", label="Start-ManagedAgent.ps1")
+    assert_contains(starter, "ExpectedHostKeySha256", label="Start-ManagedAgent.ps1")
+
+    tunnel = read_text(AGENT_DIR / "Start-Tunnel.ps1")
+    assert_contains(tunnel, "Confirm-ControlHostKey", label="Start-Tunnel.ps1")
+    assert_contains(tunnel, "ssh-keyscan.exe", label="Start-Tunnel.ps1")
+    assert_contains(tunnel, "Control-server SSH key mismatch", label="Start-Tunnel.ps1")
 
     assert_contains(updater, "/api/agent/app-version?platform=", label="Update-AgentPackage.ps1")
     assert_contains(updater, "Expand-UpdateArchive", label="Update-AgentPackage.ps1")
@@ -47,6 +55,7 @@ def main() -> int:
 
     assert_contains(env_example, "AGENT_AUTO_UPDATE", label="agent.env.ps1.example")
     assert_contains(env_example, "AGENT_VERSION_CODE", label="agent.env.ps1.example")
+    assert_contains(env_example, "VPN_CONTROL_PRIMARY_SSH_HOST_KEY_SHA256", label="agent.env.ps1.example")
     assert_contains(starter, "Write-AgentHeartbeat", label="Start-ManagedAgent.ps1")
     assert_contains(watchdog, "watchdog.armed", label="Watch-AgentConnectivity.ps1")
     assert_contains(watchdog, "watchdog.keepalive", label="Watch-AgentConnectivity.ps1")

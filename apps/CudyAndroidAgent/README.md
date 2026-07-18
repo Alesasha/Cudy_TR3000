@@ -68,10 +68,10 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current published release is `1.27 (28)`. The control-server update manifest
+Current published release is `1.28 (29)`. The control-server update manifest
 contains the matching APK. Its code-only bootstrap and issued per-device SSH
-channel passed an end-to-end production test. Version 1.25 is accepted on two
-physical phones; 1.27 is the pending in-place UI/permission/version-reporting update. The routing
+channel passed an end-to-end production test. Version 1.27 is accepted on two
+physical phones; 1.28 adds authenticated control-server endpoint rotation. The routing
 runtime inherited from `1.24 (25)` has already passed policy fetch,
 foreground-service, libbox, selective-routing, status, non-disruptive probe and
 real-reboot checks.
@@ -97,7 +97,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.27-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.28-YYYYMMDD.apk
 ```
 
 Manual smoke test:

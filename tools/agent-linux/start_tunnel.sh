@@ -4,6 +4,7 @@ cd "$(dirname "$0")"
 
 set -a
 [ -f ./agent.env ] && . ./agent.env
+[ -f ./run/control-endpoint.env ] && . ./run/control-endpoint.env
 set +a
 
 strip_cr() {
@@ -11,6 +12,7 @@ strip_cr() {
 }
 
 CONTROL_HOST="$(strip_cr "${CONTROL_HOST:-95.182.91.203}")"
+CONTROL_HOST_KEY_SHA256="$(strip_cr "${CONTROL_HOST_KEY_SHA256:-}")"
 CONTROL_PORT="$(strip_cr "${CONTROL_PORT:-22}")"
 CONTROL_USER="$(strip_cr "${CONTROL_USER:-cudy-tunnel-linux}")"
 CONTROL_LOCAL_PORT="$(strip_cr "${CONTROL_LOCAL_PORT:-18765}")"
@@ -18,11 +20,51 @@ CONTROL_REMOTE_PORT="$(strip_cr "${CONTROL_REMOTE_PORT:-8765}")"
 SSH_KEY="$(strip_cr "${SSH_KEY:-./uswest_control_tunnel_ed25519}")"
 CONTROL_CONNECT_TIMEOUT="$(strip_cr "${CONTROL_CONNECT_TIMEOUT:-12}")"
 KNOWN_HOSTS_FILE="$(strip_cr "${KNOWN_HOSTS_FILE:-./known_hosts}")"
-if [ -f "$KNOWN_HOSTS_FILE" ]; then
+STRICT_HOST_KEY_CHECKING=accept-new
+
+prepare_known_host() {
+  local lookup temp fingerprint
+  [ -n "$CONTROL_HOST_KEY_SHA256" ] || {
+    [ -f "$KNOWN_HOSTS_FILE" ] && STRICT_HOST_KEY_CHECKING=yes
+    return 0
+  }
+  command -v ssh-keygen >/dev/null 2>&1 || {
+    echo "ssh-keygen is required to verify the advertised control-server key" >&2
+    return 1
+  }
+  command -v ssh-keyscan >/dev/null 2>&1 || {
+    echo "ssh-keyscan is required to verify the advertised control-server key" >&2
+    return 1
+  }
+  mkdir -p run "$(dirname "$KNOWN_HOSTS_FILE")"
+  lookup="$CONTROL_HOST"
+  [ "$CONTROL_PORT" = "22" ] || lookup="[$CONTROL_HOST]:$CONTROL_PORT"
+  temp="run/control-host-key.$$"
+  rm -f "$temp"
+  if ssh-keygen -F "$lookup" -f "$KNOWN_HOSTS_FILE" 2>/dev/null \
+      | awk '!/^#/ && NF {print}' > "$temp" \
+      && [ -s "$temp" ] \
+      && ssh-keygen -lf "$temp" -E sha256 2>/dev/null \
+        | awk '{print $2}' | grep -Fxq "$CONTROL_HOST_KEY_SHA256"; then
+    rm -f "$temp"
+    STRICT_HOST_KEY_CHECKING=yes
+    return 0
+  fi
+  rm -f "$temp"
+  ssh-keyscan -T "$CONTROL_CONNECT_TIMEOUT" -p "$CONTROL_PORT" -t ed25519 "$CONTROL_HOST" > "$temp" 2>/dev/null || true
+  fingerprint="$(ssh-keygen -lf "$temp" -E sha256 2>/dev/null | awk 'NR == 1 {print $2}')"
+  if [ "$fingerprint" != "$CONTROL_HOST_KEY_SHA256" ]; then
+    echo "control-server SSH key mismatch: expected $CONTROL_HOST_KEY_SHA256, got ${fingerprint:-none}" >&2
+    rm -f "$temp"
+    return 1
+  fi
+  touch "$KNOWN_HOSTS_FILE"
+  chmod 600 "$KNOWN_HOSTS_FILE"
+  ssh-keygen -R "$lookup" -f "$KNOWN_HOSTS_FILE" >/dev/null 2>&1 || true
+  cat "$temp" >> "$KNOWN_HOSTS_FILE"
+  rm -f "$temp"
   STRICT_HOST_KEY_CHECKING=yes
-else
-  STRICT_HOST_KEY_CHECKING=accept-new
-fi
+}
 
 pin_control_route() {
   local gw_dev gw dev
@@ -59,6 +101,7 @@ pin_control_route() {
 }
 
 pin_control_route
+prepare_known_host
 chmod 600 "$SSH_KEY"
 echo "control route:"
 ip route get "$CONTROL_HOST" || true

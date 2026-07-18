@@ -129,6 +129,7 @@ try {
         '$env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS = "http://10.77.0.1/cudy-control/endpoints.json,http://192.168.8.1/cudy-control/endpoints.json"',
         '$env:VPN_CONTROL_PRIMARY_SSH_HOST = ' + (ConvertTo-PowerShellLiteral ([string]$result.provisioning.ssh_host)),
         '$env:VPN_CONTROL_PRIMARY_SSH_USER = ' + (ConvertTo-PowerShellLiteral ([string]$result.provisioning.ssh_user)),
+        '$env:VPN_CONTROL_PRIMARY_SSH_HOST_KEY_SHA256 = ' + (ConvertTo-PowerShellLiteral ([string]$result.provisioning.ssh_host_key_sha256)),
         '$env:VPN_CONTROL_PRIMARY_SSH_KEY = "$PSScriptRoot\uswest_control_tunnel_ed25519"',
         '$env:VPN_AGENT_TOKEN = ' + (ConvertTo-PowerShellLiteral ([string]$result.token)),
         '$env:VPN_AGENT_DEVICE_ID = ' + (ConvertTo-PowerShellLiteral ([string]$result.device_id)),

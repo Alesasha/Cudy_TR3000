@@ -396,6 +396,7 @@ public class CudyVpnService : VpnService
                 SavePolicySummary(configJson);
                 using var doc = JsonDocument.Parse(configJson);
                 var root = doc.RootElement;
+                ApplyAuthenticatedControlEndpoint(root);
                 criticalServices = CudyCriticalServiceMonitor.Parse(root);
                 domainRoutes = ArrayLength(root, "domain_routes");
                 ipRoutes = ArrayLength(root, "ip_routes");
@@ -488,6 +489,7 @@ public class CudyVpnService : VpnService
                         probe_jobs = probeSummary,
                         tunnel_established = tun is not null,
                         control_tunnel_established = useSshControl && sshClient?.IsConnected == true,
+                        configured_control_host = sshControlHost,
                         critical_services_ok = criticalResult.Ok,
                         critical_service_failures = consecutiveCriticalFailures,
                     },
@@ -583,6 +585,77 @@ public class CudyVpnService : VpnService
                 break;
             }
         }
+    }
+
+    private void ApplyAuthenticatedControlEndpoint(JsonElement root)
+    {
+        if (!useSshControl
+            || !root.TryGetProperty("control", out var control)
+            || control.ValueKind != JsonValueKind.Object
+            || !control.TryGetProperty("endpoints", out var manifest)
+            || manifest.ValueKind != JsonValueKind.Object
+            || !manifest.TryGetProperty("endpoints", out var endpoints)
+            || endpoints.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        string? selectedHost = null;
+        string? selectedHostKey = null;
+        var selectedPriority = int.MaxValue;
+        foreach (var endpoint in endpoints.EnumerateArray())
+        {
+            if (endpoint.ValueKind != JsonValueKind.Object
+                || !endpoint.TryGetProperty("role", out var role)
+                || !string.Equals(role.GetString(), "primary", StringComparison.OrdinalIgnoreCase)
+                || !endpoint.TryGetProperty("ssh_tunnel", out var tunnel)
+                || tunnel.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var host = tunnel.TryGetProperty("host", out var hostElement)
+                ? (hostElement.GetString() ?? "").Trim()
+                : "";
+            var hostKey = tunnel.TryGetProperty("host_key_sha256", out var hostKeyElement)
+                ? (hostKeyElement.GetString() ?? "").Trim()
+                : "";
+            var priority = endpoint.TryGetProperty("priority", out var priorityElement)
+                && priorityElement.TryGetInt32(out var parsedPriority)
+                    ? parsedPriority
+                    : 1000;
+            if (string.IsNullOrWhiteSpace(host)
+                || host.Any(char.IsWhiteSpace)
+                || !hostKey.StartsWith("SHA256:", StringComparison.Ordinal)
+                || hostKey.Any(char.IsWhiteSpace)
+                || priority >= selectedPriority)
+            {
+                continue;
+            }
+            selectedHost = host;
+            selectedHostKey = hostKey;
+            selectedPriority = priority;
+        }
+
+        if (string.IsNullOrWhiteSpace(selectedHost)
+            || string.IsNullOrWhiteSpace(selectedHostKey)
+            || (string.Equals(selectedHost, sshControlHost, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(selectedHostKey, sshControlHostKeySha256, StringComparison.Ordinal)))
+        {
+            return;
+        }
+
+        var previousHost = sshControlHost;
+        sshControlHost = selectedHost;
+        sshControlHostKeySha256 = selectedHostKey;
+        GetSharedPreferences("cudy-agent", FileCreationMode.Private)
+            ?.Edit()
+            ?.PutString("ssh_host", selectedHost)
+            ?.PutString("ssh_host_key_sha256", selectedHostKey)
+            ?.Apply();
+        Log.Info(
+            LogTag,
+            $"Authenticated control endpoint cached: {previousHost} -> {selectedHost}; active SSH session is kept until reconnect");
     }
 
     private async Task<string> GetControlStringAsync(

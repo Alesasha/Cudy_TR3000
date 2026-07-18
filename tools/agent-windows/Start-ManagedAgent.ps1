@@ -8,6 +8,7 @@ param(
     [string[]]$ExtraInterfaceMap = @(),
     [string]$ControlHostName = "95.182.91.203",
     [string]$ControlSshUser = "cudy-tunnel-windows",
+    [string]$ControlHostKeySha256 = "",
     [string]$ControlKeyPath = "$PSScriptRoot\uswest_control_tunnel_ed25519",
     [string]$ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS,
     [string]$TaskName = "Cudy Managed Route Agent",
@@ -31,6 +32,9 @@ if ($ControlHostName -eq "95.182.91.203" -and $env:VPN_CONTROL_PRIMARY_SSH_HOST)
 }
 if ($ControlSshUser -eq "cudy-tunnel-windows" -and $env:VPN_CONTROL_PRIMARY_SSH_USER) {
     $ControlSshUser = $env:VPN_CONTROL_PRIMARY_SSH_USER
+}
+if (-not $ControlHostKeySha256 -and $env:VPN_CONTROL_PRIMARY_SSH_HOST_KEY_SHA256) {
+    $ControlHostKeySha256 = $env:VPN_CONTROL_PRIMARY_SSH_HOST_KEY_SHA256
 }
 if ($ControlKeyPath -eq "$PSScriptRoot\uswest_control_tunnel_ed25519" -and $env:VPN_CONTROL_PRIMARY_SSH_KEY) {
     $ControlKeyPath = $env:VPN_CONTROL_PRIMARY_SSH_KEY
@@ -135,9 +139,63 @@ function Stop-LocalTunnelListener {
     }
 }
 
-function Get-ControlTunnelHostFromManifest {
+function Test-ControlEndpointValue {
+    param($Endpoint)
+    return $null -ne $Endpoint `
+        -and ([string]$Endpoint.host) -match '^[A-Za-z0-9._:-]+$' `
+        -and ([string]$Endpoint.host_key_sha256) -match '^SHA256:[A-Za-z0-9+/]{20,}={0,2}$'
+}
+
+function Read-CachedControlEndpoint {
+    $path = Join-Path $PSScriptRoot "run\control-endpoint.json"
+    if (-not (Test-Path -LiteralPath $path)) {
+        return $null
+    }
+    try {
+        $endpoint = Get-Content -Raw -Encoding UTF8 -LiteralPath $path | ConvertFrom-Json
+        if (Test-ControlEndpointValue $endpoint) {
+            return $endpoint
+        }
+    } catch {
+        Write-AgentLine "Ignoring invalid cached control endpoint: $($_.Exception.Message)" -Level WARN
+    }
+    return $null
+}
+
+function Save-AuthenticatedControlEndpoint {
+    param([Parameter(Mandatory = $true)]$Config)
+    $endpoints = @($Config.control.endpoints.endpoints |
+        Where-Object { $_.role -eq "primary" -and $_.ssh_tunnel } |
+        Sort-Object @{ Expression = { [int]($_.priority) } })
+    foreach ($item in $endpoints) {
+        $candidate = [pscustomobject]@{
+            host = ([string]$item.ssh_tunnel.host).Trim()
+            host_key_sha256 = ([string]$item.ssh_tunnel.host_key_sha256).Trim()
+            updated_at = (Get-Date).ToUniversalTime().ToString("o")
+        }
+        if (-not (Test-ControlEndpointValue $candidate)) {
+            continue
+        }
+        $runDir = Join-Path $PSScriptRoot "run"
+        $path = Join-Path $runDir "control-endpoint.json"
+        $tempPath = "$path.tmp"
+        New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+        [IO.File]::WriteAllText(
+            $tempPath,
+            ($candidate | ConvertTo-Json -Depth 3),
+            [Text.UTF8Encoding]::new($false))
+        Move-Item -LiteralPath $tempPath -Destination $path -Force
+        return
+    }
+}
+
+function Get-ControlTunnelEndpoint {
+    $cached = Read-CachedControlEndpoint
+    if ($null -ne $cached) {
+        return $cached
+    }
     if (-not $ControlEndpointManifestUrls) {
-        return $ControlHostName
+        return [pscustomobject]@{ host = $ControlHostName; host_key_sha256 = $ControlHostKeySha256 }
     }
     foreach ($url in ($ControlEndpointManifestUrls -split "[,;]" | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         try {
@@ -147,19 +205,23 @@ function Get-ControlTunnelHostFromManifest {
                 Where-Object { $_.role -eq "primary" -and $_.ssh_tunnel -and $_.ssh_tunnel.host } |
                 Select-Object -First 1)
             if ($endpoint.Count -gt 0) {
-                $hostFromManifest = [string]$endpoint[0].ssh_tunnel.host
-                if ($hostFromManifest) {
+                $candidate = [pscustomobject]@{
+                    host = ([string]$endpoint[0].ssh_tunnel.host).Trim()
+                    host_key_sha256 = ([string]$endpoint[0].ssh_tunnel.host_key_sha256).Trim()
+                }
+                if (Test-ControlEndpointValue $candidate) {
+                    $hostFromManifest = [string]$candidate.host
                     if ($hostFromManifest -ne $ControlHostName) {
                         Write-AgentLine "Control manifest selected SSH host $hostFromManifest from $url"
                     }
-                    return $hostFromManifest
+                    return $candidate
                 }
             }
         } catch {
             Write-AgentLine "Control manifest unavailable: $url $($_.Exception.Message)" -Level WARN
         }
     }
-    return $ControlHostName
+    return [pscustomobject]@{ host = $ControlHostName; host_key_sha256 = $ControlHostKeySha256 }
 }
 
 function Ensure-ControlTunnel {
@@ -173,9 +235,11 @@ function Ensure-ControlTunnel {
     Stop-LocalTunnelListener
 
     $script = Join-Path $PSScriptRoot "Start-Tunnel.ps1"
-    $selectedHost = Get-ControlTunnelHostFromManifest
+    $selectedEndpoint = Get-ControlTunnelEndpoint
+    $selectedHost = [string]$selectedEndpoint.host
+    $selectedHostKey = [string]$selectedEndpoint.host_key_sha256
     Write-AgentLine "Starting SSH control tunnel on 127.0.0.1:$LocalPort via $selectedHost"
-    Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList @(
+    $tunnelArguments = @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
         "-File", "`"$script`"",
@@ -183,7 +247,11 @@ function Ensure-ControlTunnel {
         "-User", "$ControlSshUser",
         "-KeyPath", "`"$ControlKeyPath`"",
         "-LocalPort", "$LocalPort"
-    ) | Out-Null
+    )
+    if ($selectedHostKey) {
+        $tunnelArguments += @("-ExpectedHostKeySha256", $selectedHostKey)
+    }
+    Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList $tunnelArguments | Out-Null
 
     $deadline = [DateTime]::UtcNow.AddSeconds(30)
     do {
@@ -849,6 +917,7 @@ do {
                 $agentConfig = Get-AgentConfig -Cached
                 Write-AgentLine "using cached policy while control is unavailable" -Level WARN
             }
+            Save-AuthenticatedControlEndpoint -Config $agentConfig
             foreach ($transport in @($agentConfig.transport_plan)) {
                 $controlServerIds[[string]$transport.server_id] = $true
             }

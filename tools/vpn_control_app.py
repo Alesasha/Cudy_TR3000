@@ -2913,6 +2913,7 @@ def control_endpoints_manifest(*, valid_for_seconds: int = 600, cache_seconds: i
             primary["ssh_tunnel"] = {
                 "host": primary_host,
                 "user": primary_user,
+                "host_key_sha256": control_ssh_host_key_sha256(),
                 "remote_host": "127.0.0.1",
                 "remote_port": primary_remote_port,
             }

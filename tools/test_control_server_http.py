@@ -274,6 +274,13 @@ def main() -> int:
                 raise AssertionError(f"unexpected live manifest cache_seconds: {manifest!r}")
             if endpoints[0].get("role") != "primary":
                 raise AssertionError(f"first endpoint is not primary: {endpoints[0]!r}")
+            primary_tunnel = endpoints[0].get("ssh_tunnel") or {}
+            if not str(primary_tunnel.get("host") or "").strip():
+                raise AssertionError(f"primary endpoint has no SSH host: {endpoints[0]!r}")
+            if not str(primary_tunnel.get("user") or "").strip():
+                raise AssertionError(f"primary endpoint has no SSH user: {endpoints[0]!r}")
+            if not str(primary_tunnel.get("host_key_sha256") or "").startswith("SHA256:"):
+                raise AssertionError(f"primary endpoint has no SSH host key fingerprint: {endpoints[0]!r}")
 
             opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor())
             login_page = fetch_text(opener, f"{base_url}/login")

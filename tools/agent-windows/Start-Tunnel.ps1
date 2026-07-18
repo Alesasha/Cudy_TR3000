@@ -3,6 +3,7 @@ param(
     [string]$User = "cudy-tunnel-windows",
     [string]$KeyPath = "$PSScriptRoot\uswest_control_tunnel_ed25519",
     [string]$KnownHostsPath = "$PSScriptRoot\known_hosts",
+    [string]$ExpectedHostKeySha256 = "",
     [int]$LocalPort = 18765,
     [int]$RemotePort = 8765
 )
@@ -29,6 +30,61 @@ function Get-PhysicalDefaultRoute {
         }
     }
     return $routes | Select-Object -First 1
+}
+
+function Get-KeyFingerprint {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $output = & ssh-keygen.exe -lf $Path -E sha256 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        return ""
+    }
+    $match = [regex]::Match(($output -join "`n"), 'SHA256:[A-Za-z0-9+/=]+')
+    if ($match.Success) { return $match.Value }
+    return ""
+}
+
+function Confirm-ControlHostKey {
+    param(
+        [Parameter(Mandatory = $true)][string]$HostValue,
+        [Parameter(Mandatory = $true)][string]$Fingerprint,
+        [Parameter(Mandatory = $true)][string]$KnownHostsFile
+    )
+    if ($Fingerprint -notmatch '^SHA256:[A-Za-z0-9+/]{20,}={0,2}$') {
+        throw "Invalid advertised control-server SSH fingerprint."
+    }
+    $temp = Join-Path $env:TEMP ("cudy-control-host-key-{0}" -f [guid]::NewGuid().ToString("N"))
+    try {
+        $known = @()
+        if (Test-Path -LiteralPath $KnownHostsFile) {
+            $known = @(& ssh-keygen.exe -F $HostValue -f $KnownHostsFile 2>$null |
+                Where-Object { $_ -and -not $_.StartsWith('#') })
+        }
+        if ($known.Count -gt 0) {
+            [IO.File]::WriteAllLines($temp, $known, [Text.UTF8Encoding]::new($false))
+            if ((Get-KeyFingerprint -Path $temp) -eq $Fingerprint) {
+                return
+            }
+        }
+
+        $scanned = @(& ssh-keyscan.exe -T 12 -p 22 -t ed25519 $HostValue 2>$null |
+            Where-Object { $_ -and -not $_.StartsWith('#') })
+        if ($LASTEXITCODE -ne 0 -or $scanned.Count -eq 0) {
+            throw "Cannot read the advertised control-server SSH host key."
+        }
+        [IO.File]::WriteAllLines($temp, $scanned, [Text.UTF8Encoding]::new($false))
+        $actual = Get-KeyFingerprint -Path $temp
+        if ($actual -ne $Fingerprint) {
+            throw "Control-server SSH key mismatch: expected $Fingerprint, got $actual."
+        }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $KnownHostsFile) | Out-Null
+        if (-not (Test-Path -LiteralPath $KnownHostsFile)) {
+            [IO.File]::WriteAllText($KnownHostsFile, "", [Text.UTF8Encoding]::new($false))
+        }
+        & ssh-keygen.exe -R $HostValue -f $KnownHostsFile *> $null
+        Add-Content -LiteralPath $KnownHostsFile -Value $scanned -Encoding UTF8
+    } finally {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    }
 }
 
 $existing = Get-NetTCPConnection -LocalAddress 127.0.0.1 -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue
@@ -63,6 +119,9 @@ if (Test-Admin) {
 Write-Host "Opening SSH tunnel: http://127.0.0.1:$LocalPort -> ${User}@${HostName}:127.0.0.1:$RemotePort"
 Write-Host "Keep this window open while the agent is running."
 
+if ($ExpectedHostKeySha256) {
+    Confirm-ControlHostKey -HostValue $HostName -Fingerprint $ExpectedHostKeySha256 -KnownHostsFile $KnownHostsPath
+}
 $strictHostMode = if (Test-Path -LiteralPath $KnownHostsPath) { "yes" } else { "accept-new" }
 $sshArgs = @(
     "-i", $KeyPath,

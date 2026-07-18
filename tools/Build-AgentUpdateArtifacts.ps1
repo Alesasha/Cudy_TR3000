@@ -1,9 +1,11 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\..\build\agent-updates",
-    [string]$VersionName = "1.24",
-    [int]$VersionCode = 25,
-    [string]$LinuxVersionName = "1.23",
-    [int]$LinuxVersionCode = 24,
+    [string]$VersionName = "1.25",
+    [int]$VersionCode = 26,
+    [string]$LinuxVersionName = "1.24",
+    [int]$LinuxVersionCode = 25,
+    [string]$AndroidVersionName = "1.28",
+    [int]$AndroidVersionCode = 29,
     [string]$AndroidApk = "",
     [ValidateSet("windows", "linux", "android")]
     [string[]]$Platforms = @("windows", "linux", "android")
@@ -157,11 +159,11 @@ function Build-AndroidUpdate {
     if (-not $requestedApk) {
         $releaseDir = Join-Path $root "build\releases"
         $requestedApk = Get-ChildItem -LiteralPath $releaseDir -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -like "NashVPN-CudyAgent-android-arm64-v$VersionName-*.apk" } |
+            Where-Object { $_.Name -like "NashVPN-CudyAgent-android-arm64-v$AndroidVersionName-*.apk" } |
             Sort-Object LastWriteTime -Descending |
             Select-Object -First 1 -ExpandProperty FullName
         if (-not $requestedApk) {
-            throw "Android release APK v$VersionName was not found in $releaseDir. Run Build-AndroidAgentRelease.ps1 first."
+            throw "Android release APK v$AndroidVersionName was not found in $releaseDir. Run Build-AndroidAgentRelease.ps1 first."
         }
     }
     $apkPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($requestedApk)
@@ -170,7 +172,7 @@ function Build-AndroidUpdate {
     }
     $target = Join-Path $resolvedOutputDir "android.apk"
     Copy-Item -LiteralPath $apkPath -Destination $target -Force
-    Write-VersionFile -Platform "android" -ArtifactPath $target -ArtifactVersionName $VersionName -ArtifactVersionCode $VersionCode
+    Write-VersionFile -Platform "android" -ArtifactPath $target -ArtifactVersionName $AndroidVersionName -ArtifactVersionCode $AndroidVersionCode
 }
 
 $selectedPlatforms = @($Platforms | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)

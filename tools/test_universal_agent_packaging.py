@@ -80,6 +80,8 @@ def main() -> int:
         'StrictHostKeyChecking=$strictHostMode',
         'UserKnownHostsFile=$KnownHostsPath',
         'BatchMode=yes',
+        'Confirm-ControlHostKey',
+        'ExpectedHostKeySha256',
         label="Start-Tunnel.ps1",
     )
 
@@ -102,6 +104,8 @@ def main() -> int:
         'STRICT_HOST_KEY_CHECKING=yes',
         'STRICT_HOST_KEY_CHECKING=accept-new',
         'StrictHostKeyChecking="$STRICT_HOST_KEY_CHECKING"',
+        'prepare_known_host',
+        'CONTROL_HOST_KEY_SHA256',
         label="start_tunnel.sh",
     )
 
