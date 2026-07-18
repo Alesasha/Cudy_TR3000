@@ -378,6 +378,12 @@ Remaining Android concerns:
 - Global and per-user aliases are isolated and tested.
 - Important Service dependency groups can share one cache key, candidate list
   and winner; an isolated production staging test passed and was cleaned up.
+- Auto no longer treats known technical dependencies as standalone websites.
+  Seeded service groups provide canonical probe URLs for YouTube, Gemini,
+  ChatGPT/OpenAI and Reuters. Production assigned `ytimg.com` to an Android
+  agent using `https://www.youtube.com/` and accepted `proxyde`; new OpenAI
+  dependency jobs use `https://chatgpt.com/`. Earlier bare-apex failures remain
+  visible only until the rolling failure window expires.
 - Generic success/failure regexes and known geo-block content checks exist.
 - Recent Auto history now returns failed jobs with per-candidate reasons,
   latency and HTTP status; the admin candidate editor displays up to three

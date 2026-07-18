@@ -906,6 +906,29 @@ def run_auto_worker_cache_ttl_check(tmp: Path) -> None:
     assert_equal(matching[0]["assigned_device_id"], "ttl-probe-device", "stale probe agent assignment")
 
 
+def run_service_dependency_probe_url_check(tmp: Path) -> None:
+    db_path = tmp / "service-probe-url.db"
+    app.init_db(db_path, INVENTORY)
+    with app.connect(db_path) as conn:
+        entries = app.auto_probe_domain_rows(conn)
+    by_domain = {item["domain"]: item for item in entries}
+    assert_equal(
+        by_domain["googlevideo.com"].get("url"),
+        "https://www.youtube.com/",
+        "YouTube dependency must use the canonical service probe URL",
+    )
+    assert_equal(
+        by_domain["www.reutersmedia.net"].get("url"),
+        "https://www.reuters.com/",
+        "Reuters dependency must use the canonical service probe URL",
+    )
+    assert_equal(
+        by_domain["oaistatic.com"].get("url"),
+        "https://chatgpt.com/",
+        "OpenAI dependency must use the canonical service probe URL",
+    )
+
+
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     target_cidr = "203.0.113.0/24"
     cache_key = app.auto_cache_key_for_ip_route(target_cidr)
@@ -1047,6 +1070,7 @@ def main() -> int:
         run_auto_worker_suppresses_unresolvable_apex_check(tmp_path)
         run_auto_worker_active_domain_window_check(tmp_path)
         run_auto_worker_cache_ttl_check(tmp_path)
+        run_service_dependency_probe_url_check(tmp_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
         run_service_group_shares_auto_winner_check(db_path)
         gc.collect()

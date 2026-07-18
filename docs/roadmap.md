@@ -72,6 +72,10 @@ recovery, and a user-facing UI that does not expose raw engine internals.
 
 1. Add browser-rendered checks for JavaScript-only geographic decisions while
    preserving existing regex/content checks for ordinary probes.
+   Technical dependency hosts now inherit a canonical user-facing probe URL
+   from their service group: for example, `googlevideo.com` is tested through
+   YouTube and OpenAI static hosts are tested through ChatGPT. Production
+   verified the YouTube path on an Android agent; rendered geo checks remain.
 2. Soak the implemented TTL refresh and bounded 300-domain activity window
    under real traffic. Local regressions cover 305 targets and fresh/stale
    cache behavior; agent-side real-usage reporting remains to be validated.

@@ -123,6 +123,7 @@ SERVICE_ALIAS_SEEDS = [
     {
         "aliases": ["youtube", "yt", "ютуб"],
         "label": "YouTube",
+        "probe_url": "https://www.youtube.com/",
         "targets": [
             "youtube.com",
             "www.youtube.com",
@@ -135,6 +136,7 @@ SERVICE_ALIAS_SEEDS = [
     {
         "aliases": ["gemini", "google-ai", "гемини", "джемини"],
         "label": "Gemini",
+        "probe_url": "https://gemini.google.com/",
         "targets": [
             "gemini.google.com",
             "aistudio.google.com",
@@ -143,6 +145,7 @@ SERVICE_ALIAS_SEEDS = [
     {
         "aliases": ["chatgpt", "openai", "gpt", "чатгпт", "чатжпт"],
         "label": "ChatGPT / OpenAI",
+        "probe_url": "https://chatgpt.com/",
         "targets": [
             "chatgpt.com",
             "chat.openai.com",
@@ -194,6 +197,7 @@ SERVICE_ALIAS_SEEDS = [
     {
         "aliases": ["reuters", "reuters.com"],
         "label": "Reuters",
+        "probe_url": "https://www.reuters.com/",
         "targets": [
             "reuters.com",
             "www.reuters.com",
@@ -5840,6 +5844,8 @@ def auto_probe_domain_rows(
         if target_cidr:
             entry["domain"] = auto_cache_key_for_ip_route(target_cidr)
             entry["url"] = ip_route_probe_url(target_cidr, entry.get("note") or "")
+        elif not entry.get("url"):
+            entry["url"] = service_probe_url_for_domain(str(entry.get("domain") or ""))
         key = (entry.get("user_id") or "", entry["domain"])
         if key in seen:
             continue
@@ -5861,6 +5867,28 @@ def auto_probe_domain_rows(
     if active_domain_limit > 0:
         return result[: max(1, int(active_domain_limit))]
     return result
+
+
+def service_probe_url_for_domain(domain: str) -> str | None:
+    """Return the user-facing probe URL for a managed service dependency."""
+    try:
+        normalized = normalize_domain(domain)
+    except ValueError:
+        return None
+    for service in SERVICE_ALIAS_SEEDS:
+        probe_url = str(service.get("probe_url") or "").strip()
+        if not probe_url:
+            continue
+        for target in service.get("targets") or []:
+            parsed = urlparse(str(target))
+            candidate = parsed.hostname or str(target)
+            try:
+                target_domain = normalize_domain(candidate)
+            except ValueError:
+                continue
+            if target_domain == normalized:
+                return probe_url
+    return None
 
 
 def select_auto_probe_candidates(
