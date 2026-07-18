@@ -1,9 +1,11 @@
 import json
+import tempfile
+from pathlib import Path
 
 from cudy_router_preflight import run_preflight
 
 
-def write_snapshot(path, records, nat_rows, cudy_network, cudy_dhcp, cudy_firewall, ip_route):
+def write_snapshot(path, records, nat_rows, cudy_network, cudy_dhcp, cudy_firewall, ip_route, cudy_wireless=""):
     airties = path / "airties"
     cudy = path / "cudy"
     airties.mkdir()
@@ -13,6 +15,7 @@ def write_snapshot(path, records, nat_rows, cudy_network, cudy_dhcp, cudy_firewa
     (cudy / "uci_network.txt").write_text(cudy_network, encoding="utf-8")
     (cudy / "uci_dhcp.txt").write_text(cudy_dhcp, encoding="utf-8")
     (cudy / "uci_firewall.txt").write_text(cudy_firewall, encoding="utf-8")
+    (cudy / "uci_wireless.txt").write_text(cudy_wireless, encoding="utf-8")
     (cudy / "ip_route.txt").write_text(ip_route, encoding="utf-8")
     return airties, cudy
 
@@ -62,6 +65,7 @@ def test_preflight_reports_expected_cutover_risks(tmp_path):
             ]
         ),
         "45.136.59.135 via 192.168.1.1 dev eth0 proto static\n",
+        "wireless.default_radio0=wifi-iface\nwireless.default_radio0.ssid='OpenWrt'\nwireless.default_radio0.encryption='none'\nwireless.default_radio0.disabled='1'\n",
     )
 
     findings = run_preflight(airties, cudy)
@@ -76,3 +80,15 @@ def test_preflight_reports_expected_cutover_risks(tmp_path):
     assert by_code["old-cudy-reservation"].severity == "INFO"
     assert by_code["host-routes-via-old-airties"].severity == "WARN"
     assert by_code["forward-targets-without-reservations"].severity == "WARN"
+    assert by_code["wifi-disabled"].severity == "WARN"
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        test_preflight_reports_expected_cutover_risks(Path(temp_dir))
+    print("Cudy router preflight regression passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

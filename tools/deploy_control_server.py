@@ -35,6 +35,7 @@ DEFAULT_PRIVATE_HOST = "172.29.172.1"
 
 UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
 AGENT_UPDATE_DIR = "build/agent-updates"
+AGENT_ENROLLMENT_DIR = "build/universal-agents"
 UPLOAD_FILES = ["requirements.txt"]
 EXCLUDE_NAMES = {
     ".git",
@@ -228,7 +229,7 @@ def upload_tree(sftp: paramiko.SFTPClient, local_dir: Path, remote_dir: str) -> 
 def selected_upload_dirs(*, include_agent_updates: bool) -> list[str]:
     result = list(UPLOAD_DIRS)
     if include_agent_updates:
-        result.append(AGENT_UPDATE_DIR)
+        result.extend((AGENT_UPDATE_DIR, AGENT_ENROLLMENT_DIR))
     return result
 
 

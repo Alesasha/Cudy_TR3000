@@ -32,6 +32,7 @@ DEFAULT_SERVICE = "vpn-control"
 DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
 UPLOAD_DIRS = ["config", "deploy", "docs", "openwrt", "tools"]
 AGENT_UPDATE_DIR = "build/agent-updates"
+AGENT_ENROLLMENT_DIR = "build/universal-agents"
 UPLOAD_FILES = ["requirements.txt"]
 EXCLUDE_NAMES = {".git", "__pycache__", "node_modules", ".playwright-cli"}
 EXCLUDE_SUFFIXES = {".pyc", ".pyo", ".log", ".tmp", ".bak"}
@@ -56,7 +57,10 @@ def should_skip(path: Path) -> bool:
 
 
 def archive_paths(*, include_agent_updates: bool = True) -> Iterable[Path]:
-    directories = [*UPLOAD_DIRS, *([AGENT_UPDATE_DIR] if include_agent_updates else [])]
+    directories = [
+        *UPLOAD_DIRS,
+        *([AGENT_UPDATE_DIR, AGENT_ENROLLMENT_DIR] if include_agent_updates else []),
+    ]
     for dirname in directories:
         path = ROOT / dirname
         if path.exists():

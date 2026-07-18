@@ -254,11 +254,10 @@ and update manifest both have SHA256
 `7546c679c9ee0d5b4289867533eb578fdc7d4fabd840046fdd8d7706c18a6213`.
 Fresh-device code-only enrollment and the resulting per-device control channel
 passed against production. The universal APK has now been installed and
-activated successfully on two physical phones with `1.25 (26)`. The original
-test phone was upgraded in place from `1.24 (25)` to `1.25 (26)` without losing
-its individual device credentials or stored policy. Version `1.27 (28)` keeps
-the 1.26 MIUI/UI cleanup and adds explicit APK version reporting to the
-control-server and Devices table; physical 1.27 acceptance is pending.
+activated successfully on two physical phones. Both phones now run the current
+`1.27 (28)` package and basic routing works on both. Version `1.27 (28)` keeps
+the MIUI/UI cleanup and adds explicit APK version reporting to the
+control-server and Devices table; the multi-day acceptance soak remains.
 
 Verified acceptance:
 
@@ -282,7 +281,7 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
-- the current physical-device check confirms version `1.25 (26)`, an active
+- the current physical-device check confirms version `1.27 (28)`, an active
   foreground `CudyVpnService`, and a device-idle whitelist entry for
   `com.nashvpn.cudyagent`; the production package is not debuggable.
 - the Administration activity opens from the main application, is not exported
@@ -306,7 +305,7 @@ Remaining Android concerns:
 
 ## Windows Agent
 
-- Windows `1.20 (21)` is published and its production manifest/hash match.
+- Windows `1.24 (25)` is built for the production update channel.
 - Packaging, cached-policy fallback, emergency stop and watchdog regression
   tests exist.
 - The development workstation scheduled task is intentionally disabled.
@@ -315,7 +314,8 @@ Remaining Android concerns:
   to the production host key and can forward only to the enrollment listener;
   successful enrollment stores a unique device token/key and strict
   `known_hosts` entry. Local packaging and static regression pass; a fresh
-  physical Windows acceptance and production download surface remain.
+  physical Windows acceptance remains. The admin Devices workflow now serves
+  this universal installer when Windows is selected.
 - Normal traffic on this workstation must not depend on an unaccepted agent
   build while Codex development is active.
 - A dedicated standalone `OpenAI-USWest` recovery transport is active and
@@ -341,7 +341,8 @@ Remaining Android concerns:
   device token and SSH key through the restricted enrollment listener, writes
   `agent.env` atomically, pins the control-server host key, and installs the
   service in the OFF state. Local package and shell/static regressions pass;
-  fresh-machine acceptance and production distribution remain.
+  fresh-machine acceptance remains. The admin Devices workflow now serves this
+  universal installer when Linux is selected.
 - The systemd-owned control tunnel is now the only SSH tunnel owner. The UI
   and diagnostics wait for it instead of killing and recreating the shared
   forward, while startup removes only exact orphaned forwards left by a crash.
@@ -459,7 +460,7 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Let both phones receive Android `1.27 (28)` so their installed APK versions
-become observable, then continue the multi-day daily-use soak across Wi-Fi,
-mobile data, lock and reboot. Code-only Windows/Linux packages are locally
-complete; begin Phase 6 Cudy main-router preflight without moving DHCP/WAN yet.
+Continue the Android `1.27 (28)` daily-use soak across Wi-Fi, mobile data, lock
+and reboot. The fresh Cudy main-router preflight completed with no hard failure;
+prepare encrypted Cudy Wi-Fi, VLAN 2 validation, missing static forward-target
+addresses and an independent physical/config rollback before moving DHCP/WAN.

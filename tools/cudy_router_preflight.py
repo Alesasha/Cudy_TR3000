@@ -52,6 +52,25 @@ def cudy_uci(cudy_snapshot: Path, name: str) -> dict[str, str]:
     return parse_uci_show(read_text(cudy_snapshot / f"uci_{name}.txt"))
 
 
+def snapshot_generated_at(snapshot: Path) -> dt.datetime | None:
+    index_path = snapshot / "index.json"
+    if index_path.exists():
+        try:
+            index = load_json(index_path)
+            if isinstance(index, dict) and index.get("generated_at"):
+                parsed = dt.datetime.fromisoformat(str(index["generated_at"]).replace("Z", "+00:00"))
+                if parsed.tzinfo is None:
+                    parsed = parsed.replace(tzinfo=dt.timezone.utc)
+                return parsed.astimezone(dt.timezone.utc)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            return None
+    match = re.fullmatch(r"(\d{8})-(\d{6})", snapshot.name)
+    if not match:
+        return None
+    parsed = dt.datetime.strptime("".join(match.groups()), "%Y%m%d%H%M%S")
+    return parsed.replace(tzinfo=dt.datetime.now().astimezone().tzinfo).astimezone(dt.timezone.utc)
+
+
 def active_forward_targets(nat_rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return [row for row in nat_rows if row.get("active") == "1"]
 
@@ -80,6 +99,27 @@ def cudy_awg_listen_ports(network: dict[str, str]) -> set[str]:
     return ports
 
 
+def cudy_wifi_summary(wireless: dict[str, str]) -> tuple[int, int, list[str]]:
+    sections = sorted(
+        key
+        for key, val in wireless.items()
+        if val == "wifi-iface" and key.count(".") >= 1
+    )
+    enabled = 0
+    encrypted = 0
+    ssids: list[str] = []
+    for section in sections:
+        disabled = wireless.get(f"{section}.disabled", "0") == "1"
+        encryption = wireless.get(f"{section}.encryption", "none").lower()
+        if not disabled:
+            enabled += 1
+            if encryption not in {"", "none", "open"}:
+                encrypted += 1
+        ssid = wireless.get(f"{section}.ssid", "<unnamed>")
+        ssids.append(f"{ssid}:{'disabled' if disabled else encryption}")
+    return enabled, encrypted, ssids
+
+
 def host_routes_via_airties(cudy_snapshot: Path, airties_lan_ip: str) -> list[str]:
     routes = []
     route_text = read_text(cudy_snapshot / "ip_route.txt")
@@ -92,15 +132,45 @@ def host_routes_via_airties(cudy_snapshot: Path, airties_lan_ip: str) -> list[st
     return routes
 
 
-def run_preflight(airties_snapshot: Path, cudy_snapshot: Path) -> list[Finding]:
+def run_preflight(
+    airties_snapshot: Path,
+    cudy_snapshot: Path,
+    *,
+    now: dt.datetime | None = None,
+) -> list[Finding]:
     records = load_json(airties_snapshot / "records.json")
     nat_rows = load_json(airties_snapshot / "nat_port_forwarding_table.json")
     values = record_map(records)
     cudy_network = cudy_uci(cudy_snapshot, "network")
     cudy_dhcp = cudy_uci(cudy_snapshot, "dhcp")
     cudy_firewall = cudy_uci(cudy_snapshot, "firewall")
+    cudy_wireless = cudy_uci(cudy_snapshot, "wireless")
 
     findings: list[Finding] = []
+
+    generated_at = snapshot_generated_at(cudy_snapshot)
+    current = now or dt.datetime.now(dt.timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=dt.timezone.utc)
+    if generated_at is None:
+        findings.append(
+            Finding("WARN", "cudy-snapshot-age-unknown", "Cudy snapshot timestamp could not be verified.")
+        )
+    else:
+        age_hours = max(0.0, (current.astimezone(dt.timezone.utc) - generated_at).total_seconds() / 3600)
+        if age_hours <= 24:
+            findings.append(
+                Finding("PASS", "cudy-snapshot-fresh", "Cudy snapshot is fresh.", f"age={age_hours:.1f}h")
+            )
+        else:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "cudy-snapshot-stale",
+                    "Cudy snapshot is older than 24 hours; capture a fresh snapshot before cutover.",
+                    f"age={age_hours:.1f}h",
+                )
+            )
 
     airties_wan_vlan = value(values, "wan_vlan-1", "vlanid")
     cudy_wan_device = cudy_network.get("network.wan.device", "")
@@ -153,6 +223,35 @@ def run_preflight(airties_snapshot: Path, cudy_snapshot: Path) -> list[Finding]:
             f"AirTies={dhcp_start_ip}-{dhcp_end_ip}; Cudy start={cudy_dhcp_start}, limit={cudy_dhcp_limit}",
         )
     )
+
+    wifi_enabled, wifi_encrypted, wifi_ssids = cudy_wifi_summary(cudy_wireless)
+    if wifi_enabled == 0:
+        findings.append(
+            Finding(
+                "WARN",
+                "wifi-disabled",
+                "Cudy has no enabled Wi-Fi interface; configure and test Wi-Fi before replacing AirTies.",
+                ", ".join(wifi_ssids) or "no wifi-iface sections",
+            )
+        )
+    elif wifi_encrypted < wifi_enabled:
+        findings.append(
+            Finding(
+                "WARN",
+                "wifi-unencrypted",
+                "At least one enabled Cudy Wi-Fi interface is not encrypted.",
+                ", ".join(wifi_ssids),
+            )
+        )
+    else:
+        findings.append(
+            Finding(
+                "PASS",
+                "wifi-ready",
+                "Cudy has at least one enabled encrypted Wi-Fi interface.",
+                ", ".join(wifi_ssids),
+            )
+        )
 
     port = value(values, "network.awg_in", "listen_port", "51830")
     # AirTies records do not contain Cudy network, so use known Cudy port from cudy snapshot.

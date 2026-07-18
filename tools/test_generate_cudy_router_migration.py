@@ -65,3 +65,13 @@ def test_generate_commands_keep_guardrails_and_skip_self_forwards():
     assert "skipped AirTies router self-forward 1" in commands
     assert "skipped AirTies self-forward for Cudy UDP 51830" in commands
     assert "firewall.airties_redirect_3_home_assistant" in commands
+
+
+def main() -> int:
+    test_generate_commands_keep_guardrails_and_skip_self_forwards()
+    print("Cudy router migration generator regression passed.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

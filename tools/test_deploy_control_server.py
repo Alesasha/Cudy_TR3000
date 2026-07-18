@@ -21,6 +21,8 @@ def main() -> int:
     with_updates = deploy.selected_upload_dirs(include_agent_updates=True)
     assert deploy.AGENT_UPDATE_DIR not in code_only
     assert deploy.AGENT_UPDATE_DIR in with_updates
+    assert deploy.AGENT_ENROLLMENT_DIR not in code_only
+    assert deploy.AGENT_ENROLLMENT_DIR in with_updates
     assert set(deploy.UPLOAD_DIRS).issubset(code_only)
 
     defaults = deploy.build_parser().parse_args([])
@@ -51,6 +53,8 @@ def main() -> int:
     fallback_with_updates = [path.relative_to(ROOT).as_posix() for path in fallback_deploy.archive_paths(include_agent_updates=True)]
     assert fallback_deploy.AGENT_UPDATE_DIR not in fallback_code_only
     assert fallback_deploy.AGENT_UPDATE_DIR in fallback_with_updates
+    assert fallback_deploy.AGENT_ENROLLMENT_DIR not in fallback_code_only
+    assert fallback_deploy.AGENT_ENROLLMENT_DIR in fallback_with_updates
     fallback_selected = fallback_deploy.build_parser().parse_args(["--skip-agent-updates"])
     assert fallback_selected.skip_agent_updates
     fallback_openssh = fallback_deploy.build_parser().parse_args(["--openssh"])

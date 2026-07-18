@@ -9,6 +9,17 @@ router state:
 - `backups/airties/snapshots/20260625-102516/`
 - `backups/cudy/snapshots/20260625-102803/`
 
+Capture a fresh read-only, redacted Cudy snapshot before every preflight:
+
+```powershell
+python tools\capture_cudy_preflight_snapshot.py --host 192.168.8.1
+```
+
+The snapshot records command exit codes and redacts private keys, preshared
+keys, passwords and tokens. It is suitable for analysis and source control
+verification, but it is not a restorable backup. A full on-router
+`sysupgrade -b` archive is still mandatory immediately before cutover.
+
 To regenerate the local dry-run migration plan from those snapshots:
 
 ```powershell
@@ -113,8 +124,9 @@ rollback path through AirTies is available.
 
 ## Current Preflight Notes
 
-The first preflight against the June 25 snapshots found no hard missing Cudy AWG
-listener/firewall rule, but it did highlight items to review before cutover:
+The fresh read-only preflight on 2026-07-18 found `FAIL=0`, `PASS=3`, `WARN=5`
+and confirmed healthy AWG/firewall prerequisites. It highlighted these items to
+resolve before cutover:
 
 - AirTies WAN uses VLAN `2`; confirm the correct OpenWrt syntax for this Cudy
   build before applying any WAN change.
@@ -124,3 +136,5 @@ listener/firewall rule, but it did highlight items to review before cutover:
   They may be static on the devices, but verify them before relying on forwards.
 - AirTies remote management, UPnP, and TR-069 were enabled. Prefer keeping
   these disabled on Cudy.
+- Both Cudy Wi-Fi interfaces are currently disabled and configured without
+  encryption. Configure encrypted SSIDs and test them before moving LAN clients.

@@ -79,6 +79,7 @@ CUDY_FALLBACK_MAX_AGE_SECONDS = int(os.environ.get("CUDY_FALLBACK_MAX_AGE_SECOND
 CUDY_FALLBACK_STATUS_WARN = os.environ.get("CUDY_FALLBACK_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 CONTROL_BACKUP_DIR = ROOT / "backups" / "control-server"
 AGENT_UPDATE_DIR = ROOT / "build" / "agent-updates"
+AGENT_ENROLLMENT_DIR = ROOT / "build" / "universal-agents"
 CONTROL_BACKUP_MAX_AGE_SECONDS = int(os.environ.get("CONTROL_BACKUP_MAX_AGE_SECONDS", str(36 * 60 * 60)))
 CONTROL_BACKUP_STATUS_WARN = os.environ.get("CONTROL_BACKUP_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
 LOCAL_FALLBACK_SYNC_STATUS_WARN = os.environ.get("LOCAL_FALLBACK_SYNC_STATUS_WARN", "").strip().lower() in {"1", "true", "yes", "on"}
@@ -1396,12 +1397,12 @@ ADMIN_HTML = r"""<!doctype html>
       <h3>Add Device</h3>
       <form id="enrollmentForm" class="toolbar">
         <div class="field"><label>User</label><select id="enrollmentUser"></select></div>
-        <div class="field"><label>Platform</label><select id="enrollmentPlatform"><option value="android">Android</option><option value="windows">Windows</option><option value="linux">Linux</option><option value="macos">macOS</option><option value="other">Other</option></select></div>
+        <div class="field"><label>Platform</label><select id="enrollmentPlatform"><option value="android">Android</option><option value="windows">Windows</option><option value="linux">Linux</option></select></div>
         <div class="field"><label>Device ID</label><input id="enrollmentDeviceId" type="text" placeholder="user-android"></div>
         <div class="field"><label>Name</label><input id="enrollmentDisplayName" type="text" placeholder="Android phone"></div>
         <div class="field"><label>TTL hours</label><input id="enrollmentTtlHours" type="number" min="1" max="720" step="1" value="24"></div>
         <button type="submit">Create one-time code</button>
-        <a class="button" href="/api/admin/agent-update-package?platform=android">Download Android APK</a>
+        <a id="enrollmentPackageLink" class="button" href="/api/admin/agent-enrollment-package?platform=android">Download Android app</a>
       </form>
       <p id="enrollmentStatus" class="status"></p>
       <div id="activationResult" hidden>
@@ -2482,6 +2483,15 @@ ADMIN_HTML = r"""<!doctype html>
       await navigator.clipboard.writeText(state.lastActivationCode);
       document.getElementById("enrollmentStatus").textContent = "Activation code copied.";
     });
+    function updateEnrollmentPackageLink() {
+      const platform = document.getElementById("enrollmentPlatform").value;
+      const labels = { android: "Download Android app", windows: "Download Windows installer", linux: "Download Linux installer" };
+      const link = document.getElementById("enrollmentPackageLink");
+      link.href = `/api/admin/agent-enrollment-package?platform=${encodeURIComponent(platform)}`;
+      link.textContent = labels[platform] || "Download installer";
+    }
+    document.getElementById("enrollmentPlatform").addEventListener("change", updateEnrollmentPackageLink);
+    updateEnrollmentPackageLink();
     document.getElementById("enrollmentForm").addEventListener("submit", async event => {
       event.preventDefault();
       const status = document.getElementById("enrollmentStatus");
@@ -2964,6 +2974,17 @@ def agent_app_version_manifest(platform: str) -> dict[str, Any]:
         "release_notes": release_notes,
         "generated_at": now(),
     }
+
+
+def agent_enrollment_package(platform: str) -> tuple[Path, str, str] | None:
+    normalized = normalize_platform(platform)
+    if normalized == "android":
+        path = AGENT_UPDATE_DIR / "android.apk"
+        return path, "NashVPN-CudyAgent-android.apk", "application/vnd.android.package-archive"
+    if normalized in {"windows", "linux"}:
+        path = AGENT_ENROLLMENT_DIR / f"Cudy-Agent-{normalized}-universal.zip"
+        return path, path.name, "application/zip"
+    return None
 
 
 def fetch_json_url(url: str, *, timeout: int = 3) -> dict[str, Any]:
@@ -10773,6 +10794,18 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 content_type = "application/vnd.android.package-archive" if suffix == ".apk" else "application/zip"
                 self.send_binary_file(artifact, download_name=artifact.name, content_type=content_type)
+            elif parsed.path == "/api/admin/agent-enrollment-package":
+                self.require_admin()
+                query = parse_qs(parsed.query)
+                package = agent_enrollment_package(query.get("platform", [""])[0])
+                if package is None:
+                    self.send_error_json("Enrollment package is not supported for this platform", HTTPStatus.BAD_REQUEST)
+                    return
+                artifact, download_name, content_type = package
+                if not artifact.exists() or not artifact.is_file():
+                    self.send_error_json("Enrollment package not found", HTTPStatus.NOT_FOUND)
+                    return
+                self.send_binary_file(artifact, download_name=download_name, content_type=content_type)
             elif parsed.path == "/healthz":
                 self.send_json({"ok": True})
             elif parsed.path == "/readyz":

@@ -112,10 +112,10 @@ provider failure moves traffic to the next valid candidate.
    enrollment flow to equivalent one-click Windows/Linux installers. Android
    uses a shared SSH bootstrap account restricted to the enrollment-only port,
    then receives a unique per-device SSH key and token after consuming the code.
-   Universal Windows/Linux packages and enrollment clients are now built
-   locally with pinned SSH host identity and no personalized device material.
-   Production download wiring and one fresh-device acceptance per platform are
-   still required.
+   Universal Windows/Linux packages and enrollment clients are now built with
+   pinned SSH host identity and no personalized device material. The Devices
+   workflow serves the correct bootstrap package for Android, Windows or Linux.
+   One fresh-device acceptance per desktop platform is still required.
    Android `1.27` also has the minimal in-app credential-protected admin surface;
    extend it only after the current user/device/enrollment workflow is soaked.
 7. Add automated rendered UI regression coverage for desktop and mobile
@@ -160,8 +160,12 @@ tunnel and fallback control path must be verified independently.
 Prerequisite: guarded apply is accepted and stable.
 
 1. Keep the captured AirTies configuration as the migration source of truth.
+   A fresh redacted Cudy snapshot and offline preflight now report zero hard
+   failures; the snapshot collector is read-only and records command status.
 2. Reproduce WAN, LAN, DHCP reservations, DNS, Wi-Fi, port forwards and local
-   management access on Cudy.
+   management access on Cudy. Current blockers-to-review are ISP VLAN 2,
+   disabled/unencrypted Cudy Wi-Fi, six forward targets without AirTies DHCP
+   reservations, and four maintenance host routes through the old gateway.
 3. Prepare a physical cable and address rollback that does not depend on VPN or
    the control-server.
 4. Add a router-level watchdog for WAN, LAN, control and user-critical services.

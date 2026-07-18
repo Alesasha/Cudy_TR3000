@@ -47,6 +47,7 @@ CHECKS = [
     Check("Cudy client lifecycle regression", ["tools/test_cudy_client_lifecycle.py"]),
     Check("Cudy router migration generator regression", ["tools/test_generate_cudy_router_migration.py"]),
     Check("Cudy router preflight regression", ["tools/test_cudy_router_preflight.py"]),
+    Check("Cudy preflight snapshot regression", ["tools/test_capture_cudy_preflight_snapshot.py"]),
     Check("domain discovery regression", ["tools/test_domain_discovery.py"]),
     Check("combined route deploy dry-run builds", ["tools/vpn_control_app.py", "deploy-routes"]),
     Check("provider refresh dry-run builds", ["tools/vpn_inventory.py", "refresh-provider", "all"]),
