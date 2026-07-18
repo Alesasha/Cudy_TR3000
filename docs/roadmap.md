@@ -4,7 +4,8 @@ Updated: 2026-07-18.
 
 This roadmap contains remaining work only. The verified baseline is recorded
 in `docs/current-status.md` and frozen by tag
-`snapshot-2026-07-18-android-mobile-admin-1.24`.
+`snapshot-2026-07-18-android-code-enrollment-1.25`. Current work builds on that
+accepted baseline.
 
 ## Execution Rules
 
@@ -52,13 +53,15 @@ The production agent now keeps recent compatible probe transports warm for six
 hours. A live cycle accepted a new probe job without changing the unified
 config hash or reloading libbox; the longer soak below remains required.
 
-1. Enroll a second daily-use phone and run a multi-day
-   Wi-Fi/mobile-data/background/locked-screen soak on `1.24 (25)`.
+1. Continue the multi-day Wi-Fi/mobile-data/background/locked-screen soak on
+   the two physical phones enrolled successfully with `1.25 (26)`.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
-3. Resolve or clearly explain the remaining Doze/battery warning.
-4. Redesign the main screen around a concise state indicator, current/latest
-   version, update action and user routing controls; move diagnostics behind a
-   dedicated view.
+3. Soak the implemented MIUI Autostart confirmation. The app now distinguishes
+   standard permissions it can verify from the vendor-only setting that Android
+   cannot query, and stops repeating the warning after explicit confirmation.
+4. Soak the 1.26 first-screen cleanup: diagnostics, routing details and advanced
+   settings are collapsed until requested, while activation remains prominent
+   only on an unconfigured device. Continue the visual redesign separately.
 5. Repeat reboot and route acceptance on at least one additional Android build
    before broad rollout.
 
@@ -105,7 +108,7 @@ provider failure moves traffic to the next valid candidate.
    enrollment flow to equivalent one-click Windows/Linux installers. Android
    uses a shared SSH bootstrap account restricted to the enrollment-only port,
    then receives a unique per-device SSH key and token after consuming the code.
-   Android `1.25` also has the minimal in-app credential-protected admin surface;
+   Android `1.26` also has the minimal in-app credential-protected admin surface;
    extend it only after the current user/device/enrollment workflow is soaked.
 7. Add automated rendered UI regression coverage for desktop and mobile
    widths; the current production UI has passed the equivalent manual check.
@@ -127,23 +130,18 @@ Prerequisite: Phases 1 and the relevant Auto checks are green.
    This is complete for short-ID-only churn. Real endpoint identity changes
    remain legitimate guarded transport refreshes.
 3. Capture current PBR, dnsmasq, nft, transport and service state.
-4. Run the first uncommitted override-only guarded apply trial without moving
+4. Completed: the corrected uncommitted route trial applied without moving
    DHCP/WAN.
-   The initial attempts found a missing per-interface nft-set bootstrap and a
-   stale transaction-lock failure. Both are fixed. The next attempt exposed a
-   managed netdevice that lacked its OpenWrt network/firewall registration; the
-   agent now treats that registration as transactional desired state and maps
-   hyphenated netdevices to UCI-safe logical names. The first corrected trial
-   applied and rolled back automatically, but a later transient critical-service
-   probe flap requires one more uncommitted soak before acceptance.
-5. Deliberately stop the controlling workstation path and prove the independent
-   on-router rollback restores previous files, PBR state and `observe` gate.
-6. Inspect counters and Direct/provider routes after rollback.
-7. Run a separately committed trial, then return to `observe` and compare the
-   resulting state.
+5. Completed: its independent on-router timer restored previous files, 24 PBR
+   rules, `observe` and the closed apply gate without workstation intervention.
+6. Completed: post-rollback strict fallback/observer checks and Direct/provider
+   state were healthy.
+7. Completed: a separately committed route trial retained generated route files,
+   returned the agent to `observe`, and passed strict 5/5 critical checks with
+   zero blockers, warnings, changed files or transport actions.
 
-Exit criteria: both trials preserve LAN/internet access, critical services and
-fallback control, and automatic rollback works without Codex or the workstation.
+Exit criteria met on 2026-07-18. Continue an observe/traffic soak before Phase 6
+changes DHCP, WAN or physical cabling.
 
 Direct SSH to `uswest` must also complete reliably before this phase. An open
 TCP/22 socket alone is not sufficient; the SSH banner/session, restricted Cudy

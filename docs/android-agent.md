@@ -34,7 +34,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release: `1.25 (26)`.
+Latest published release: `1.26 (27)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -42,11 +42,12 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.25-20260718.apk`;
-- SHA256: `8cf3b018298270da379c515c9162d7eaaf844f1299b686ccf95ebbbd702e9517`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.26-20260718.apk`;
+- SHA256: `e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
-  end-to-end test. Physical-phone installation of 1.25 remains the next check.
+  end-to-end test. Version 1.25 is accepted on two physical phones; 1.26 is the
+  pending in-place UI/permission update.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 
@@ -149,7 +150,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.25-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.26-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -210,7 +211,7 @@ new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.25 (26)` contains a minimal protected administrator screen. Open
+Android `1.26 (27)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 
@@ -274,14 +275,16 @@ real device reboot.
 The app shows a compact permissions line:
 
 ```text
-Permissions: notifications=ok|needs allow; battery=ok|needs setup; vpn=ok|needs allow; autostart=check MIUI|n/a
+Permissions: notifications=ok|needs allow; battery=ok|needs setup; vpn=ok|needs allow; autostart=confirmed|needs confirmation|n/a
 Setup: allow notifications -> allow VPN -> allow unrestricted battery -> enable MIUI Autostart
 ```
 
 It can request notification permission, Android VPN permission, standard Android
 battery optimization exemption, and can open the MIUI Autostart screen. Android
-does not let a third-party app enable MIUI Autostart automatically. Use the
-in-app `Setup permissions` button first.
+does not let a third-party app enable MIUI Autostart automatically or query that
+vendor-only permission afterward. When the user returns from the MIUI screen,
+the app asks for an explicit confirmation and stores it instead of reporting a
+permanent false warning. Use the in-app `Setup permissions` button first.
 If vendor settings do not open automatically, use these paths:
 
 ```text
@@ -329,7 +332,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 
 - Run a longer locked-screen/background soak and verify mobile-data/Wi-Fi
   transitions.
-- Resolve or clearly explain the remaining Android Doze whitelist warning.
+- Soak the explicit MIUI Autostart confirmation on the two enrolled phones.
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add optional rendered probes for services whose geographic decision is made
   by JavaScript rather than the initial HTTP body.

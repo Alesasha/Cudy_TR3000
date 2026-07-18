@@ -97,6 +97,10 @@ def main() -> int:
             "EnrollmentBootstrapPort = 8766",
             "ReadEnrollmentBootstrapKey",
             'RequiredJsonString(provisioning, "ssh_private_key")',
+            '"miui_autostart_confirmation_pending"',
+            '"miui_autostart_confirmed"',
+            "ConfirmMiuiAutostartIfPending",
+            'dialog.SetPositiveButton("Enabled"',
         ],
     )
     assert_contains(
@@ -120,7 +124,7 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>26</ApplicationVersion>",
+            "<ApplicationVersion>27</ApplicationVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")

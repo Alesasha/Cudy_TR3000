@@ -49,6 +49,12 @@ public class MainActivity : Activity
     private TextView? permissionStatusText;
     private TextView? permissionGuideText;
     private TextView? outputText;
+    private LinearLayout? diagnosticsSection;
+    private LinearLayout? activationSection;
+    private LinearLayout? routingSection;
+    private LinearLayout? advancedSection;
+    private Button? toggleDiagnosticsButton;
+    private Button? toggleAdvancedButton;
     private ISharedPreferences? preferences;
     private bool? pendingStartAfterPrepare;
     private string pendingDebugProbeUrl = "";
@@ -85,6 +91,12 @@ public class MainActivity : Activity
         permissionStatusText = FindViewById<TextView>(Resource.Id.permissionStatusText);
         permissionGuideText = FindViewById<TextView>(Resource.Id.permissionGuideText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
+        diagnosticsSection = FindViewById<LinearLayout>(Resource.Id.diagnosticsSection);
+        activationSection = FindViewById<LinearLayout>(Resource.Id.activationSection);
+        routingSection = FindViewById<LinearLayout>(Resource.Id.routingSection);
+        advancedSection = FindViewById<LinearLayout>(Resource.Id.advancedSection);
+        toggleDiagnosticsButton = FindViewById<Button>(Resource.Id.toggleDiagnosticsButton);
+        toggleAdvancedButton = FindViewById<Button>(Resource.Id.toggleAdvancedButton);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshHostKeyInput is null || sshKeyInput is null
             || enrollmentCodeInput is null || defaultServerInput is null || domainInput is null
@@ -92,7 +104,9 @@ public class MainActivity : Activity
             || statusText is null || serviceStatusText is null || policyStatusText is null
             || probeStatusText is null || routeStatusText is null || transportStatusText is null
             || engineStatusText is null || permissionStatusText is null || permissionGuideText is null
-            || outputText is null)
+            || outputText is null || diagnosticsSection is null || activationSection is null
+            || routingSection is null || advancedSection is null || toggleDiagnosticsButton is null
+            || toggleAdvancedButton is null)
         {
             throw new InvalidOperationException("Required layout controls are missing.");
         }
@@ -142,7 +156,18 @@ public class MainActivity : Activity
         RequireButton(Resource.Id.prepareButton).Click += (_, _) => PrepareVpn();
         RequireButton(Resource.Id.startButton).Click += (_, _) => StartAgent(controlOnly: false);
         RequireButton(Resource.Id.stopButton).Click += (_, _) => StopAgent();
+        toggleDiagnosticsButton.Click += (_, _) => ToggleSection(
+            diagnosticsSection,
+            toggleDiagnosticsButton,
+            "Show diagnostics",
+            "Hide diagnostics");
+        toggleAdvancedButton.Click += (_, _) => ToggleSection(
+            advancedSection,
+            toggleAdvancedButton,
+            "Advanced settings",
+            "Hide advanced settings");
         ApplyIntentSettings(Intent);
+        RenderConfiguredSections();
         RenderStoredStatus();
         RenderPermissionStatus();
         MaybePromptBackgroundPermissions();
@@ -162,6 +187,7 @@ public class MainActivity : Activity
         base.OnResume();
         RenderStoredStatus();
         RenderPermissionStatus();
+        ConfirmMiuiAutostartIfPending();
     }
 
     private Button RequireButton(int resourceId)
@@ -176,7 +202,40 @@ public class MainActivity : Activity
         {
             statusText.Text = "Settings saved";
         }
+        RenderConfiguredSections();
         RenderStoredStatus();
+    }
+
+    private static void ToggleSection(LinearLayout section, Button button, string collapsedText, string expandedText)
+    {
+        var expand = section.Visibility != Android.Views.ViewStates.Visible;
+        section.Visibility = expand ? Android.Views.ViewStates.Visible : Android.Views.ViewStates.Gone;
+        button.Text = expand ? expandedText : collapsedText;
+    }
+
+    private void RenderConfiguredSections()
+    {
+        if (activationSection is null || routingSection is null || advancedSection is null
+            || toggleAdvancedButton is null)
+        {
+            return;
+        }
+
+        var configured = !string.IsNullOrWhiteSpace(tokenInput?.Text) && HasSshSettings();
+        activationSection.Visibility = configured
+            ? Android.Views.ViewStates.Gone
+            : Android.Views.ViewStates.Visible;
+        routingSection.Visibility = configured
+            ? Android.Views.ViewStates.Visible
+            : Android.Views.ViewStates.Gone;
+        toggleAdvancedButton.Visibility = configured
+            ? Android.Views.ViewStates.Visible
+            : Android.Views.ViewStates.Gone;
+        if (!configured)
+        {
+            advancedSection.Visibility = Android.Views.ViewStates.Gone;
+            toggleAdvancedButton.Text = "Advanced settings";
+        }
     }
 
     private void SaveSettingsToPreferences()
@@ -571,6 +630,7 @@ public class MainActivity : Activity
             deviceIdInput!.Text = deviceId;
             enrollmentCodeInput!.Text = "";
             SaveSettingsToPreferences();
+            RenderConfiguredSections();
             statusText!.Text = "Device activated";
             outputText!.Text = $"device={deviceId}\nuser={root.GetProperty("user_id").GetString()}";
             await LoadUserUiAsync();
@@ -644,7 +704,9 @@ public class MainActivity : Activity
         var notifications = HasNotificationPermission() ? "ok" : "needs allow";
         var battery = IsIgnoringBatteryOptimizations() ? "ok" : "needs setup";
         var vpn = Android.Net.VpnService.Prepare(this) is null ? "ok" : "needs allow";
-        var autostart = IsMiuiDevice() ? "check MIUI" : "n/a";
+        var autostart = IsMiuiDevice()
+            ? (IsMiuiAutostartConfirmed() ? "confirmed" : "needs confirmation")
+            : "n/a";
         permissionStatusText.Text = $"Permissions: notifications={notifications}; battery={battery}; vpn={vpn}; autostart={autostart}";
 
         if (permissionGuideText is not null)
@@ -662,7 +724,7 @@ public class MainActivity : Activity
             {
                 steps.Add("allow unrestricted battery");
             }
-            if (IsMiuiDevice())
+            if (IsMiuiDevice() && !IsMiuiAutostartConfirmed())
             {
                 steps.Add("enable MIUI Autostart");
             }
@@ -705,18 +767,62 @@ public class MainActivity : Activity
             }
         }
 
-        if (OpenMiuiAutostartSettings())
+        if (IsMiuiDevice() && !IsMiuiAutostartConfirmed())
         {
-            statusText!.Text = "Autostart settings opened";
-            outputText!.Text = "Enable Autostart for Cudy Agent. If this screen is not available, use app settings and set Battery saver to No restrictions.";
+            preferences?.Edit()?.PutBoolean("miui_autostart_confirmation_pending", true)?.Apply();
+            if (OpenMiuiAutostartSettings())
+            {
+                statusText!.Text = "Autostart settings opened";
+                outputText!.Text = "Enable Autostart for Cudy Agent, then return to the app and confirm it.";
+                RenderPermissionStatus();
+                return;
+            }
+            preferences?.Edit()?.PutBoolean("miui_autostart_confirmation_pending", false)?.Apply();
+            statusText!.Text = "Autostart needs manual setup";
+            outputText!.Text = "MIUI Autostart settings could not be opened. Enable Autostart for Cudy Agent in the phone settings, then run Setup permissions again.";
             RenderPermissionStatus();
             return;
         }
 
-        OpenApplicationSettings();
-        statusText!.Text = "Application settings opened";
-        outputText!.Text = "Set Battery saver to No restrictions and enable Autostart if your Android build exposes it.";
+        statusText!.Text = "Permissions ready";
+        outputText!.Text = IsMiuiDevice()
+            ? "Android permissions and MIUI Autostart are confirmed."
+            : "Android permissions are ready.";
         RenderPermissionStatus();
+    }
+
+    private bool IsMiuiAutostartConfirmed()
+    {
+        return preferences?.GetBoolean("miui_autostart_confirmed", false) == true;
+    }
+
+    private void ConfirmMiuiAutostartIfPending()
+    {
+        if (!IsMiuiDevice()
+            || preferences?.GetBoolean("miui_autostart_confirmation_pending", false) != true)
+        {
+            return;
+        }
+
+        preferences.Edit()?.PutBoolean("miui_autostart_confirmation_pending", false)?.Apply();
+        var dialog = new AlertDialog.Builder(this);
+        dialog.SetTitle("MIUI Autostart");
+        dialog.SetMessage("Did you enable Autostart for Cudy Agent?");
+        dialog.SetPositiveButton("Enabled", (_, _) =>
+        {
+            preferences.Edit()?.PutBoolean("miui_autostart_confirmed", true)?.Apply();
+            statusText!.Text = "Autostart confirmed";
+            outputText!.Text = "MIUI Autostart confirmation saved.";
+            RenderPermissionStatus();
+        });
+        dialog.SetNegativeButton("Not yet", (_, _) =>
+        {
+            preferences.Edit()?.PutBoolean("miui_autostart_confirmed", false)?.Apply();
+            statusText!.Text = "Autostart needs setup";
+            outputText!.Text = "Tap Setup permissions when you are ready to enable MIUI Autostart.";
+            RenderPermissionStatus();
+        });
+        dialog.Show();
     }
 
     private bool HasNotificationPermission()
@@ -805,13 +911,6 @@ public class MainActivity : Activity
         {
             return false;
         }
-    }
-
-    private void OpenApplicationSettings()
-    {
-        var intent = new Intent(Settings.ActionApplicationDetailsSettings);
-        intent.SetData(Uri.Parse($"package:{PackageName}"));
-        StartActivity(intent);
     }
 
     private void PrepareVpn()

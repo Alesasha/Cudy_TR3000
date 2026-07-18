@@ -28,6 +28,9 @@ DEFAULT_PASSWORD_FILE = ROOT / "secrets" / "control_backup_ssh_password.txt"
 DEFAULT_REMOTE_DIR = "/opt/cudy-control"
 DEFAULT_SERVICE = "vpn-control.service"
 DEFAULT_HTTP_FALLBACK_URL = "http://127.0.0.1:18765"
+DEFAULT_CUDY_HOST = "192.168.8.1"
+DEFAULT_CUDY_PASSWORD_FILE = ROOT / "secrets" / "cudy_ssh_password.txt"
+DEFAULT_PRIVATE_HOST = "172.29.172.1"
 
 
 logging.getLogger("paramiko.transport").setLevel(logging.CRITICAL)
@@ -47,7 +50,28 @@ def load_password(explicit: str | None) -> str:
     return getpass.getpass("SSH password for production control-server: ")
 
 
-def connect(host: str, user: str, password: str, timeout: int, *, attempts: int) -> paramiko.SSHClient:
+def load_cudy_password(explicit: str | None, password_file: Path) -> str:
+    if explicit:
+        return explicit
+    value = os.environ.get("CUDY_SSH_PASSWORD", "").strip()
+    if value:
+        return value
+    if password_file.exists():
+        value = password_file.read_text(encoding="utf-8-sig").strip()
+        if value:
+            return value
+    return getpass.getpass("SSH password for Cudy: ")
+
+
+def connect(
+    host: str,
+    user: str,
+    password: str,
+    timeout: int,
+    *,
+    attempts: int,
+    sock: object | None = None,
+) -> paramiko.SSHClient:
     last_error: Exception | None = None
     for attempt in range(1, max(1, attempts) + 1):
         client = paramiko.SSHClient()
@@ -62,6 +86,7 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
                 auth_timeout=timeout,
                 look_for_keys=False,
                 allow_agent=False,
+                sock=sock,
             )
             return client
         except Exception as exc:
@@ -70,6 +95,45 @@ def connect(host: str, user: str, password: str, timeout: int, *, attempts: int)
             if attempt < max(1, attempts):
                 time.sleep(min(2 * attempt, 5))
     raise RuntimeError(f"SSH connect failed after {max(1, attempts)} attempt(s): {last_error}") from last_error
+
+
+def connect_via_cudy(
+    args: argparse.Namespace,
+    password: str,
+) -> tuple[paramiko.SSHClient, paramiko.SSHClient]:
+    router = connect(
+        args.cudy_host,
+        args.cudy_user,
+        load_cudy_password(args.cudy_password, args.cudy_password_file),
+        args.timeout,
+        attempts=args.connect_attempts,
+    )
+    try:
+        transport = router.get_transport()
+        if transport is None or not transport.is_active():
+            raise RuntimeError("Cudy SSH transport is not active")
+        channel = transport.open_channel(
+            "direct-tcpip",
+            (args.private_host, args.private_port),
+            ("127.0.0.1", 0),
+            timeout=args.timeout,
+        )
+        try:
+            target = connect(
+                args.private_host,
+                args.user,
+                password,
+                args.timeout,
+                attempts=1,
+                sock=channel,
+            )
+        except Exception:
+            channel.close()
+            raise
+        return router, target
+    except Exception:
+        router.close()
+        raise
 
 
 def ssh_exec(client: paramiko.SSHClient, command: str, timeout: int) -> tuple[int, str]:
@@ -191,12 +255,28 @@ def check_via_http_fallback(args: argparse.Namespace, ssh_error: Exception) -> d
 
 def check(args: argparse.Namespace) -> dict[str, Any]:
     password = load_password(args.ssh_password)
+    router: paramiko.SSHClient | None = None
+    mode = "ssh"
+    connection_errors: list[str] = []
     try:
-        client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
+        if args.via_cudy:
+            try:
+                router, client = connect_via_cudy(args, password)
+                mode = "ssh_via_cudy"
+            except Exception as exc:
+                connection_errors.append(f"private SSH through Cudy: {exc}")
+                if args.no_direct_ssh_fallback:
+                    raise
+                client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
+                mode = "ssh_public_fallback"
+        else:
+            client = connect(args.host, args.user, password, args.timeout, attempts=args.connect_attempts)
     except Exception as exc:
+        connection_errors.append(str(exc))
+        combined_error = RuntimeError("; ".join(connection_errors))
         if args.http_fallback_url and not args.no_http_fallback:
-            return check_via_http_fallback(args, exc)
-        raise
+            return check_via_http_fallback(args, combined_error)
+        raise combined_error from exc
     try:
         service_rc, service_output = ssh_exec(
             client,
@@ -221,6 +301,8 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
         )
     finally:
         client.close()
+        if router is not None:
+            router.close()
 
     service_lines = [line.strip() for line in service_output.splitlines() if line.strip()]
     service_ok = service_rc == 0 and len(service_lines) >= 2 and service_lines[0] == "enabled" and service_lines[1] == "active"
@@ -229,8 +311,8 @@ def check(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "ok": ok,
         "host": args.host,
-        "mode": "ssh",
-        "ssh_error": "",
+        "mode": mode,
+        "ssh_error": "; ".join(connection_errors),
         "service": {
             "ok": service_ok,
             "lines": service_lines,
@@ -258,6 +340,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="SSH and remote audit timeout; system-status may include slow fallback reachability checks.",
     )
     parser.add_argument("--connect-attempts", type=int, default=3)
+    parser.add_argument("--via-cudy", action="store_true", help="Prefer the private uswest SSH path through Cudy.")
+    parser.add_argument("--cudy-host", default=DEFAULT_CUDY_HOST)
+    parser.add_argument("--cudy-user", default="root")
+    parser.add_argument("--cudy-password")
+    parser.add_argument("--cudy-password-file", type=Path, default=DEFAULT_CUDY_PASSWORD_FILE)
+    parser.add_argument("--private-host", default=DEFAULT_PRIVATE_HOST)
+    parser.add_argument("--private-port", type=int, default=22)
+    parser.add_argument(
+        "--no-direct-ssh-fallback",
+        action="store_true",
+        help="Do not retry the public SSH endpoint when the private Cudy path fails.",
+    )
     parser.add_argument("--http-fallback-url", default=os.environ.get("CONTROL_HTTP_FALLBACK_URL", DEFAULT_HTTP_FALLBACK_URL))
     parser.add_argument("--no-http-fallback", action="store_true", help="Do not use local HTTP tunnel fallback when SSH audit is unavailable.")
     parser.add_argument("--require-ssh", action="store_true", help="Fail strict mode if SSH audit is unavailable even when HTTP readiness is OK.")

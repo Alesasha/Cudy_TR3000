@@ -2,7 +2,7 @@
 
 Snapshot date: 2026-07-18.
 
-Snapshot tag: `snapshot-2026-07-18-android-code-enrollment-1.25`.
+Baseline tag: `snapshot-2026-07-18-android-code-enrollment-1.25`.
 
 This document records the verified live state. Planned work belongs in
 `docs/roadmap.md`; historical notes are not operating instructions.
@@ -14,8 +14,8 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.25 (26)` published APK, SHA256
-    `8cf3b018298270da379c515c9162d7eaaf844f1299b686ccf95ebbbd702e9517`;
+  - Android `1.26 (27)` published APK, SHA256
+    `e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
@@ -26,13 +26,14 @@ This document records the verified live state. Planned work belongs in
 
 The `uswest` server at `95.182.91.203` is the production control-server.
 
-Verified on 2026-07-16:
+Verified on 2026-07-18:
 
 - `vpn-control.service` is enabled and active with `Restart=always`;
 - `/healthz` and `/readyz` are healthy;
 - Auto probe and provider refresh workers are enabled and have no worker error;
 - 25 of 31 transports are enabled and no enabled transport is stale;
-- 2 of 4 enabled agents are currently online: Cudy and Android;
+- 3 of 6 enabled agents are currently online; three enabled agents are
+  currently offline/stale and remain an operational follow-up;
 - Windows is intentionally disabled on the development workstation and the
   Linux agent is offline/stale pending the next real-world acceptance run;
 - operational probe warnings are zero; nine recent failed apex probes are
@@ -116,7 +117,7 @@ Verified fallback state:
 - `cudy-fallback` is running;
 - the restricted control tunnel is running;
 - fallback readiness has zero warnings;
-- policy source is live with 22 routes; the active transport plan is dynamic
+- policy source is live with 31 routes; the active transport plan is dynamic
   and contained 7 transports in the latest strict check;
 - the observer is enabled and continues reporting fresh state.
 
@@ -151,10 +152,9 @@ A manually connected AmneziaVPN application tunnel suspends the dedicated
 service to prevent nested VPN routing. Cudy management remains on Ethernet
 `192.168.8.102 -> 192.168.8.1`.
 
-PBR currently reflects the restored legacy Cudy override policy, not the
-latest control-server Auto plan. The current control policy differs from two
-live override files. Policy/transport synchronization therefore remains a
-separate guarded apply step.
+PBR now reflects the generated control-server plan retained by the committed
+guarded trial. The Go agent itself is back in `observe`; strict checks report no
+file drift from that committed state.
 
 The fallback and observer gates now satisfy the read-only preflight baseline:
 
@@ -224,28 +224,41 @@ firewall, netdevice, PBR-list and nft checks. The first corrected uncommitted
 route trial reached a healthy apply state and its on-router guard then restored
 the previous overrides, `observe` mode and the closed apply gate without the
 workstation. WAN recovered with 0% packet loss and the legacy Telegram exits
-answered through `proxyfr` and `proxynl`. A later apply cycle did record two
-consecutive transient ChatGPT TLS handshake timeouts through `proxyde`; network
-failures now receive three bounded attempts while semantic/content failures are
-still never retried. A second uncommitted soak is required before a committed
-route trial.
+answered through `proxyfr` and `proxynl`. Network failures now receive three
+bounded attempts while semantic/content failures are still never retried.
+
+On 2026-07-18 the remaining Phase 5 gates passed. A legitimate `proxyfi`
+`refresh-and-restart` action was applied by a separately committed transport
+bootstrap. A second uncommitted route trial then reached healthy apply state;
+its independent on-router timer restored the previous files, 24 PBR rules,
+`observe` mode and `allow_apply=0` without workstation intervention. A separate
+committed route trial also reached healthy state, retained the generated route
+files and returned the agent to `observe`. Subsequent strict fallback and
+observer checks report live policy, 31 routes, critical health 5/5, zero changed
+files, zero blockers, zero warnings and zero transport actions. Phase 5 guarded
+apply is therefore accepted; ongoing soak remains before DHCP/WAN migration.
 
 Some router-local TUN diagnostics can produce false failures. For
 `http-proxy-tun` transports the observer now probes the upstream HTTP proxy
 from the root-only cached transport plan. The remaining intermittent preview
 and TLS timeouts still require investigation before they can be classified as
-probe artifacts or real provider failures. User traffic and live PBR remain
-unchanged. The agent is still in `observe` mode.
+probe artifacts or real provider failures. The agent remains in `observe` mode;
+the committed generated files are active under the independently guarded PBR
+dataplane.
 
 ## Android Agent
 
-Android `1.25 (26)` is built, signed and published on the production
+Android `1.26 (27)` is built, signed and published on the production
 control-server through the private Cudy management path. The production APK
 and update manifest both have SHA256
-`8cf3b018298270da379c515c9162d7eaaf844f1299b686ccf95ebbbd702e9517`.
+`e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`.
 Fresh-device code-only enrollment and the resulting per-device control channel
-passed against production. Installation on the physical phone is still pending;
-the runtime checks below were completed on `1.24 (25)`.
+passed against production. The universal APK has now been installed and
+activated successfully on two physical phones with `1.25 (26)`. The original
+test phone was upgraded in place from `1.24 (25)` to `1.25 (26)` without losing
+its individual device credentials or stored policy. Version `1.26 (27)` adds
+explicit MIUI Autostart confirmation and keeps diagnostics, routing details and
+advanced settings collapsed by default; physical 1.26 acceptance is pending.
 
 Verified acceptance:
 
@@ -269,7 +282,7 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
-- the current physical-device check confirms version `1.24 (25)`, an active
+- the current physical-device check confirms version `1.25 (26)`, an active
   foreground `CudyVpnService`, and a device-idle whitelist entry for
   `com.nashvpn.cudyagent`; the production package is not debuggable.
 - the Administration activity opens from the main application, is not exported
@@ -279,12 +292,15 @@ Verified acceptance:
 
 Remaining Android concerns:
 
+- Android cannot query the MIUI Autostart permission. Version 1.26 records an
+  explicit confirmation after the user returns from the vendor settings, while
+  notification, VPN and battery permissions remain automatically verified;
 - a longer locked/background soak is still required despite the current
   device-idle whitelist and successful boot recovery;
-- the current UI is functional but exposes too much technical state and needs
-  a clearer user-facing status/version/update design;
+- the 1.26 UI hides raw diagnostics, routing and advanced settings by default;
+  the longer-term visual redesign remains a separate UX task;
 - JavaScript-only geographic decisions still require rendered probes.
-- long-running acceptance on a second, daily-use Android phone has not started;
+- long-running acceptance on the two newly activated phones is now in progress;
 - fresh-phone onboarding is self-contained: the admin UI serves the universal
   APK and creates a copyable one-time code. Windows/Linux still need equivalent
   code-only bootstrap clients.
@@ -411,15 +427,14 @@ Remaining Android concerns:
 
 ## Non-Negotiable Safety Gates
 
-- Do not enable `cudy-router-agent` apply outside the guarded trial with its
-  independent timed rollback. Repeated observe checks are not yet green.
-- Do not make another live Cudy PBR/transport change until `OpenAI-USWest` has
-  passed a reboot/soak check, its endpoint still bypasses Cudy over Wi-Fi, and
-  the AmneziaVPN application tunnel is absent.
+- Keep `cudy-router-agent` in `observe`; any future apply must still use the
+  guarded trial with independent timed rollback.
+- Do not make an unguarded live Cudy PBR/transport change. `OpenAI-USWest` must
+  remain available on its independent physical Wi-Fi path during guarded work.
 - Do not run a guarded Cudy apply while the strict observe check reports preview
   timeouts or critical-service failures.
-- Do not move DHCP or WAN ownership from AirTies to Cudy before both guarded
-  apply trials pass.
+- Do not move DHCP or WAN ownership from AirTies to Cudy until the accepted
+  guarded routing state completes its soak and the physical rollback is ready.
 - Do not enable the Windows development task without the independent watchdog
   and tested `Emergency-Stop-Agent.cmd` path.
 - Do not treat an HTTP 200 response as service success when content or rendered
@@ -428,7 +443,7 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Install Android `1.25 (26)` on a fresh or reset test device, activate it using
-only the copied code, and begin the multi-day daily-use soak. Then implement the
-same code-only bootstrap UX for Windows/Linux. In parallel, have Dima turn the
-Linux agent ON once and confirm automatic recovery to `1.23 (24)`.
+Let both phones receive Android `1.26 (27)` and continue the multi-day daily-use
+soak across Wi-Fi, mobile data, lock and reboot. In parallel, implement the same
+code-only bootstrap UX for Windows/Linux and begin Phase 6 Cudy main-router
+preflight without moving DHCP/WAN yet.
