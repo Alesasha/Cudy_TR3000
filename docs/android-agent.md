@@ -34,7 +34,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release: `1.26 (27)`.
+Latest published release: `1.27 (28)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -42,12 +42,12 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.26-20260718.apk`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.27-20260718.apk`;
 - SHA256: `e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
-  end-to-end test. Version 1.25 is accepted on two physical phones; 1.26 is the
-  pending in-place UI/permission update.
+  end-to-end test. Version 1.25 is accepted on two physical phones; 1.27 is the
+  pending in-place UI/permission/version-reporting update.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 
@@ -150,7 +150,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.26-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.27-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -211,7 +211,7 @@ new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.26 (27)` contains a minimal protected administrator screen. Open
+Android `1.27 (28)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 

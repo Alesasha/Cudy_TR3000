@@ -1390,7 +1390,7 @@ ADMIN_HTML = r"""<!doctype html>
         <span id="agentFilterStatus" class="muted"></span>
       </div>
       <table>
-        <thead><tr><th>Device ID</th><th>User</th><th>Name</th><th>Platform</th><th>State</th><th>Last Seen</th><th>Health</th><th>Errors</th><th>Actions</th></tr></thead>
+        <thead><tr><th>Device ID</th><th>User</th><th>Name</th><th>Platform</th><th>Version</th><th>State</th><th>Last Seen</th><th>Health</th><th>Errors</th><th>Actions</th></tr></thead>
         <tbody id="agentStatusBody"></tbody>
       </table>
       <h3>Add Device</h3>
@@ -2165,6 +2165,7 @@ ADMIN_HTML = r"""<!doctype html>
             <td><select data-agent-user>${userOptions(item.user_id)}</select></td>
             <td><input data-agent-name type="text" value="${escapeHtml(item.display_name || item.device_id)}"></td>
             <td><input data-agent-platform type="text" value="${escapeHtml(item.platform || "other")}"></td>
+            <td>${escapeHtml((item.status || {}).app_version_name || (item.status || {}).agent_version || "")}${(item.status || {}).app_version_code ? ` (${(item.status || {}).app_version_code})` : ""}</td>
             <td>${badge(Boolean(item.enabled), item.enabled ? "enabled" : "disabled")}</td>
             <td>${item.last_seen_at || ""}</td>
             <td>${health.ok === true ? "ok" : health.ok === false ? "fail" : ""}</td>
@@ -11173,6 +11174,8 @@ class Handler(BaseHTTPRequestHandler):
             "schema_version": int(data.get("schema_version") or 1),
             "platform": str(data.get("platform") or device.get("platform") or ""),
             "agent_version": str(data.get("agent_version") or ""),
+            "app_version_name": str(data.get("app_version_name") or ""),
+            "app_version_code": int(data.get("app_version_code") or 0),
             "vpn_interfaces": data.get("vpn_interfaces") or [],
             "routes": data.get("routes") or [],
             "domain_routes": data.get("domain_routes") or [],

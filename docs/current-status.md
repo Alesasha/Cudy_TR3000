@@ -14,8 +14,8 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.26 (27)` published APK, SHA256
-    `e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`;
+  - Android `1.27 (28)` published APK, SHA256
+    `7546c679c9ee0d5b4289867533eb578fdc7d4fabd840046fdd8d7706c18a6213`;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.20 (21)`, SHA256
     `8dba7836dbd9172445e7df8af2647116cddc62bc4bd1cbb0588ba5dad8f1b6d8`.
@@ -248,17 +248,17 @@ dataplane.
 
 ## Android Agent
 
-Android `1.26 (27)` is built, signed and published on the production
+Android `1.27 (28)` is built, signed and published on the production
 control-server through the private Cudy management path. The production APK
 and update manifest both have SHA256
-`e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`.
+`7546c679c9ee0d5b4289867533eb578fdc7d4fabd840046fdd8d7706c18a6213`.
 Fresh-device code-only enrollment and the resulting per-device control channel
 passed against production. The universal APK has now been installed and
 activated successfully on two physical phones with `1.25 (26)`. The original
 test phone was upgraded in place from `1.24 (25)` to `1.25 (26)` without losing
-its individual device credentials or stored policy. Version `1.26 (27)` adds
-explicit MIUI Autostart confirmation and keeps diagnostics, routing details and
-advanced settings collapsed by default; physical 1.26 acceptance is pending.
+its individual device credentials or stored policy. Version `1.27 (28)` keeps
+the 1.26 MIUI/UI cleanup and adds explicit APK version reporting to the
+control-server and Devices table; physical 1.27 acceptance is pending.
 
 Verified acceptance:
 
@@ -292,12 +292,12 @@ Verified acceptance:
 
 Remaining Android concerns:
 
-- Android cannot query the MIUI Autostart permission. Version 1.26 records an
+- Android cannot query the MIUI Autostart permission. Version 1.27 records an
   explicit confirmation after the user returns from the vendor settings, while
   notification, VPN and battery permissions remain automatically verified;
 - a longer locked/background soak is still required despite the current
   device-idle whitelist and successful boot recovery;
-- the 1.26 UI hides raw diagnostics, routing and advanced settings by default;
+- the 1.27 UI hides raw diagnostics, routing and advanced settings by default;
   the longer-term visual redesign remains a separate UX task;
 - JavaScript-only geographic decisions still require rendered probes.
 - long-running acceptance on the two newly activated phones is now in progress;
@@ -459,7 +459,7 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Let both phones receive Android `1.26 (27)` and continue the multi-day daily-use
-soak across Wi-Fi, mobile data, lock and reboot. In parallel, implement the same
-code-only bootstrap UX for Windows/Linux and begin Phase 6 Cudy main-router
-preflight without moving DHCP/WAN yet.
+Let both phones receive Android `1.27 (28)` so their installed APK versions
+become observable, then continue the multi-day daily-use soak across Wi-Fi,
+mobile data, lock and reboot. Code-only Windows/Linux packages are locally
+complete; begin Phase 6 Cudy main-router preflight without moving DHCP/WAN yet.

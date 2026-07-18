@@ -59,7 +59,7 @@ config hash or reloading libbox; the longer soak below remains required.
 3. Soak the implemented MIUI Autostart confirmation. The app now distinguishes
    standard permissions it can verify from the vendor-only setting that Android
    cannot query, and stops repeating the warning after explicit confirmation.
-4. Soak the 1.26 first-screen cleanup: diagnostics, routing details and advanced
+4. Soak the 1.27 first-screen cleanup: diagnostics, routing details and advanced
    settings are collapsed until requested, while activation remains prominent
    only on an unconfigured device. Continue the visual redesign separately.
 5. Repeat reboot and route acceptance on at least one additional Android build
@@ -116,7 +116,7 @@ provider failure moves traffic to the next valid candidate.
    locally with pinned SSH host identity and no personalized device material.
    Production download wiring and one fresh-device acceptance per platform are
    still required.
-   Android `1.26` also has the minimal in-app credential-protected admin surface;
+   Android `1.27` also has the minimal in-app credential-protected admin surface;
    extend it only after the current user/device/enrollment workflow is soaked.
 7. Add automated rendered UI regression coverage for desktop and mobile
    widths; the current production UI has passed the equivalent manual check.

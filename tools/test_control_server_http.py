@@ -327,6 +327,8 @@ def main() -> int:
                 "Copy activation code",
                 "Create the user's device(s) and obtain a one-time enrollment code in the Devices tab.",
                 "/api/admin/agent-update-package?platform=",
+                "app_version_name",
+                "app_version_code",
             ):
                 if snippet not in admin_page:
                     raise AssertionError(f"admin page is missing {snippet!r}")
@@ -687,6 +689,26 @@ def main() -> int:
             agent_bootstrap = fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", device_token)
             if agent_bootstrap.get("user", {}).get("id") != "phone-user":
                 raise AssertionError(f"agent bootstrap returned the wrong user: {agent_bootstrap!r}")
+            posted_status = post_json_with_bearer(
+                f"{base_url}/api/agent/status",
+                device_token,
+                {
+                    "schema_version": 1,
+                    "platform": "android",
+                    "agent_version": "0.1",
+                    "app_version_name": "1.27",
+                    "app_version_code": 28,
+                    "health": {"ok": True},
+                },
+            )
+            if posted_status.get("ok") is not True:
+                raise AssertionError(f"agent status post failed: {posted_status!r}")
+            status_admin = fetch_json_with_opener(opener, f"{base_url}/api/admin")
+            status_device = next(
+                item for item in status_admin["agent_status"] if item["device_id"] == "phone-user-android"
+            )
+            if status_device["status"].get("app_version_name") != "1.27" or status_device["status"].get("app_version_code") != 28:
+                raise AssertionError(f"agent APK version was not retained: {status_device!r}")
             diagnostic = post_json_with_bearer(
                 f"{base_url}/api/agent/diagnostics",
                 device_token,

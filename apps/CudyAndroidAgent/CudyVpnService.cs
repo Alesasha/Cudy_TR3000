@@ -459,11 +459,14 @@ public class CudyVpnService : VpnService
                     Log.Warn(LogTag, $"Critical connectivity failure {consecutiveCriticalFailures}/3: {string.Join(", ", criticalResult.FailedServices)}");
                 }
 
+                var installedAppVersion = InstalledAppVersion();
                 var status = new
                 {
                     schema_version = 1,
                     platform = "android",
                     agent_version = "0.1",
+                    app_version_name = installedAppVersion.Name,
+                    app_version_code = installedAppVersion.Code,
                     reported_at = DateTimeOffset.UtcNow.ToString("O"),
                     device_id = deviceId,
                     vpn_interfaces = new[] { "android-vpn-placeholder" },
@@ -933,6 +936,33 @@ public class CudyVpnService : VpnService
             ?.PutString("last_policy_summary", CudyPolicy.Summarize(json))
             ?.PutString("last_policy_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
             ?.Apply();
+    }
+
+    private (string Name, long Code) InstalledAppVersion()
+    {
+        try
+        {
+#pragma warning disable CA1422
+            var packageInfo = PackageManager?.GetPackageInfo(PackageName ?? "", 0);
+#pragma warning restore CA1422
+            if (packageInfo is null)
+            {
+                return ("", 0);
+            }
+#pragma warning disable CA1422
+            var code = (int)Build.VERSION.SdkInt >= 28
+#pragma warning disable CA1416
+                ? packageInfo.LongVersionCode
+#pragma warning restore CA1416
+                : packageInfo.VersionCode;
+#pragma warning restore CA1422
+            return (packageInfo.VersionName ?? "", code);
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(LogTag, "Cannot read installed app version: " + ex.Message);
+            return ("", 0);
+        }
     }
 
     private void SaveLoopDetails(

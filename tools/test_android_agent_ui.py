@@ -124,7 +124,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>27</ApplicationVersion>",
+            "<ApplicationVersion>28</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.27</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -177,6 +178,9 @@ def main() -> int:
             "CudyAndroidProbeRunner.BuildLocalProbes(transportPlan)",
             "Duplicate start request ignored; control loop and TUN remain active",
             "StartFingerprint(",
+            "app_version_name = installedAppVersion.Name",
+            "app_version_code = installedAppVersion.Code",
+            "InstalledAppVersion()",
         ],
     )
     assert_contains(
