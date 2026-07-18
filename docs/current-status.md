@@ -479,4 +479,8 @@ and reboot. The fresh Cudy main-router preflight completed with no hard failure;
 prepare encrypted Cudy Wi-Fi, VLAN 2 validation and missing static
 forward-target addresses before moving DHCP/WAN. The independent config
 rollback guard is installed and disarmed; a physical cable/address rollback is
-still mandatory.
+still mandatory. The first read-only forward-target probe found only
+`192.168.1.105` present out of eight unique targets, so the other seven old
+rules must not be migrated until their devices are powered on and verified.
+The current snapshot confirms kernel/userspace 802.1Q support; the ISP-facing
+`eth0.2` binding itself remains deliberately unapplied.

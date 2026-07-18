@@ -24,6 +24,11 @@ COMMANDS: tuple[tuple[str, str], ...] = (
     ("ip_route", "ip -4 route show table all 2>/dev/null || ip -4 route 2>/dev/null || true"),
     ("ip_link", "ip -d link show eth0 2>/dev/null || ip -d link 2>/dev/null || true"),
     ("wan_device", "ubus call network.device status '{\"name\":\"eth0\"}' 2>/dev/null || true"),
+    (
+        "vlan_support",
+        "printf 'proc_vlan='; [ -d /proc/net/vlan ] && echo yes || echo no; "
+        "printf 'ip_vlan='; ip link help 2>&1 | grep -qw vlan && echo yes || echo no",
+    ),
     ("uci_network", "uci show network 2>/dev/null || true"),
     ("uci_dhcp", "uci show dhcp 2>/dev/null || true"),
     ("uci_firewall", "uci show firewall 2>/dev/null || true"),

@@ -48,6 +48,15 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
 
 
+def key_value_lines(text: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        if "=" in line:
+            key, value_ = line.split("=", 1)
+            result[key.strip()] = value_.strip()
+    return result
+
+
 def cudy_uci(cudy_snapshot: Path, name: str) -> dict[str, str]:
     return parse_uci_show(read_text(cudy_snapshot / f"uci_{name}.txt"))
 
@@ -187,6 +196,27 @@ def run_preflight(
                 )
             )
 
+        vlan_support = key_value_lines(read_text(cudy_snapshot / "vlan_support.txt"))
+        if vlan_support.get("proc_vlan") == "yes" and vlan_support.get("ip_vlan") == "yes":
+            findings.append(
+                Finding(
+                    "PASS",
+                    "wan-vlan-capability",
+                    "Cudy kernel/userspace expose 802.1Q VLAN capability.",
+                    "proc_vlan=yes, ip_vlan=yes",
+                )
+            )
+        else:
+            findings.append(
+                Finding(
+                    "WARN",
+                    "wan-vlan-capability-unverified",
+                    "Cudy snapshot does not prove kernel/userspace VLAN capability.",
+                    f"proc_vlan={vlan_support.get('proc_vlan', 'unknown')}, "
+                    f"ip_vlan={vlan_support.get('ip_vlan', 'unknown')}",
+                )
+            )
+
     airties_wan_ip = value(values, "static-1", "settings.ip")
     cudy_wan_proto = cudy_network.get("network.wan.proto", "")
     if cudy_wan_proto != "static":
@@ -273,7 +303,7 @@ def run_preflight(
         findings.append(Finding("FAIL", "awg-wan-allow-missing", "Cudy firewall lacks a WAN allow rule for UDP 51830."))
 
     reserved_ips = reservation_ips(values)
-    missing_reservations = []
+    missing_reservations: dict[str, list[dict[str, str]]] = {}
     self_forwards = []
     cudy_self_forwards = []
     for row in active_forward_targets(nat_rows):
@@ -285,7 +315,7 @@ def run_preflight(
             cudy_self_forwards.append(row)
             continue
         if target and target not in reserved_ips:
-            missing_reservations.append(row)
+            missing_reservations.setdefault(target, []).append(row)
 
     if self_forwards:
         findings.append(
@@ -306,12 +336,16 @@ def run_preflight(
             )
         )
     if missing_reservations:
+        missing_details = []
+        for target, target_rows in sorted(missing_reservations.items()):
+            names = sorted({row.get("name") or "unnamed" for row in target_rows})
+            missing_details.append(f"{'/'.join(names)}->{target}")
         findings.append(
             Finding(
                 "WARN",
                 "forward-targets-without-reservations",
                 "Some active forwarded targets do not have AirTies static DHCP reservations.",
-                ", ".join(f"{r.get('name')}->{r.get('client_ip')}" for r in missing_reservations),
+                ", ".join(missing_details),
             )
         )
     else:

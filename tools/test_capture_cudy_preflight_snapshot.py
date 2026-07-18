@@ -3,7 +3,7 @@ import json
 import tempfile
 from pathlib import Path
 
-from capture_cudy_preflight_snapshot import redact_output
+from capture_cudy_preflight_snapshot import COMMANDS, redact_output
 from cudy_router_preflight import run_preflight
 from test_cudy_router_preflight import write_snapshot
 
@@ -27,6 +27,7 @@ def test_redact_output_hides_sensitive_uci_assignments():
     assert "token-value" not in result
     assert "network.wan.ipaddr='192.0.2.10'" in result
     assert result.count("<redacted>") == 4
+    assert any(name == "vlan_support" for name, _command in COMMANDS)
 
 
 def test_preflight_reports_fresh_structured_snapshot(tmp_path):
@@ -52,12 +53,14 @@ def test_preflight_reports_fresh_structured_snapshot(tmp_path):
         json.dumps({"generated_at": "2026-07-18T11:30:00+00:00"}),
         encoding="utf-8",
     )
+    (cudy / "vlan_support.txt").write_text("proc_vlan=yes\nip_vlan=yes\n", encoding="utf-8")
 
     findings = run_preflight(airties, cudy, now=now)
 
     by_code = {finding.code: finding for finding in findings}
     assert by_code["cudy-snapshot-fresh"].severity == "PASS"
     assert by_code["wifi-ready"].severity == "PASS"
+    assert by_code["wan-vlan-capability"].severity == "PASS"
 
 
 def main() -> int:

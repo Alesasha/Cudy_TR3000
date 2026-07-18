@@ -129,11 +129,18 @@ and confirmed healthy AWG/firewall prerequisites. It highlighted these items to
 resolve before cutover:
 
 - AirTies WAN uses VLAN `2`; confirm the correct OpenWrt syntax for this Cudy
-  build before applying any WAN change.
+  build before applying any WAN change. The 2026-07-18 snapshot confirms
+  kernel/userspace 802.1Q capability (`proc_vlan=yes`, `ip_vlan=yes`), but only
+  an ISP-cable trial can validate the final `eth0.2` binding.
 - Cudy currently has host routes via the old AirTies LAN gateway
   `192.168.1.1`; those routes must be reviewed after Cudy becomes the gateway.
 - Some active AirTies port-forward targets are not DHCP-reserved in AirTies.
   They may be static on the devices, but verify them before relying on forwards.
+- A read-only Cudy probe on 2026-07-18 checked route, ICMP, neighbor state and
+  the forwarded TCP ports for all eight unique non-router targets. Only
+  `192.168.1.105` was present (`00:bd:8f:ea:01:2a`); the other seven were not
+  reachable. Treat those rules as unverified/stale until each target is powered
+  on and rechecked with `python tools\check_cudy_forward_targets.py`.
 - AirTies remote management, UPnP, and TR-069 were enabled. Prefer keeping
   these disabled on Cudy.
 - Both Cudy Wi-Fi interfaces are currently disabled and configured without
