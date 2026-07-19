@@ -1,6 +1,6 @@
 # Current Status
 
-Snapshot date: 2026-07-18.
+Snapshot date: 2026-07-19.
 
 Baseline tag: `snapshot-2026-07-18-android-code-enrollment-1.25`.
 
@@ -14,8 +14,8 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.27 (28)` published APK, SHA256
-    `7546c679c9ee0d5b4289867533eb578fdc7d4fabd840046fdd8d7706c18a6213`;
+  - Android `1.29 (30)` published APK, SHA256
+    `e0e774e3bf6d4727f676b868d474bde0443c88e7189fd2f2f5ee0d3510cf19f2`;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.24 (25)`, SHA256
     `e5cd332ef12a3804b189b3f4d2908cf3e1ec28d418be4a554618db6e5ef1602f`.
@@ -97,6 +97,20 @@ local control port `127.0.0.1:8765`. A production end-to-end test passed both
 channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
+
+Android `1.29 (30)` is published for the focused stability soak. It restores
+persisted configuration when Android restarts the sticky VPN service, records
+process/service/boot/recovery markers, retries a native-engine or critical-link
+safety stop instead of remaining permanently off, and schedules a persisted
+2-4 minute recovery-job chain. The compact main screen now exposes explicit yellow
+Starting, green Connected, orange recovery/degraded, and stopping states while
+routing, diagnostics, permissions, and technical settings remain collapsed.
+Static UI checks, Release compilation, APK manifest inspection, production
+deployment, SHA256 verification, `/healthz`, and strict `/readyz` passed. A
+physical reboot, manual stop/start, process-kill recovery, foreground-service,
+VPN validation, and chained recovery-job acceptance passed on the Xiaomi Mi
+Note 10 Lite. A longer locked-screen/network-transition soak and repetition on
+the second enrolled phone remain the acceptance gate.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy

@@ -48,7 +48,9 @@ def main() -> int:
     required_ids = {
         "startButton",
         "stopButton",
+        "statusDetailText",
         "statusButton",
+        "toggleRoutingButton",
         "updateButton",
         "adminButton",
         "autostartCheckBox",
@@ -62,6 +64,8 @@ def main() -> int:
         "saveDomainButton",
         "lookupInput",
         "lookupButton",
+        "resultSection",
+        "resultTitleText",
     }
     missing = sorted(required_ids - ids)
     if missing:
@@ -101,6 +105,10 @@ def main() -> int:
             '"miui_autostart_confirmed"',
             "ConfirmMiuiAutostartIfPending",
             'dialog.SetPositiveButton("Enabled"',
+            'SetPrimaryButton("Starting...", "#F2B134"',
+            'SetPrimaryButton("Connected", "#1F9D55"',
+            "StartUiRefreshLoop",
+            "MaybeRecoverRequestedAgent",
         ],
     )
     assert_contains(
@@ -124,8 +132,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>29</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.28</ApplicationDisplayVersion>",
+            "<ApplicationVersion>30</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.29</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -152,6 +160,7 @@ def main() -> int:
         [
             '"autostart_enabled"',
             "skipped-autostart-disabled",
+            'PutBoolean("agent_requested_running", true)',
         ],
     )
     assert_contains(
@@ -169,7 +178,7 @@ def main() -> int:
         [
             "consecutiveCriticalFailures",
             "CudyCriticalServiceMonitor.CheckAsync",
-            "stop_vpn_restore_direct",
+            "restart_vpn_restore_direct_temporarily",
             '"/api/agent/diagnostics"',
             "options.Inet4RouteRange",
             "AddTunDnsServers",
@@ -185,6 +194,34 @@ def main() -> int:
             'PutString("ssh_host", selectedHost)',
             'PutString("ssh_host_key_sha256", selectedHostKey)',
             "active SSH session is kept until reconnect",
+            'StartString(intent, preferences, "control_url")',
+            'GetBoolean("agent_requested_running", false)',
+            'StoreLifecycleMarker("service_destroyed_unexpectedly"',
+            'SaveServiceStatus("VPN engine stopped unexpectedly; retry pending", "restarting")',
+        ],
+    )
+    assert_contains(
+        ROOT / "apps" / "CudyAndroidAgent" / "CudyApplication.cs",
+        [
+            "AndroidEnvironment.UnhandledExceptionRaiser",
+            "AppDomain.CurrentDomain.UnhandledException",
+            "TaskScheduler.UnobservedTaskException",
+            'StoreCrash("android_unhandled"',
+        ],
+    )
+    assert_contains(
+        ROOT / "apps" / "CudyAndroidAgent" / "CudyRecoveryJobService.cs",
+        [
+            ".SetPersisted(true)",
+            ".SetMinimumLatency(RecoveryDelayMilliseconds)",
+            ".SetOverrideDeadline(RecoveryDeadlineMilliseconds)",
+            "RecoveryJobIdA",
+            "RecoveryJobIdB",
+            "pendingA.IsPeriodic",
+            "ScheduleNextJob",
+            'GetBoolean("agent_requested_running", false)',
+            "StartForegroundService(intent)",
+            'PutString("recovery_job_result", "start-requested")',
         ],
     )
     assert_contains(
@@ -212,6 +249,7 @@ def main() -> int:
             "libbox config reload deferred",
             "libbox pending config cancelled",
             "reload_deferred=",
+            "MarkServiceStopped()",
         ],
     )
     assert_contains(

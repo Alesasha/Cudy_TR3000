@@ -3,9 +3,12 @@ namespace CudyAndroidAgent;
 using Android.App;
 using Android.Content;
 using Android.Content.PM;
+using Android.Content.Res;
+using Android.Graphics;
 using Android.Net;
 using Android.OS;
 using Android.Provider;
+using Android.Views;
 using Android.Widget;
 using System.Net;
 using System.Text;
@@ -40,6 +43,7 @@ public class MainActivity : Activity
     private EditText? lookupInput;
     private CheckBox? autostartCheckBox;
     private TextView? statusText;
+    private TextView? statusDetailText;
     private TextView? serviceStatusText;
     private TextView? policyStatusText;
     private TextView? probeStatusText;
@@ -49,16 +53,24 @@ public class MainActivity : Activity
     private TextView? permissionStatusText;
     private TextView? permissionGuideText;
     private TextView? outputText;
+    private TextView? resultTitleText;
     private LinearLayout? diagnosticsSection;
     private LinearLayout? activationSection;
     private LinearLayout? routingSection;
     private LinearLayout? advancedSection;
-    private Button? toggleDiagnosticsButton;
+    private LinearLayout? resultSection;
+    private Button? startButton;
+    private Button? stopButton;
+    private Button? statusButton;
+    private Button? updateButton;
+    private Button? setupPermissionsButton;
+    private Button? toggleRoutingButton;
     private Button? toggleAdvancedButton;
     private ISharedPreferences? preferences;
     private bool? pendingStartAfterPrepare;
     private string pendingDebugProbeUrl = "";
     private string pendingDebugProbeCandidates = "";
+    private CancellationTokenSource? uiRefreshCts;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -82,6 +94,7 @@ public class MainActivity : Activity
         lookupInput = FindViewById<EditText>(Resource.Id.lookupInput);
         autostartCheckBox = FindViewById<CheckBox>(Resource.Id.autostartCheckBox);
         statusText = FindViewById<TextView>(Resource.Id.statusText);
+        statusDetailText = FindViewById<TextView>(Resource.Id.statusDetailText);
         serviceStatusText = FindViewById<TextView>(Resource.Id.serviceStatusText);
         policyStatusText = FindViewById<TextView>(Resource.Id.policyStatusText);
         probeStatusText = FindViewById<TextView>(Resource.Id.probeStatusText);
@@ -91,22 +104,30 @@ public class MainActivity : Activity
         permissionStatusText = FindViewById<TextView>(Resource.Id.permissionStatusText);
         permissionGuideText = FindViewById<TextView>(Resource.Id.permissionGuideText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
+        resultTitleText = FindViewById<TextView>(Resource.Id.resultTitleText);
         diagnosticsSection = FindViewById<LinearLayout>(Resource.Id.diagnosticsSection);
         activationSection = FindViewById<LinearLayout>(Resource.Id.activationSection);
         routingSection = FindViewById<LinearLayout>(Resource.Id.routingSection);
         advancedSection = FindViewById<LinearLayout>(Resource.Id.advancedSection);
-        toggleDiagnosticsButton = FindViewById<Button>(Resource.Id.toggleDiagnosticsButton);
+        resultSection = FindViewById<LinearLayout>(Resource.Id.resultSection);
+        startButton = FindViewById<Button>(Resource.Id.startButton);
+        stopButton = FindViewById<Button>(Resource.Id.stopButton);
+        statusButton = FindViewById<Button>(Resource.Id.statusButton);
+        updateButton = FindViewById<Button>(Resource.Id.updateButton);
+        setupPermissionsButton = FindViewById<Button>(Resource.Id.setupPermissionsButton);
+        toggleRoutingButton = FindViewById<Button>(Resource.Id.toggleRoutingButton);
         toggleAdvancedButton = FindViewById<Button>(Resource.Id.toggleAdvancedButton);
         if (controlUrlInput is null || deviceIdInput is null || tokenInput is null
             || sshHostInput is null || sshUserInput is null || sshHostKeyInput is null || sshKeyInput is null
             || enrollmentCodeInput is null || defaultServerInput is null || domainInput is null
             || domainServerInput is null || lookupInput is null || autostartCheckBox is null
-            || statusText is null || serviceStatusText is null || policyStatusText is null
+            || statusText is null || statusDetailText is null || serviceStatusText is null || policyStatusText is null
             || probeStatusText is null || routeStatusText is null || transportStatusText is null
             || engineStatusText is null || permissionStatusText is null || permissionGuideText is null
-            || outputText is null || diagnosticsSection is null || activationSection is null
-            || routingSection is null || advancedSection is null || toggleDiagnosticsButton is null
-            || toggleAdvancedButton is null)
+            || outputText is null || resultTitleText is null || diagnosticsSection is null || activationSection is null
+            || routingSection is null || advancedSection is null || resultSection is null
+            || startButton is null || stopButton is null || statusButton is null || updateButton is null
+            || setupPermissionsButton is null || toggleRoutingButton is null || toggleAdvancedButton is null)
         {
             throw new InvalidOperationException("Required layout controls are missing.");
         }
@@ -138,35 +159,68 @@ public class MainActivity : Activity
         }
         defaultServerInput.Text = preferences.GetString("last_default_server_id", "auto");
         autostartCheckBox.Checked = preferences.GetBoolean("autostart_enabled", true);
-        statusText.Text = "Ready";
+        statusText.Text = "Agent is off";
 
         RequireButton(Resource.Id.saveButton).Click += (_, _) => SaveSettings();
-        RequireButton(Resource.Id.setupPermissionsButton).Click += (_, _) => SetupBackgroundPermissions();
-        RequireButton(Resource.Id.statusButton).Click += (_, _) => RenderStoredStatus();
-        RequireButton(Resource.Id.updateButton).Click += async (_, _) => await CheckUpdateAsync();
+        setupPermissionsButton.Click += (_, _) => SetupBackgroundPermissions();
+        statusButton.Click += (_, _) =>
+        {
+            ToggleSection(diagnosticsSection, statusButton, "Connection details", "Hide connection details");
+            if (diagnosticsSection.Visibility != ViewStates.Visible
+                && string.Equals(resultTitleText.Text, "Technical details", StringComparison.Ordinal))
+            {
+                resultSection.Visibility = ViewStates.Gone;
+            }
+            RenderStoredStatus();
+        };
+        updateButton.Click += async (_, _) => await CheckUpdateWithStateAsync();
         RequireButton(Resource.Id.adminButton).Click += (_, _) =>
             StartActivity(new Intent(this, typeof(AdminActivity)));
-        RequireButton(Resource.Id.enrollButton).Click += async (_, _) => await EnrollDeviceAsync();
-        RequireButton(Resource.Id.loadUiButton).Click += async (_, _) => await LoadUserUiAsync();
-        RequireButton(Resource.Id.saveDefaultButton).Click += async (_, _) => await SaveDefaultServerAsync();
-        RequireButton(Resource.Id.saveDomainButton).Click += async (_, _) => await SaveDomainRouteAsync();
-        RequireButton(Resource.Id.lookupButton).Click += async (_, _) => await LookupRouteAsync();
-        RequireButton(Resource.Id.fetchButton).Click += async (_, _) => await FetchPolicyAsync();
-        RequireButton(Resource.Id.checkButton).Click += async (_, _) => await CheckControlAsync();
+        RequireButton(Resource.Id.enrollButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.enrollButton, "Activating...", "Activate", EnrollDeviceAsync,
+            () => !string.IsNullOrWhiteSpace(enrollmentCodeInput.Text));
+        RequireButton(Resource.Id.loadUiButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.loadUiButton, "Loading...", "Refresh routing settings", LoadUserUiAsync);
+        RequireButton(Resource.Id.saveDefaultButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.saveDefaultButton, "Saving...", "Save default server", SaveDefaultServerAsync,
+            () => !string.Equals(
+                defaultServerInput.Text?.Trim(),
+                preferences?.GetString("last_default_server_id", "auto"),
+                StringComparison.OrdinalIgnoreCase));
+        RequireButton(Resource.Id.saveDomainButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.saveDomainButton, "Saving...", "Save domain route", SaveDomainRouteAsync,
+            () => !string.Equals(domainInput.Text?.Trim(), preferences?.GetString("last_saved_domain", ""), StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(domainServerInput.Text?.Trim(), preferences?.GetString("last_saved_domain_server", ""), StringComparison.OrdinalIgnoreCase));
+        RequireButton(Resource.Id.lookupButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.lookupButton, "Checking...", "Show route", LookupRouteAsync,
+            () => !string.IsNullOrWhiteSpace(lookupInput.Text));
+        RequireButton(Resource.Id.fetchButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.fetchButton, "Fetching...", "Fetch policy now", FetchPolicyAsync);
+        RequireButton(Resource.Id.checkButton).Click += async (_, _) => await RunButtonActionAsync(
+            Resource.Id.checkButton, "Checking...", "Test control connection", CheckControlAsync);
         RequireButton(Resource.Id.prepareButton).Click += (_, _) => PrepareVpn();
-        RequireButton(Resource.Id.startButton).Click += (_, _) => StartAgent(controlOnly: false);
-        RequireButton(Resource.Id.stopButton).Click += (_, _) => StopAgent();
-        toggleDiagnosticsButton.Click += (_, _) => ToggleSection(
-            diagnosticsSection,
-            toggleDiagnosticsButton,
-            "Show diagnostics",
-            "Hide diagnostics");
+        startButton.Click += (_, _) => StartAgent(controlOnly: false);
+        stopButton.Click += (_, _) => StopAgent();
+        toggleRoutingButton.Click += (_, _) => ToggleSection(
+            routingSection,
+            toggleRoutingButton,
+            "Routing settings",
+            "Hide routing settings");
         toggleAdvancedButton.Click += (_, _) => ToggleSection(
             advancedSection,
             toggleAdvancedButton,
             "Advanced settings",
             "Hide advanced settings");
         ApplyIntentSettings(Intent);
+        outputText.TextChanged += (_, _) =>
+        {
+            if (!string.IsNullOrWhiteSpace(outputText.Text))
+            {
+                resultSection.Visibility = ViewStates.Visible;
+            }
+        };
+        autostartCheckBox.CheckedChange += (_, _) => SaveSettingsToPreferences();
+        ConfigureActionAvailability();
         RenderConfiguredSections();
         RenderStoredStatus();
         RenderPermissionStatus();
@@ -185,14 +239,77 @@ public class MainActivity : Activity
     protected override void OnResume()
     {
         base.OnResume();
+        MaybeRecoverRequestedAgent();
         RenderStoredStatus();
         RenderPermissionStatus();
         ConfirmMiuiAutostartIfPending();
+        StartUiRefreshLoop();
+    }
+
+    protected override void OnPause()
+    {
+        uiRefreshCts?.Cancel();
+        uiRefreshCts = null;
+        base.OnPause();
     }
 
     private Button RequireButton(int resourceId)
     {
         return FindViewById<Button>(resourceId) ?? throw new InvalidOperationException($"Button {resourceId} is missing.");
+    }
+
+    private async Task RunButtonActionAsync(
+        int resourceId,
+        string busyText,
+        string normalText,
+        Func<Task> action,
+        Func<bool>? enabledAfter = null)
+    {
+        var button = RequireButton(resourceId);
+        button.Enabled = false;
+        button.Text = busyText;
+        resultTitleText!.Text = normalText;
+        try
+        {
+            await action();
+        }
+        finally
+        {
+            button.Text = normalText;
+            button.Enabled = enabledAfter?.Invoke() ?? true;
+        }
+    }
+
+    private void ConfigureActionAvailability()
+    {
+        var saveTechnical = RequireButton(Resource.Id.saveButton);
+        var saveDefault = RequireButton(Resource.Id.saveDefaultButton);
+        var saveDomain = RequireButton(Resource.Id.saveDomainButton);
+        var lookup = RequireButton(Resource.Id.lookupButton);
+        var enroll = RequireButton(Resource.Id.enrollButton);
+        saveTechnical.Enabled = false;
+        saveDefault.Enabled = false;
+        saveDomain.Enabled = false;
+        lookup.Enabled = !string.IsNullOrWhiteSpace(lookupInput?.Text);
+        enroll.Enabled = !string.IsNullOrWhiteSpace(enrollmentCodeInput?.Text);
+
+        foreach (var input in new[] { controlUrlInput, deviceIdInput, tokenInput, sshHostInput, sshUserInput, sshHostKeyInput, sshKeyInput })
+        {
+            if (input is not null)
+            {
+                input.TextChanged += (_, _) => saveTechnical.Enabled = true;
+            }
+        }
+        defaultServerInput!.TextChanged += (_, _) =>
+            saveDefault.Enabled = !string.IsNullOrWhiteSpace(defaultServerInput.Text);
+        domainInput!.TextChanged += (_, _) =>
+            saveDomain.Enabled = !string.IsNullOrWhiteSpace(domainInput.Text)
+                && !string.IsNullOrWhiteSpace(domainServerInput!.Text);
+        domainServerInput!.TextChanged += (_, _) =>
+            saveDomain.Enabled = !string.IsNullOrWhiteSpace(domainInput.Text)
+                && !string.IsNullOrWhiteSpace(domainServerInput.Text);
+        lookupInput!.TextChanged += (_, _) => lookup.Enabled = !string.IsNullOrWhiteSpace(lookupInput.Text);
+        enrollmentCodeInput!.TextChanged += (_, _) => enroll.Enabled = !string.IsNullOrWhiteSpace(enrollmentCodeInput.Text);
     }
 
     private void SaveSettings()
@@ -204,6 +321,7 @@ public class MainActivity : Activity
         }
         RenderConfiguredSections();
         RenderStoredStatus();
+        RequireButton(Resource.Id.saveButton).Enabled = false;
     }
 
     private static void ToggleSection(LinearLayout section, Button button, string collapsedText, string expandedText)
@@ -216,7 +334,7 @@ public class MainActivity : Activity
     private void RenderConfiguredSections()
     {
         if (activationSection is null || routingSection is null || advancedSection is null
-            || toggleAdvancedButton is null)
+            || toggleRoutingButton is null || toggleAdvancedButton is null)
         {
             return;
         }
@@ -225,9 +343,13 @@ public class MainActivity : Activity
         activationSection.Visibility = configured
             ? Android.Views.ViewStates.Gone
             : Android.Views.ViewStates.Visible;
-        routingSection.Visibility = configured
-            ? Android.Views.ViewStates.Visible
-            : Android.Views.ViewStates.Gone;
+        toggleRoutingButton.Visibility = configured ? ViewStates.Visible : ViewStates.Gone;
+        updateButton!.Visibility = configured ? ViewStates.Visible : ViewStates.Gone;
+        if (!configured)
+        {
+            routingSection.Visibility = ViewStates.Gone;
+            toggleRoutingButton.Text = "Routing settings";
+        }
         toggleAdvancedButton.Visibility = configured
             ? Android.Views.ViewStates.Visible
             : Android.Views.ViewStates.Gone;
@@ -235,6 +357,68 @@ public class MainActivity : Activity
         {
             advancedSection.Visibility = Android.Views.ViewStates.Gone;
             toggleAdvancedButton.Text = "Advanced settings";
+        }
+    }
+
+    private void StartUiRefreshLoop()
+    {
+        uiRefreshCts?.Cancel();
+        uiRefreshCts = new CancellationTokenSource();
+        var token = uiRefreshCts.Token;
+        _ = Task.Run(async () =>
+        {
+            while (!token.IsCancellationRequested)
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(1), token);
+                    RunOnUiThread(RenderStoredStatus);
+                }
+                catch (System.OperationCanceledException)
+                {
+                    break;
+                }
+            }
+        }, token);
+    }
+
+    private void MaybeRecoverRequestedAgent()
+    {
+        if (preferences?.GetBoolean("agent_requested_running", false) != true
+            || CudyVpnService.IsRunning
+            || Android.Net.VpnService.Prepare(this) is not null
+            || string.IsNullOrWhiteSpace(preferences.GetString("token", "")))
+        {
+            return;
+        }
+
+        var intent = new Intent(this, typeof(CudyVpnService));
+        intent.SetAction(CudyVpnService.ActionStart);
+        try
+        {
+            if ((int)Build.VERSION.SdkInt >= 26)
+            {
+#pragma warning disable CA1416
+                StartForegroundService(intent);
+#pragma warning restore CA1416
+            }
+            else
+            {
+                StartService(intent);
+            }
+            preferences.Edit()
+                ?.PutString("service_state", "restarting")
+                ?.PutString("service_status", "app requested recovery")
+                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.Apply();
+        }
+        catch (Exception ex)
+        {
+            preferences.Edit()
+                ?.PutString("service_state", "error")
+                ?.PutString("service_status", "recovery failed: " + ex.Message)
+                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.Apply();
         }
     }
 
@@ -435,6 +619,7 @@ public class MainActivity : Activity
                 : 0;
             statusText!.Text = "Settings loaded";
             outputText!.Text = $"user={user.GetProperty("id").GetString()}\ndefault={defaultServer}\ndomain_routes={routes}";
+            RequireButton(Resource.Id.saveDefaultButton).Enabled = false;
         }
         catch (Exception ex)
         {
@@ -458,6 +643,7 @@ public class MainActivity : Activity
             preferences?.Edit()?.PutString("last_default_server_id", serverId)?.Apply();
             statusText!.Text = "Default server saved";
             outputText!.Text = reply;
+            RequireButton(Resource.Id.saveDefaultButton).Enabled = false;
         }
         catch (Exception ex)
         {
@@ -479,8 +665,13 @@ public class MainActivity : Activity
         {
             var body = JsonSerializer.Serialize(new { domain, server_id = serverId });
             var reply = await ControlRequestAsync("POST", "/api/agent/domain-routes", body, useAuth: true);
+            preferences?.Edit()
+                ?.PutString("last_saved_domain", domain)
+                ?.PutString("last_saved_domain_server", serverId)
+                ?.Apply();
             statusText!.Text = "Domain route saved";
             outputText!.Text = reply;
+            RequireButton(Resource.Id.saveDomainButton).Enabled = false;
         }
         catch (Exception ex)
         {
@@ -503,6 +694,25 @@ public class MainActivity : Activity
         {
             statusText!.Text = "Route check failed";
             outputText!.Text = ex.Message;
+        }
+    }
+
+    private async Task CheckUpdateWithStateAsync()
+    {
+        if (updateButton is null)
+        {
+            return;
+        }
+        updateButton.Enabled = false;
+        updateButton.Text = "Checking for updates...";
+        try
+        {
+            await CheckUpdateAsync();
+        }
+        finally
+        {
+            updateButton.Enabled = true;
+            updateButton.Text = "Check for updates";
         }
     }
 
@@ -707,6 +917,15 @@ public class MainActivity : Activity
         var autostart = IsMiuiDevice()
             ? (IsMiuiAutostartConfirmed() ? "confirmed" : "needs confirmation")
             : "n/a";
+        if (setupPermissionsButton is not null)
+        {
+            setupPermissionsButton.Visibility = notifications == "ok"
+                && battery == "ok"
+                && vpn == "ok"
+                && autostart != "needs confirmation"
+                ? ViewStates.Gone
+                : ViewStates.Visible;
+        }
         permissionStatusText.Text = $"Permissions: notifications={notifications}; battery={battery}; vpn={vpn}; autostart={autostart}";
 
         if (permissionGuideText is not null)
@@ -926,7 +1145,14 @@ public class MainActivity : Activity
 
     private void StartAgent(bool controlOnly)
     {
-        SaveSettings();
+        SaveSettingsToPreferences();
+        preferences?.Edit()
+            ?.PutBoolean("agent_requested_running", true)
+            ?.PutString("service_state", "starting")
+            ?.PutString("service_status", "start requested")
+            ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+            ?.Apply();
+        RenderPrimaryState();
         if (!controlOnly)
         {
             var prepareIntent = Android.Net.VpnService.Prepare(this);
@@ -935,10 +1161,10 @@ public class MainActivity : Activity
                 pendingStartAfterPrepare = controlOnly;
                 preferences?.Edit()
                     ?.PutString("service_status", "waiting for Android VPN permission")
+                    ?.PutString("service_state", "starting")
                     ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
                     ?.Apply();
                 StartActivityForResult(prepareIntent, VpnPrepareRequest);
-                statusText!.Text = "VPN permission required";
                 RenderStoredStatus();
                 return;
             }
@@ -958,26 +1184,43 @@ public class MainActivity : Activity
         intent.PutExtra("debug_probe_candidates", pendingDebugProbeCandidates);
         pendingDebugProbeUrl = "";
         pendingDebugProbeCandidates = "";
-        if ((int)Build.VERSION.SdkInt >= 26)
+        try
         {
+            if ((int)Build.VERSION.SdkInt >= 26)
+            {
 #pragma warning disable CA1416
-            StartForegroundService(intent);
+                StartForegroundService(intent);
 #pragma warning restore CA1416
+            }
+            else
+            {
+                StartService(intent);
+            }
         }
-        else
+        catch (Exception ex)
         {
-            StartService(intent);
+            preferences?.Edit()
+                ?.PutBoolean("agent_requested_running", false)
+                ?.PutString("service_state", "error")
+                ?.PutString("service_status", "start failed: " + ex.Message)
+                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.Apply();
         }
-        statusText!.Text = "Agent start requested";
         RenderStoredStatus();
     }
 
     private void StopAgent()
     {
+        preferences?.Edit()
+            ?.PutBoolean("agent_requested_running", false)
+            ?.PutString("service_state", "stopping")
+            ?.PutString("service_status", "stop requested")
+            ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+            ?.Apply();
+        RenderPrimaryState();
         var intent = new Intent(this, typeof(CudyVpnService));
         intent.SetAction(CudyVpnService.ActionStop);
         StartService(intent);
-        statusText!.Text = "Agent stop requested";
         RenderStoredStatus();
     }
 
@@ -999,6 +1242,13 @@ public class MainActivity : Activity
             }
 
             statusText!.Text = "VPN permission denied";
+            preferences?.Edit()
+                ?.PutBoolean("agent_requested_running", false)
+                ?.PutString("service_state", "stopped")
+                ?.PutString("service_status", "VPN permission denied")
+                ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+                ?.Apply();
+            RenderStoredStatus();
         }
     }
 
@@ -1025,6 +1275,8 @@ public class MainActivity : Activity
             return;
         }
 
+        RenderPrimaryState();
+
         var serviceStatus = preferences.GetString("service_status", "");
         var serviceAt = preferences.GetString("service_status_at", "");
         var policySummary = preferences.GetString("last_policy_summary", "");
@@ -1045,6 +1297,12 @@ public class MainActivity : Activity
         var bootReceiverAt = preferences.GetString("boot_receiver_at", "");
         var bootReceiverResult = preferences.GetString("boot_receiver_result", "");
         var bootReceiverError = preferences.GetString("boot_receiver_error", "");
+        var lifecycleAction = preferences.GetString("service_lifecycle_action", "");
+        var lifecycleDetail = preferences.GetString("service_lifecycle_detail", "");
+        var lifecycleAt = preferences.GetString("service_lifecycle_at", "");
+        var processAction = preferences.GetString("process_last_action", "");
+        var processDetail = preferences.GetString("process_last_detail", "");
+        var processAt = preferences.GetString("process_last_action_at", "");
         serviceStatusText.Text = string.IsNullOrWhiteSpace(serviceStatus)
             ? "Service: -"
             : $"Service: {serviceStatus}";
@@ -1140,9 +1398,144 @@ public class MainActivity : Activity
             lines.Add("last_error:");
             lines.Add(lastError);
         }
-        if (lines.Count > 0)
+        if (!string.IsNullOrWhiteSpace(lifecycleAction))
         {
+            lines.Add("");
+            lines.Add($"lifecycle: {lifecycleAction}");
+            if (!string.IsNullOrWhiteSpace(lifecycleAt))
+            {
+                lines.Add($"at: {lifecycleAt}");
+            }
+            if (!string.IsNullOrWhiteSpace(lifecycleDetail))
+            {
+                lines.Add(lifecycleDetail);
+            }
+        }
+        if (!string.IsNullOrWhiteSpace(processAction))
+        {
+            lines.Add("");
+            lines.Add($"process: {processAction}");
+            if (!string.IsNullOrWhiteSpace(processAt))
+            {
+                lines.Add($"at: {processAt}");
+            }
+            if (!string.IsNullOrWhiteSpace(processDetail))
+            {
+                lines.Add(processDetail);
+            }
+        }
+        if (lines.Count > 0 && diagnosticsSection?.Visibility == ViewStates.Visible)
+        {
+            resultTitleText!.Text = "Technical details";
             outputText.Text = string.Join("\n", lines);
         }
+    }
+
+    private void RenderPrimaryState()
+    {
+        if (preferences is null || statusText is null || statusDetailText is null
+            || startButton is null || stopButton is null)
+        {
+            return;
+        }
+
+        var configured = !string.IsNullOrWhiteSpace(preferences.GetString("token", ""))
+            && !string.IsNullOrWhiteSpace(preferences.GetString("ssh_host", ""));
+        var requested = preferences.GetBoolean("agent_requested_running", false);
+        var state = preferences.GetString("service_state", "")?.Trim().ToLowerInvariant() ?? "";
+        var detail = preferences.GetString("service_status", "")?.Trim() ?? "";
+        var serviceRunning = CudyVpnService.IsRunning;
+
+        if (!configured)
+        {
+            statusText.Text = "Activation required";
+            statusDetailText.Text = "Enter the one-time code below";
+            SetPrimaryButton("Start unavailable", "#9E9E9E", enabled: false);
+            stopButton.Visibility = ViewStates.Gone;
+            return;
+        }
+
+        if (requested && !serviceRunning && state == "connected")
+        {
+            state = "restarting";
+            detail = "Service is not running; Android recovery is pending";
+        }
+        if (string.IsNullOrWhiteSpace(state))
+        {
+            state = requested ? "starting" : "stopped";
+        }
+
+        switch (state)
+        {
+            case "connected":
+                statusText.Text = "Connected";
+                statusDetailText.Text = "Protected services are routed automatically";
+                SetPrimaryButton("Connected", "#1F9D55", enabled: false);
+                stopButton.Visibility = ViewStates.Visible;
+                stopButton.Enabled = true;
+                stopButton.Text = "Stop";
+                break;
+            case "starting":
+                statusText.Text = "Starting...";
+                statusDetailText.Text = ShortStatus(detail, "Preparing secure connection");
+                SetPrimaryButton("Starting...", "#F2B134", enabled: false, darkText: true);
+                stopButton.Visibility = ViewStates.Visible;
+                stopButton.Enabled = true;
+                stopButton.Text = "Cancel";
+                break;
+            case "restarting":
+                statusText.Text = "Reconnecting...";
+                statusDetailText.Text = ShortStatus(detail, "Restoring the connection automatically");
+                SetPrimaryButton("Reconnecting...", "#E67E22", enabled: false);
+                stopButton.Visibility = ViewStates.Visible;
+                stopButton.Enabled = true;
+                stopButton.Text = "Stop";
+                break;
+            case "degraded":
+                statusText.Text = "Connection needs attention";
+                statusDetailText.Text = ShortStatus(detail, "The agent will retry automatically");
+                SetPrimaryButton("Connection unstable", "#E67E22", enabled: false);
+                stopButton.Visibility = serviceRunning ? ViewStates.Visible : ViewStates.Gone;
+                stopButton.Enabled = true;
+                stopButton.Text = "Stop";
+                break;
+            case "stopping":
+                statusText.Text = "Stopping...";
+                statusDetailText.Text = "Restoring direct internet access";
+                SetPrimaryButton("Stopping...", "#9E9E9E", enabled: false);
+                stopButton.Visibility = ViewStates.Visible;
+                stopButton.Enabled = false;
+                stopButton.Text = "Stopping...";
+                break;
+            default:
+                statusText.Text = state == "error" ? "Could not start" : "Agent is off";
+                statusDetailText.Text = state == "error"
+                    ? ShortStatus(detail, "Open connection details for the reason")
+                    : "Tap Start to connect";
+                SetPrimaryButton(state == "error" ? "Retry" : "Start", state == "error" ? "#C0392B" : "#315E9B", enabled: true);
+                stopButton.Visibility = ViewStates.Gone;
+                break;
+        }
+    }
+
+    private void SetPrimaryButton(string text, string color, bool enabled, bool darkText = false)
+    {
+        if (startButton is null)
+        {
+            return;
+        }
+        startButton.Text = text;
+        startButton.Enabled = enabled;
+        startButton.BackgroundTintList = ColorStateList.ValueOf(Color.ParseColor(color));
+        startButton.SetTextColor(darkText ? Color.Black : Color.White);
+    }
+
+    private static string ShortStatus(string value, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return fallback;
+        }
+        return value.Length <= 120 ? value : value[..117] + "...";
     }
 }

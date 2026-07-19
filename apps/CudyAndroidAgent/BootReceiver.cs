@@ -55,11 +55,15 @@ public sealed class BootReceiver : BroadcastReceiver
             Log.Info(LogTag, $"Boot receiver skipped start for {action}: autostart is disabled.");
             StoreBootMarker(context, action, now, "skipped-autostart-disabled", "");
             preferences?.Edit()
+                ?.PutBoolean("agent_requested_running", false)
                 ?.PutString("service_status", "boot skipped: autostart disabled")
+                ?.PutString("service_state", "stopped")
                 ?.PutString("service_status_at", now)
                 ?.Apply();
             return;
         }
+
+        CudyRecoveryJobService.Schedule(context);
 
         var controlUrl = preferences?.GetString("control_url", "")?.Trim() ?? "";
         var deviceId = preferences?.GetString("device_id", "")?.Trim() ?? "";
@@ -113,7 +117,9 @@ public sealed class BootReceiver : BroadcastReceiver
                 context.StartService(serviceIntent);
             }
             preferences?.Edit()
+                ?.PutBoolean("agent_requested_running", true)
                 ?.PutString("service_status", $"boot start requested: {action}")
+                ?.PutString("service_state", "starting")
                 ?.PutString("service_status_at", now)
                 ?.Apply();
             StoreBootMarker(context, action, now, "start-requested", "");

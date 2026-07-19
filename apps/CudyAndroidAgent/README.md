@@ -10,15 +10,16 @@ Current MVP:
 - requests Android VPN permission and resumes start after the user accepts it;
 - starts a foreground `VpnService`;
 - periodically fetches control policy and posts `/api/agent/status`;
-- checks the effective control-server critical-service list in parallel and
-  restores direct routing after three consecutive critical failures;
-- shows service, policy, probe, route, transport, engine, runtime, and last
-  error status on the main screen;
-- shows battery, VPN permission, and MIUI Autostart readiness on the main
-  screen;
-- has a production control screen with ON/OFF, status refresh, autostart
-  checkbox, one-time activation code, default server, domain route, route
-  lookup, and update check controls;
+- checks the effective control-server critical-service list in parallel,
+  restores direct routing after three consecutive critical failures, and
+  retries the VPN after a bounded recovery delay;
+- keeps the main screen compact: a state-aware Start/Connected/Reconnecting
+  control, Stop, autostart, update, activation, and collapsed routing,
+  diagnostics, and advanced sections;
+- records process, service lifecycle, boot receiver, and recovery-job markers
+  for post-failure diagnostics;
+- restores configuration after Android `START_STICKY` restarts and uses chained
+  persisted recovery jobs with a 2-4 minute window as a second recovery path;
 - activates a device through `/api/agent/enroll` with a one-time enrollment
   code, then stores the returned device token and unique per-device SSH key;
 - uses the APK's shared `cudy-enroll` key only for the isolated enrollment
@@ -68,11 +69,11 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current published release is `1.28 (29)`. The control-server update manifest
-contains the matching APK. Its code-only bootstrap and issued per-device SSH
-channel passed an end-to-end production test. Version 1.27 is accepted on two
-physical phones; 1.28 adds authenticated control-server endpoint rotation. The routing
-runtime inherited from `1.24 (25)` has already passed policy fetch,
+Current published release candidate is `1.29 (30)`. Version 1.28 is accepted on physical
+phones and added authenticated control-server endpoint rotation. Version 1.29
+adds explicit UI states, compact sections, sticky restart recovery, crash and
+lifecycle markers, and a persisted recovery job. The routing runtime inherited
+from `1.24 (25)` has already passed policy fetch,
 foreground-service, libbox, selective-routing, status, non-disruptive probe and
 real-reboot checks.
 
@@ -97,7 +98,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.28-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.29-YYYYMMDD.apk
 ```
 
 Manual smoke test:
@@ -114,7 +115,8 @@ Manual smoke test:
 7. Set the default server or a domain route if needed, then tap the matching
    save button.
 8. Tap `Prepare VPN` and grant Android VPN permission.
-9. Tap `ON`.
+9. Tap `Start`; it changes to yellow `Starting...` and then green
+   `Connected` when the policy loop is healthy.
 
 Expected MVP status:
 

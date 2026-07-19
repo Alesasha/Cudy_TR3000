@@ -49,6 +49,8 @@ public class CudyVpnService : VpnService
     private IReadOnlyList<CudyCriticalService> criticalServices = Array.Empty<CudyCriticalService>();
     private int consecutiveCriticalFailures;
     private string activeStartFingerprint = "";
+    private volatile bool explicitStopRequested;
+    private volatile bool runtimeShuttingDown;
 
     public override void OnCreate()
     {
@@ -56,6 +58,18 @@ public class CudyVpnService : VpnService
         lock (ActiveInstanceLock)
         {
             activeInstance = new WeakReference<CudyVpnService>(this);
+        }
+        StoreLifecycleMarker("service_created", "");
+    }
+
+    public static bool IsRunning
+    {
+        get
+        {
+            lock (ActiveInstanceLock)
+            {
+                return activeInstance is not null && activeInstance.TryGetTarget(out _);
+            }
         }
     }
 
@@ -93,10 +107,12 @@ public class CudyVpnService : VpnService
     {
         if (intent?.Action == ActionStop)
         {
-            StopAgent("stopped");
+            explicitStopRequested = true;
+            StopAgent("stopped by user", markRequestedStopped: true);
             return StartCommandResult.NotSticky;
         }
 
+        explicitStopRequested = false;
         StartAgent(intent);
         return StartCommandResult.Sticky;
     }
@@ -112,31 +128,64 @@ public class CudyVpnService : VpnService
                 activeInstance = null;
             }
         }
-        StopAgent("stopped");
+        var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
+        var shouldRecover = !explicitStopRequested
+            && preferences?.GetBoolean("agent_requested_running", false) == true;
+        ShutdownRuntime();
+        if (shouldRecover)
+        {
+            SaveServiceStatus("Android stopped the service; restart pending", "restarting");
+            StoreLifecycleMarker("service_destroyed_unexpectedly", "START_STICKY restart requested");
+        }
+        else
+        {
+            StoreLifecycleMarker("service_destroyed", explicitStopRequested ? "user stop" : "not requested to run");
+        }
         base.OnDestroy();
     }
 
     private void StartAgent(Intent? intent)
     {
-        var controlUrl = (intent?.GetStringExtra("control_url") ?? "").Trim().TrimEnd('/');
-        var deviceId = (intent?.GetStringExtra("device_id") ?? "").Trim();
-        var token = intent?.GetStringExtra("token") ?? "";
-        var sshHost = (intent?.GetStringExtra("ssh_host") ?? "").Trim();
-        var sshUser = (intent?.GetStringExtra("ssh_user") ?? "").Trim();
-        var sshHostKeySha256 = (intent?.GetStringExtra("ssh_host_key_sha256") ?? "").Trim();
-        var sshKey = intent?.GetStringExtra("ssh_key") ?? "";
-        var controlOnly = intent?.GetBooleanExtra("control_only", false) ?? false;
+        var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
+        var systemRestart = intent is null;
+        if (systemRestart && preferences?.GetBoolean("agent_requested_running", false) != true)
+        {
+            explicitStopRequested = true;
+            StopAgent("stopped", markRequestedStopped: true);
+            return;
+        }
+
+        var controlUrl = StartString(intent, preferences, "control_url").Trim().TrimEnd('/');
+        var deviceId = StartString(intent, preferences, "device_id").Trim();
+        var token = StartString(intent, preferences, "token");
+        var sshHost = StartString(intent, preferences, "ssh_host").Trim();
+        var sshUser = StartString(intent, preferences, "ssh_user").Trim();
+        var sshHostKeySha256 = StartString(intent, preferences, "ssh_host_key_sha256").Trim();
+        var sshKey = StartString(intent, preferences, "ssh_key");
+        var controlOnly = intent?.HasExtra("control_only") == true
+            ? intent.GetBooleanExtra("control_only", false)
+            : preferences?.GetBoolean("last_control_only", false) == true;
         var startupDelaySeconds = Math.Clamp(intent?.GetIntExtra("startup_delay_seconds", 0) ?? 0, 0, 300);
         debugProbeUrl = (intent?.GetStringExtra("debug_probe_url") ?? "").Trim();
         debugProbeCandidates = (intent?.GetStringExtra("debug_probe_candidates") ?? "").Trim();
         debugProbePending = !string.IsNullOrWhiteSpace(debugProbeUrl)
             && !string.IsNullOrWhiteSpace(debugProbeCandidates);
-        Log.Info(LogTag, $"Start requested controlOnly={controlOnly} controlUrl={controlUrl} deviceId={deviceId}");
+        var startReason = systemRestart ? "android-sticky-restart" : "explicit-start";
+        Log.Info(LogTag, $"Start requested reason={startReason} controlOnly={controlOnly} controlUrl={controlUrl} deviceId={deviceId}");
         if (string.IsNullOrWhiteSpace(controlUrl) || string.IsNullOrWhiteSpace(token))
         {
-            StopAgent("missing control URL or token");
+            StoreLifecycleMarker("start_rejected", "missing control URL or token");
+            StopAgent("missing control URL or token", markRequestedStopped: true);
             return;
         }
+
+        preferences?.Edit()
+            ?.PutBoolean("agent_requested_running", true)
+            ?.PutBoolean("last_control_only", controlOnly)
+            ?.PutString("last_service_start_reason", startReason)
+            ?.PutString("last_service_start_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+            ?.Apply();
+        StoreLifecycleMarker("service_start_requested", startReason);
 
         var startFingerprint = StartFingerprint(
             controlUrl,
@@ -153,7 +202,7 @@ public class CudyVpnService : VpnService
         }
         activeStartFingerprint = startFingerprint;
 
-        SaveServiceStatus("starting");
+        SaveServiceStatus(systemRestart ? "restoring after Android restart" : "starting", "starting");
         StartForeground(NotificationId, BuildNotification("Starting"));
         if (!string.IsNullOrWhiteSpace(sshHost) && !string.IsNullOrWhiteSpace(sshUser) && !string.IsNullOrWhiteSpace(sshKey))
         {
@@ -179,8 +228,37 @@ public class CudyVpnService : VpnService
             loopCts.Token);
     }
 
-    private void StopAgent(string? finalStatus)
+    private static string StartString(Intent? intent, ISharedPreferences? preferences, string key)
     {
+        var fromIntent = intent?.GetStringExtra(key);
+        return fromIntent is not null ? fromIntent : preferences?.GetString(key, "") ?? "";
+    }
+
+    private void StopAgent(string? finalStatus, bool markRequestedStopped = false)
+    {
+        if (markRequestedStopped)
+        {
+            GetSharedPreferences("cudy-agent", FileCreationMode.Private)
+                ?.Edit()
+                ?.PutBoolean("agent_requested_running", false)
+                ?.Apply();
+        }
+        ShutdownRuntime();
+        if (!string.IsNullOrWhiteSpace(finalStatus))
+        {
+            SaveServiceStatus(finalStatus, finalStatus.Contains("missing", StringComparison.OrdinalIgnoreCase) ? "error" : "stopped");
+        }
+        StopForeground(StopForegroundFlags.Remove);
+        StopSelf();
+    }
+
+    private void ShutdownRuntime()
+    {
+        if (runtimeShuttingDown)
+        {
+            return;
+        }
+        runtimeShuttingDown = true;
         loopCts?.Cancel();
         loopCts = null;
         loopTask = null;
@@ -209,11 +287,7 @@ public class CudyVpnService : VpnService
         debugProbeCandidates = "";
         debugProbePending = false;
         activeStartFingerprint = "";
-        if (!string.IsNullOrWhiteSpace(finalStatus))
-        {
-            SaveServiceStatus(finalStatus);
-        }
-        StopSelf();
+        runtimeShuttingDown = false;
     }
 
     private static string StartFingerprint(
@@ -461,6 +535,7 @@ public class CudyVpnService : VpnService
                 }
 
                 var installedAppVersion = InstalledAppVersion();
+                var lifecyclePreferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
                 var status = new
                 {
                     schema_version = 1,
@@ -492,6 +567,13 @@ public class CudyVpnService : VpnService
                         configured_control_host = sshControlHost,
                         critical_services_ok = criticalResult.Ok,
                         critical_service_failures = consecutiveCriticalFailures,
+                        requested_running = lifecyclePreferences?.GetBoolean("agent_requested_running", false) == true,
+                        lifecycle_action = lifecyclePreferences?.GetString("service_lifecycle_action", "") ?? "",
+                        lifecycle_at = lifecyclePreferences?.GetString("service_lifecycle_at", "") ?? "",
+                        process_action = lifecyclePreferences?.GetString("process_last_action", "") ?? "",
+                        process_action_at = lifecyclePreferences?.GetString("process_last_action_at", "") ?? "",
+                        recovery_job_result = lifecyclePreferences?.GetString("recovery_job_result", "") ?? "",
+                        recovery_job_at = lifecyclePreferences?.GetString("recovery_job_at", "") ?? "",
                     },
                     capabilities = new
                     {
@@ -536,7 +618,7 @@ public class CudyVpnService : VpnService
                             consecutive_failures = consecutiveCriticalFailures,
                             failed_services = criticalResult.FailedServices,
                             services = criticalResult.Services,
-                            action = "stop_vpn_restore_direct",
+                            action = "restart_vpn_restore_direct_temporarily",
                             reported_at = DateTimeOffset.UtcNow.ToString("O"),
                         }),
                     };
@@ -548,10 +630,23 @@ public class CudyVpnService : VpnService
                     {
                         Log.Warn(LogTag, "Critical diagnostic report failed: " + ex.Message);
                     }
-                    SaveServiceStatus("watchdog stopped VPN; direct internet restored");
-                    UpdateNotification("Safety stop: direct internet restored");
-                    StopAgent(finalStatus: null);
-                    return;
+                    SaveServiceStatus("safety recovery: direct internet restored; retrying", "restarting");
+                    UpdateNotification("Recovering: direct internet restored");
+                    StoreLifecycleMarker("watchdog_recovery", string.Join(", ", criticalResult.FailedServices));
+                    runtimeShuttingDown = true;
+                    try
+                    {
+                        libboxEngine?.Stop();
+                        tun?.Close();
+                        tun = null;
+                    }
+                    finally
+                    {
+                        runtimeShuttingDown = false;
+                    }
+                    consecutiveCriticalFailures = 0;
+                    await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
+                    continue;
                 }
             }
             catch (Exception ex) when (ex is not System.OperationCanceledException)
@@ -794,7 +889,16 @@ public class CudyVpnService : VpnService
 
     internal void RequestLibboxServiceStop()
     {
-        StopAgent("libbox requested stop");
+        if (runtimeShuttingDown || explicitStopRequested)
+        {
+            return;
+        }
+        tun?.Close();
+        tun = null;
+        libboxEngine?.MarkServiceStopped();
+        SaveServiceStatus("VPN engine stopped unexpectedly; retry pending", "restarting");
+        StoreLifecycleMarker("libbox_stop_requested", "unexpected native engine stop");
+        Log.Warn(LogTag, "libbox requested an unexpected service stop; control loop remains active for recovery");
     }
 
     private static bool AddTunAddresses(Builder builder, IRoutePrefixIterator? iterator)
@@ -993,12 +1097,56 @@ public class CudyVpnService : VpnService
         manager?.Notify(NotificationId, BuildNotification(text));
     }
 
-    private void SaveServiceStatus(string text)
+    private void SaveServiceStatus(string text, string? state = null)
     {
         var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
         preferences?.Edit()
             ?.PutString("service_status", text)
+            ?.PutString("service_state", state ?? ClassifyServiceState(text))
             ?.PutString("service_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+            ?.Apply();
+    }
+
+    private static string ClassifyServiceState(string text)
+    {
+        if (text.StartsWith("ok ", StringComparison.OrdinalIgnoreCase))
+        {
+            return "connected";
+        }
+        if (text.Contains("error", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("missing", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return "degraded";
+        }
+        if (text.Contains("restart", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("recover", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("retry", StringComparison.OrdinalIgnoreCase))
+        {
+            return "restarting";
+        }
+        if (text.Contains("start", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("pending", StringComparison.OrdinalIgnoreCase)
+            || text.Contains("waiting", StringComparison.OrdinalIgnoreCase))
+        {
+            return "starting";
+        }
+        if (text.Contains("stop", StringComparison.OrdinalIgnoreCase))
+        {
+            return "stopped";
+        }
+        return "starting";
+    }
+
+    private void StoreLifecycleMarker(string action, string detail)
+    {
+        var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
+        var count = (preferences?.GetInt("service_lifecycle_count", 0) ?? 0) + 1;
+        preferences?.Edit()
+            ?.PutInt("service_lifecycle_count", count)
+            ?.PutString("service_lifecycle_action", action)
+            ?.PutString("service_lifecycle_detail", detail)
+            ?.PutString("service_lifecycle_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
             ?.Apply();
     }
 

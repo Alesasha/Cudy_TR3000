@@ -8,292 +8,312 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:padding="20dp">
+
         <TextView
             android:id="@+id/statusText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Not configured"
-            android:textSize="18sp" />
+            android:text="Agent is off"
+            android:textSize="24sp"
+            android:textStyle="bold" />
+        <TextView
+            android:id="@+id/statusDetailText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Tap Start to connect"
+            android:textSize="15sp" />
+
         <Button
-            android:id="@+id/toggleDiagnosticsButton"
+            android:id="@+id/startButton"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Show diagnostics" />
-        <LinearLayout
-            android:id="@+id/diagnosticsSection"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="gone">
-        <TextView
-            android:id="@+id/serviceStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="10dp"
-            android:text="Service: -"
-            android:textSize="14sp" />
-        <TextView
-            android:id="@+id/policyStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="Policy: -"
-            android:textSize="14sp" />
-        <TextView
-            android:id="@+id/probeStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="Probe: -"
-            android:textSize="14sp" />
-        <TextView
-            android:id="@+id/routeStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="Routes: -"
-            android:textSize="14sp" />
-        <TextView
-            android:id="@+id/transportStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="Transports: -"
-            android:textSize="14sp" />
-        <TextView
-            android:id="@+id/engineStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="4dp"
-            android:text="Engine: -"
-            android:textSize="14sp" />
-        </LinearLayout>
-        <TextView
-            android:id="@+id/permissionStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="10dp"
-            android:text="Permissions: -"
-            android:textSize="14sp" />
-        <TextView
-            android:id="@+id/permissionGuideText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="6dp"
-            android:text="Setup: -"
-            android:textSize="13sp" />
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:paddingTop="12dp">
-            <Button
-                android:id="@+id/startButton"
-                android:layout_width="0dp"
-                android:layout_height="56dp"
-                android:layout_weight="1"
-                android:text="ON" />
-            <Button
-                android:id="@+id/stopButton"
-                android:layout_width="0dp"
-                android:layout_height="56dp"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="OFF" />
-        </LinearLayout>
+            android:layout_height="64dp"
+            android:layout_marginTop="18dp"
+            android:text="Start"
+            android:textSize="18sp"
+            android:textStyle="bold" />
         <Button
-            android:id="@+id/statusButton"
+            android:id="@+id/stopButton"
+            android:layout_width="match_parent"
+            android:layout_height="52dp"
+            android:layout_marginTop="8dp"
+            android:text="Stop"
+            android:visibility="gone" />
+
+        <CheckBox
+            android:id="@+id/autostartCheckBox"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Refresh status" />
+            android:layout_marginTop="10dp"
+            android:text="Start automatically after reboot" />
+        <Button
+            android:id="@+id/setupPermissionsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Allow reliable background operation"
+            android:visibility="gone" />
         <Button
             android:id="@+id/updateButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Check for updates" />
-        <Button
-            android:id="@+id/adminButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Administration" />
-        <CheckBox
-            android:id="@+id/autostartCheckBox"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Autostart after reboot" />
-        <Button
-            android:id="@+id/setupPermissionsButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Setup permissions" />
+
         <LinearLayout
             android:id="@+id/activationSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical">
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="18dp"
-            android:text="Activation"
-            android:textStyle="bold" />
-        <EditText
-            android:id="@+id/enrollmentCodeInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="One-time code"
-            android:inputType="textVisiblePassword" />
-        <Button
-            android:id="@+id/enrollButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Activate this device" />
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:text="Activate this device"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+            <EditText
+                android:id="@+id/enrollmentCodeInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="One-time code"
+                android:inputType="textVisiblePassword" />
+            <Button
+                android:id="@+id/enrollButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Activate" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/toggleRoutingButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:text="Routing settings"
+            android:visibility="gone" />
         <LinearLayout
             android:id="@+id/routingSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:visibility="gone">
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="18dp"
-            android:text="Routing"
-            android:textStyle="bold" />
-        <Button
-            android:id="@+id/loadUiButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Load settings" />
-        <EditText
-            android:id="@+id/defaultServerInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Default server: auto, proxyde, proxynl..."
-            android:inputType="text" />
-        <Button
-            android:id="@+id/saveDefaultButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Save default server" />
-        <EditText
-            android:id="@+id/domainInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Domain, e.g. gemini.google.com"
-            android:inputType="textUri" />
-        <EditText
-            android:id="@+id/domainServerInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Server for domain: auto, proxyde, direct..."
-            android:inputType="text" />
-        <Button
-            android:id="@+id/saveDomainButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Save domain route" />
-        <EditText
-            android:id="@+id/lookupInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Check route for domain/IP/alias"
-            android:inputType="textUri" />
-        <Button
-            android:id="@+id/lookupButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Check route" />
+            <Button
+                android:id="@+id/loadUiButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Refresh routing settings" />
+            <EditText
+                android:id="@+id/defaultServerInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Default server: auto, proxyde, proxynl..."
+                android:inputType="text" />
+            <Button
+                android:id="@+id/saveDefaultButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Save default server" />
+            <EditText
+                android:id="@+id/domainInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Domain, e.g. gemini.google.com"
+                android:inputType="textUri" />
+            <EditText
+                android:id="@+id/domainServerInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Server for domain: auto, proxyde, direct..."
+                android:inputType="text" />
+            <Button
+                android:id="@+id/saveDomainButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Save domain route" />
+            <EditText
+                android:id="@+id/lookupInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Domain, IP or service alias"
+                android:inputType="textUri" />
+            <Button
+                android:id="@+id/lookupButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Show route" />
         </LinearLayout>
+
+        <Button
+            android:id="@+id/statusButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Connection details" />
+        <LinearLayout
+            android:id="@+id/diagnosticsSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/serviceStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="10dp"
+                android:text="Service: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/policyStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Policy: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/probeStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Probe: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/routeStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Routes: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/transportStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Transports: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/engineStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Engine: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/permissionStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Permissions: -"
+                android:textSize="14sp" />
+            <TextView
+                android:id="@+id/permissionGuideText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="4dp"
+                android:text="Setup: -"
+                android:textSize="13sp" />
+        </LinearLayout>
+
         <Button
             android:id="@+id/toggleAdvancedButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Advanced settings" />
+            android:text="Advanced" />
         <LinearLayout
             android:id="@+id/advancedSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
             android:visibility="gone">
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:paddingTop="18dp"
-            android:text="Advanced"
-            android:textStyle="bold" />
-        <EditText
-            android:id="@+id/controlUrlInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Control URL"
-            android:inputType="textUri" />
-        <EditText
-            android:id="@+id/deviceIdInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Device ID"
-            android:inputType="text" />
-        <EditText
-            android:id="@+id/tokenInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Device token"
-            android:inputType="textPassword" />
-        <EditText
-            android:id="@+id/sshHostInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="SSH host"
-            android:inputType="textUri" />
-        <EditText
-            android:id="@+id/sshUserInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="SSH user"
-            android:inputType="text" />
-        <EditText
-            android:id="@+id/sshHostKeyInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="SSH host key SHA256"
-            android:inputType="textVisiblePassword" />
-        <EditText
-            android:id="@+id/sshKeyInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:gravity="top"
-            android:hint="SSH private key"
-            android:inputType="textMultiLine|textNoSuggestions"
-            android:minLines="4" />
-        <Button
-            android:id="@+id/saveButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Save" />
-        <Button
-            android:id="@+id/fetchButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Fetch policy" />
-        <Button
-            android:id="@+id/checkButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Check control" />
-        <Button
-            android:id="@+id/prepareButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Prepare VPN" />
+            <Button
+                android:id="@+id/adminButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Administration" />
+            <EditText
+                android:id="@+id/controlUrlInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Control URL"
+                android:inputType="textUri" />
+            <EditText
+                android:id="@+id/deviceIdInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Device ID"
+                android:inputType="text" />
+            <EditText
+                android:id="@+id/tokenInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Device token"
+                android:inputType="textPassword" />
+            <EditText
+                android:id="@+id/sshHostInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="SSH host"
+                android:inputType="textUri" />
+            <EditText
+                android:id="@+id/sshUserInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="SSH user"
+                android:inputType="text" />
+            <EditText
+                android:id="@+id/sshHostKeyInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="SSH host key SHA256"
+                android:inputType="textVisiblePassword" />
+            <EditText
+                android:id="@+id/sshKeyInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="top"
+                android:hint="SSH private key"
+                android:inputType="textMultiLine|textNoSuggestions"
+                android:minLines="3" />
+            <Button
+                android:id="@+id/saveButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Save technical settings" />
+            <Button
+                android:id="@+id/fetchButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Fetch policy now" />
+            <Button
+                android:id="@+id/checkButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Test control connection" />
+            <Button
+                android:id="@+id/prepareButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Request VPN permission" />
         </LinearLayout>
-        <TextView
-            android:id="@+id/outputText"
+
+        <LinearLayout
+            android:id="@+id/resultSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:paddingTop="16dp"
-            android:textIsSelectable="true"
-            android:textSize="14sp" />
+            android:layout_marginTop="10dp"
+            android:orientation="vertical"
+            android:visibility="gone">
+            <TextView
+                android:id="@+id/resultTitleText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Result"
+                android:textStyle="bold" />
+            <TextView
+                android:id="@+id/outputText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="6dp"
+                android:textIsSelectable="true"
+                android:textSize="14sp" />
+        </LinearLayout>
     </LinearLayout>
 </ScrollView>

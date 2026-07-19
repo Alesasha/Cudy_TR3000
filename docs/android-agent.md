@@ -28,13 +28,20 @@ Verified on the physical test phone:
   direct/provider/control connections use the physical default network;
 - posts `/api/agent/status`;
 - can run local candidate probes through generated local mixed proxy inbounds.
-- shows service, policy, probe, route, transport, engine, runtime, and last
-  error status on the main screen.
-- shows `battery`, `vpn`, and MIUI `autostart` readiness on the main screen.
+- shows only the connection state and primary controls initially; routing,
+  diagnostics, permissions, and technical settings are collapsed until asked
+  for.
+- renders Start as yellow while starting, green while connected, orange while
+  recovering/degraded, and keeps Stop as a separate explicit action.
+- reloads persisted start settings after Android sticky-service restarts and
+  uses chained persisted recovery jobs with a 2-4 minute window as a second
+  delayed recovery path.
+- records boot, process, service lifecycle, native-engine stop, and recovery
+  markers locally and reports lifecycle/recovery markers with agent status.
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release: `1.27 (28)`.
+Latest published release candidate: `1.29 (30)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -42,12 +49,13 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.27-20260718.apk`;
-- SHA256: `e90d50e3e06f013e422a3d26857644917a23a20b1e1a6003aad3d62b5309148c`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.29-20260720.apk`;
+- SHA256: `e0e774e3bf6d4727f676b868d474bde0443c88e7189fd2f2f5ee0d3510cf19f2`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
-  end-to-end test. Version 1.25 is accepted on two physical phones; 1.27 is the
-  pending in-place UI/permission/version-reporting update.
+  end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
+  process-kill recovery, foreground-service, VPN validation, and compact-UI
+  acceptance on the Xiaomi Mi Note 10 Lite.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 
@@ -150,7 +158,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.27-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.29-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -184,6 +192,20 @@ The smoke script:
 - waits for the first control loop;
 - prints service status, policy summary, device ping, and recent app logs.
 
+For an intermittent crash/reboot investigation, leave the phone connected and
+run the non-invasive soak monitor. It samples the foreground service, recovery
+job, package stopped state, and VPN network, then saves normal and crash logcat
+buffers even when the script is interrupted:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\android-agent-soak.ps1 `
+  -DurationMinutes 240 `
+  -SampleSeconds 30
+```
+
+Results are written under `build/android-soak/<timestamp>-<serial>/` and contain
+no provisioning token or private SSH key.
+
 For Release APKs Android normally denies `run-as`; the script tolerates that and
 uses logcat/dumpsys diagnostics instead.
 
@@ -211,7 +233,7 @@ new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.27 (28)` contains a minimal protected administrator screen. Open
+Android `1.29 (30)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 
@@ -336,6 +358,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add optional rendered probes for services whose geographic decision is made
   by JavaScript rather than the initial HTTP body.
-- Simplify the main UI and move technical diagnostics to a dedicated view.
+- Repeat the physical 1.29 reboot/process-kill acceptance on the second
+  enrolled phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).

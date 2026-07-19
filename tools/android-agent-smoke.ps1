@@ -190,6 +190,12 @@ if ($onlineDevices.Count -gt 0) {
         Select-Object -First 20
 
     Write-Host ""
+    Write-Host "Recovery job:"
+    Invoke-Adb shell dumpsys jobscheduler com.nashvpn.cudyagent |
+        Select-String -Pattern "CudyRecoveryJobService|JOB #|READY|RUNNABLE|PENDING|Last successful run|Last failed run" |
+        Select-Object -First 20
+
+    Write-Host ""
     Write-Host "Boot receiver:"
     Invoke-Adb shell dumpsys package com.nashvpn.cudyagent |
         Select-String -Pattern "Receiver Resolver Table|BootReceiver|LOCKED_BOOT_COMPLETED|BOOT_COMPLETED|USER_UNLOCKED|MY_PACKAGE_REPLACED|TEST_BOOT_START|directBootAware" |
@@ -199,7 +205,7 @@ if ($onlineDevices.Count -gt 0) {
     Write-Host "Stored safe status:"
     try {
         Invoke-Adb shell run-as com.nashvpn.cudyagent cat /data/data/com.nashvpn.cudyagent/shared_prefs/cudy-agent.xml 2>$null |
-            Select-String -Pattern "service_status|service_status_at|last_policy_at|last_policy_summary|debug_probe_at|debug_probe_result|boot_receiver"
+            Select-String -Pattern "service_status|service_state|service_lifecycle|process_last|recovery_job|agent_requested_running|last_policy_at|last_policy_summary|debug_probe_at|debug_probe_result|boot_receiver"
     }
     catch {
         Write-Host "run-as is unavailable for credential-protected status; using logcat/dumpsys diagnostics instead."

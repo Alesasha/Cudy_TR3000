@@ -54,14 +54,18 @@ hours. A live cycle accepted a new probe job without changing the unified
 config hash or reloading libbox; the longer soak below remains required.
 
 1. Continue the multi-day Wi-Fi/mobile-data/background/locked-screen soak on
-   the two physical phones enrolled successfully with `1.25 (26)`.
+   the two physical phones with `1.29 (30)`. Run `android-agent-soak.ps1` during
+   focused sessions so a failure retains service, job, package, VPN, and crash
+   evidence.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
 3. Soak the implemented MIUI Autostart confirmation. The app now distinguishes
    standard permissions it can verify from the vendor-only setting that Android
    cannot query, and stops repeating the warning after explicit confirmation.
-4. Soak the 1.27 first-screen cleanup: diagnostics, routing details and advanced
-   settings are collapsed until requested, while activation remains prominent
-   only on an unconfigured device. Continue the visual redesign separately.
+4. Soak the 1.29 state-aware first screen and recovery paths: diagnostics,
+   routing details and advanced settings are collapsed until requested; sticky
+   restarts reload persisted settings; the delayed recovery job must restart an
+   unexpectedly killed requested agent without overriding a manual Stop. This
+   acceptance passed on the Xiaomi Mi Note 10 Lite; keep it in the longer soak.
 5. Repeat reboot and route acceptance on at least one additional Android build
    before broad rollout.
 

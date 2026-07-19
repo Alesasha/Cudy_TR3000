@@ -206,6 +206,16 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
         service.CloseLibboxTun();
     }
 
+    public void MarkServiceStopped()
+    {
+        activeConfigPath = "";
+        activeServerId = "";
+        activeConfigHash = "";
+        activeConfigStartedAt = DateTimeOffset.MinValue;
+        pendingConfigHash = "";
+        pendingConfigSince = DateTimeOffset.MinValue;
+    }
+
     public void Dispose()
     {
         Stop();
