@@ -17,6 +17,7 @@ public sealed class CudyRecoveryJobService : JobService
     private const string LogTag = "CudyAgent";
     private const long RecoveryDelayMilliseconds = 2 * 60 * 1000;
     private const long RecoveryDeadlineMilliseconds = 4 * 60 * 1000;
+    private const long StalledControlLoopMilliseconds = 10 * 60 * 1000;
 
     public static void Schedule(Context context)
     {
@@ -50,9 +51,14 @@ public sealed class CudyRecoveryJobService : JobService
         ScheduleNextJob(parameters?.JobId ?? RecoveryJobIdA);
 
         var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
-        if (preferences?.GetBoolean("agent_requested_running", false) != true
-            || CudyVpnService.IsRunning)
+        if (preferences?.GetBoolean("agent_requested_running", false) != true)
         {
+            return false;
+        }
+
+        if (CudyVpnService.IsRunning)
+        {
+            RecoverStalledProcess(preferences);
             return false;
         }
 
@@ -92,6 +98,37 @@ public sealed class CudyRecoveryJobService : JobService
     }
 
     public override bool OnStopJob(JobParameters? parameters) => false;
+
+    private void RecoverStalledProcess(ISharedPreferences preferences)
+    {
+        var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var heartbeatMs = preferences.GetLong("control_loop_heartbeat_ms", 0);
+        if (heartbeatMs <= 0)
+        {
+            preferences.Edit()
+                ?.PutLong("control_loop_heartbeat_ms", nowMs)
+                ?.PutString("control_loop_stage", "recovery-baseline")
+                ?.Apply();
+            return;
+        }
+        var ageMs = nowMs - heartbeatMs;
+        if (ageMs < StalledControlLoopMilliseconds)
+        {
+            return;
+        }
+
+        var now = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz");
+        var stage = preferences.GetString("control_loop_stage", "unknown") ?? "unknown";
+        preferences.Edit()
+            ?.PutString("recovery_job_at", now)
+            ?.PutString("recovery_job_result", $"stalled-process-restart: stage={stage} age_seconds={ageMs / 1000}")
+            ?.PutString("service_state", "restarting")
+            ?.PutString("service_status", "control loop stalled; process restart requested")
+            ?.PutString("service_status_at", now)
+            ?.Commit();
+        Log.Error(LogTag, $"Control loop stalled at {stage} for {ageMs / 1000}s; restarting process.");
+        Android.OS.Process.KillProcess(Android.OS.Process.MyPid());
+    }
 
     private void ScheduleNextJob(int currentJobId)
     {

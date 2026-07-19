@@ -441,6 +441,7 @@ public class CudyVpnService : VpnService
         CancellationToken cancellationToken)
     {
         Log.Info(LogTag, "Control loop task started");
+        TouchControlLoop("starting");
         if (startupDelaySeconds > 0)
         {
             SaveServiceStatus($"waiting for network after boot ({startupDelaySeconds}s)");
@@ -452,6 +453,7 @@ public class CudyVpnService : VpnService
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
         while (!cancellationToken.IsCancellationRequested)
         {
+            TouchControlLoop("cycle-start");
             var ok = false;
             var error = "";
             var domainRoutes = 0;
@@ -467,6 +469,7 @@ public class CudyVpnService : VpnService
             {
                 Log.Info(LogTag, "Control loop fetching policy");
                 var configJson = await GetControlStringAsync(client, controlUrl, token, "/api/agent/config", cancellationToken);
+                TouchControlLoop("policy-fetched");
                 SavePolicySummary(configJson);
                 using var doc = JsonDocument.Parse(configJson);
                 var root = doc.RootElement;
@@ -496,6 +499,7 @@ public class CudyVpnService : VpnService
                     engineSummary = libboxEngine?.StartOrReload(stored[0]) ?? "engine=unavailable";
                     if (libboxEngine is not null)
                     {
+                        TouchControlLoop("probe-jobs-start");
                         var probeRunner = new CudyAndroidProbeRunner(deviceId);
                         var probes = await probeRunner.RunAsync(
                             root,
@@ -504,6 +508,7 @@ public class CudyVpnService : VpnService
                             (path, json, tokenArg) => PostControlJsonAsync(client, controlUrl, token, path, json, tokenArg),
                             cancellationToken);
                         probeSummary = probes.SafeSummary();
+                        TouchControlLoop("probe-jobs-finished");
                         if (debugProbePending)
                         {
                             debugProbePending = false;
@@ -590,6 +595,7 @@ public class CudyVpnService : VpnService
                     "/api/agent/status",
                     JsonSerializer.Serialize(status),
                     cancellationToken);
+                TouchControlLoop("cycle-complete");
                 ok = criticalResult.Ok;
                 SaveLoopDetails(
                     domainRoutes,
@@ -651,6 +657,7 @@ public class CudyVpnService : VpnService
             }
             catch (Exception ex) when (ex is not System.OperationCanceledException)
             {
+                TouchControlLoop("cycle-error");
                 error = ex.Message;
                 SaveLoopDetails(
                     domainRoutes,
@@ -1147,6 +1154,16 @@ public class CudyVpnService : VpnService
             ?.PutString("service_lifecycle_action", action)
             ?.PutString("service_lifecycle_detail", detail)
             ?.PutString("service_lifecycle_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
+            ?.Apply();
+    }
+
+    private void TouchControlLoop(string stage)
+    {
+        GetSharedPreferences("cudy-agent", FileCreationMode.Private)
+            ?.Edit()
+            ?.PutLong("control_loop_heartbeat_ms", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+            ?.PutString("control_loop_stage", stage)
+            ?.PutString("control_loop_stage_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
             ?.Apply();
     }
 

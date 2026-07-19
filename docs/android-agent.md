@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.29 (30)`.
+Latest published release candidate: `1.30 (31)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,13 +49,14 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.29-20260720.apk`;
-- SHA256: `e0e774e3bf6d4727f676b868d474bde0443c88e7189fd2f2f5ee0d3510cf19f2`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.30-20260720.apk`;
+- SHA256: `6e889aa2c7f9592dec9dd146d9630f01900f924349abbb9fa069781572e4cca3`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
   process-kill recovery, foreground-service, VPN validation, and compact-UI
-  acceptance on the Xiaomi Mi Note 10 Lite.
+  acceptance on the Xiaomi Mi Note 10 Lite. Version 1.30 adds stalled-control
+  recovery and single-attempt probe-result reporting.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 
@@ -158,7 +159,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.29-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.30-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -233,7 +234,7 @@ new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.29 (30)` contains a minimal protected administrator screen. Open
+Android `1.30 (31)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 
@@ -358,7 +359,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add optional rendered probes for services whose geographic decision is made
   by JavaScript rather than the initial HTTP body.
-- Repeat the physical 1.29 reboot/process-kill acceptance on the second
+- Repeat the physical 1.30 reboot/process-kill acceptance on the second
   enrolled phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).

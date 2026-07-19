@@ -69,10 +69,10 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current published release candidate is `1.29 (30)`. Version 1.28 is accepted on physical
-phones and added authenticated control-server endpoint rotation. Version 1.29
-adds explicit UI states, compact sections, sticky restart recovery, crash and
-lifecycle markers, and a persisted recovery job. The routing runtime inherited
+Current published release candidate is `1.30 (31)`. Version 1.29 passed physical
+UI, sticky restart, crash/reboot and persisted recovery-job checks. Version 1.30
+also prevents duplicate probe-result reporting and restarts a requested-running
+process whose control loop makes no progress for ten minutes. The routing runtime inherited
 from `1.24 (25)` has already passed policy fetch,
 foreground-service, libbox, selective-routing, status, non-disruptive probe and
 real-reboot checks.
@@ -98,7 +98,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.29-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.30-YYYYMMDD.apk
 ```
 
 Manual smoke test:

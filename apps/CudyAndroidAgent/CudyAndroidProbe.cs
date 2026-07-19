@@ -56,23 +56,19 @@ public sealed class CudyAndroidProbeRunner
             {
                 continue;
             }
+            object result;
+            var probeFailed = false;
             try
             {
                 Log.Info(LogTag, $"Probe job start: {jobId}");
-                var result = await RunJobAsync(policyRoot, transportPlan, job, cancellationToken);
+                result = await RunJobAsync(policyRoot, transportPlan, job, cancellationToken);
                 Log.Info(LogTag, $"Probe job result built: {jobId}");
-                await postControlJsonAsync(
-                    "/api/agent/probe-jobs/result",
-                    JsonSerializer.Serialize(new { job_id = jobId, result }),
-                    cancellationToken);
-                Log.Info(LogTag, $"Probe job posted: {jobId}");
-                completed++;
             }
             catch (Exception ex)
             {
                 Log.Warn(LogTag, $"Probe job failed: {jobId}: {ex.Message}");
-                failed++;
-                var result = new
+                probeFailed = true;
+                result = new
                 {
                     schema_version = 1,
                     agent_version = "0.1",
@@ -85,10 +81,28 @@ public sealed class CudyAndroidProbeRunner
                     checks = new[] { new { status = "failed", error = ex.Message } },
                     ok = false,
                 };
+            }
+
+            try
+            {
                 await postControlJsonAsync(
                     "/api/agent/probe-jobs/result",
                     JsonSerializer.Serialize(new { job_id = jobId, result }),
                     cancellationToken);
+                Log.Info(LogTag, $"Probe job posted: {jobId}");
+                if (probeFailed)
+                {
+                    failed++;
+                }
+                else
+                {
+                    completed++;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                Log.Warn(LogTag, $"Probe job result could not be posted: {jobId}: {ex.Message}");
+                failed++;
             }
         }
         return new CudyProbeJobsSummary(jobs.Count, completed, failed);

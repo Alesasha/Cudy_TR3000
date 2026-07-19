@@ -4,8 +4,8 @@ param(
     [int]$VersionCode = 26,
     [string]$LinuxVersionName = "1.24",
     [int]$LinuxVersionCode = 25,
-    [string]$AndroidVersionName = "1.29",
-    [int]$AndroidVersionCode = 30,
+    [string]$AndroidVersionName = "1.30",
+    [int]$AndroidVersionCode = 31,
     [string]$AndroidApk = "",
     [ValidateSet("windows", "linux", "android")]
     [string[]]$Platforms = @("windows", "linux", "android")

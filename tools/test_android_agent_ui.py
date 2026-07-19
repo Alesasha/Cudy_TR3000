@@ -132,8 +132,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>30</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.29</ApplicationDisplayVersion>",
+            "<ApplicationVersion>31</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.30</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -198,6 +198,10 @@ def main() -> int:
             'GetBoolean("agent_requested_running", false)',
             'StoreLifecycleMarker("service_destroyed_unexpectedly"',
             'SaveServiceStatus("VPN engine stopped unexpectedly; retry pending", "restarting")',
+            'TouchControlLoop("cycle-start")',
+            'TouchControlLoop("cycle-complete")',
+            'TouchControlLoop("cycle-error")',
+            'PutLong("control_loop_heartbeat_ms"',
         ],
     )
     assert_contains(
@@ -222,6 +226,10 @@ def main() -> int:
             'GetBoolean("agent_requested_running", false)',
             "StartForegroundService(intent)",
             'PutString("recovery_job_result", "start-requested")',
+            "StalledControlLoopMilliseconds",
+            "RecoverStalledProcess(preferences)",
+            'PutString("service_status", "control loop stalled; process restart requested")',
+            "Android.OS.Process.KillProcess(Android.OS.Process.MyPid())",
         ],
     )
     assert_contains(
@@ -242,6 +250,8 @@ def main() -> int:
     probe_text = ANDROID_PROBE.read_text(encoding="utf-8")
     if ".StartOrReload(" in probe_text:
         raise AssertionError("Android probe runner must not reload the active VPN engine")
+    if probe_text.count('"/api/agent/probe-jobs/result"') != 1:
+        raise AssertionError("Each Android probe job must have one result-report path")
     assert_contains(
         ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidLibboxEngine.cs",
         [

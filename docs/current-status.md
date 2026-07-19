@@ -14,8 +14,8 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.29 (30)` published APK, SHA256
-    `e0e774e3bf6d4727f676b868d474bde0443c88e7189fd2f2f5ee0d3510cf19f2`;
+  - Android `1.30 (31)` published APK; its SHA256 is recorded in
+    `docs/android-agent.md` and the production update manifest;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.24 (25)`, SHA256
     `e5cd332ef12a3804b189b3f4d2908cf3e1ec28d418be4a554618db6e5ef1602f`.
@@ -98,7 +98,7 @@ channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
 
-Android `1.29 (30)` is published for the focused stability soak. It restores
+Android `1.30 (31)` is published for the focused stability soak. It restores
 persisted configuration when Android restarts the sticky VPN service, records
 process/service/boot/recovery markers, retries a native-engine or critical-link
 safety stop instead of remaining permanently off, and schedules a persisted
@@ -110,7 +110,9 @@ deployment, SHA256 verification, `/healthz`, and strict `/readyz` passed. A
 physical reboot, manual stop/start, process-kill recovery, foreground-service,
 VPN validation, and chained recovery-job acceptance passed on the Xiaomi Mi
 Note 10 Lite. A longer locked-screen/network-transition soak and repetition on
-the second enrolled phone remain the acceptance gate.
+the second enrolled phone remain the acceptance gate. Version 1.30 additionally
+prevents duplicate probe-result posts and hard-restarts only a requested-running
+process whose control loop has made no progress for ten minutes.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy
