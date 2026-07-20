@@ -222,6 +222,8 @@ public class MainActivity : Activity
         autostartCheckBox.CheckedChange += (_, _) => SaveSettingsToPreferences();
         ConfigureActionAvailability();
         RenderConfiguredSections();
+        HandleUpdateIntent(Intent);
+        CudyUpdateJobService.Schedule(this);
         RenderStoredStatus();
         RenderPermissionStatus();
         MaybePromptBackgroundPermissions();
@@ -232,6 +234,7 @@ public class MainActivity : Activity
         base.OnNewIntent(intent);
         Intent = intent;
         ApplyIntentSettings(intent);
+        HandleUpdateIntent(intent);
         RenderStoredStatus();
         RenderPermissionStatus();
     }
@@ -243,6 +246,8 @@ public class MainActivity : Activity
         RenderStoredStatus();
         RenderPermissionStatus();
         ConfirmMiuiAutostartIfPending();
+        MaybeInstallPendingUpdate();
+        RenderUpdateButton();
         StartUiRefreshLoop();
     }
 
@@ -345,6 +350,7 @@ public class MainActivity : Activity
             : Android.Views.ViewStates.Visible;
         toggleRoutingButton.Visibility = configured ? ViewStates.Visible : ViewStates.Gone;
         updateButton!.Visibility = configured ? ViewStates.Visible : ViewStates.Gone;
+        RenderUpdateButton();
         if (!configured)
         {
             routingSection.Visibility = ViewStates.Gone;
@@ -704,15 +710,16 @@ public class MainActivity : Activity
             return;
         }
         updateButton.Enabled = false;
-        updateButton.Text = "Checking for updates...";
+        updateButton.Text = CudyAndroidUpdater.HasDownloadedUpdate(this)
+            ? "Opening installer..."
+            : "Checking and downloading...";
         try
         {
             await CheckUpdateAsync();
         }
         finally
         {
-            updateButton.Enabled = true;
-            updateButton.Text = "Check for updates";
+            RenderUpdateButton();
         }
     }
 
@@ -721,31 +728,25 @@ public class MainActivity : Activity
         SaveSettings();
         try
         {
-            var json = await ControlRequestAsync("GET", "/api/agent/app-version?platform=android", body: null, useAuth: true);
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var latestCode = root.TryGetProperty("version_code", out var codeProperty)
-                ? codeProperty.GetInt64()
-                : 0;
-            var latestName = root.TryGetProperty("version_name", out var nameProperty)
-                ? nameProperty.GetString() ?? ""
-                : "";
-            var downloadUrl = root.TryGetProperty("download_url", out var urlProperty)
-                ? urlProperty.GetString() ?? ""
-                : "";
-            var currentCode = CurrentVersionCode();
-            if (latestCode <= currentCode)
+            if (CudyAndroidUpdater.HasDownloadedUpdate(this))
             {
-                statusText!.Text = "App is up to date";
-                outputText!.Text = $"current={currentCode}\nlatest={latestCode} {latestName}";
+                PresentDownloadedUpdate();
                 return;
             }
-
-            statusText!.Text = "Update available";
-            outputText!.Text = $"current={currentCode}\nlatest={latestCode} {latestName}\nurl={downloadUrl}";
-            if (!string.IsNullOrWhiteSpace(downloadUrl))
+            var result = await CudyAndroidUpdater.CheckAndDownloadAsync(
+                this,
+                force: true,
+                CancellationToken.None);
+            statusText!.Text = result.State switch
             {
-                StartActivity(new Intent(Intent.ActionView, Uri.Parse(downloadUrl)));
+                "up-to-date" => "App is up to date",
+                "ready" => "Update is ready",
+                _ => "Update check failed",
+            };
+            outputText!.Text = $"current={CurrentVersionCode()}\nlatest={result.VersionCode} {result.VersionName}\n{result.Message}";
+            if (result.ReadyToInstall)
+            {
+                PresentDownloadedUpdate();
             }
         }
         catch (Exception ex)
@@ -753,6 +754,55 @@ public class MainActivity : Activity
             statusText!.Text = "Update check failed";
             outputText!.Text = ex.Message;
         }
+    }
+
+    private void HandleUpdateIntent(Intent? intent)
+    {
+        if (intent?.Action != CudyAndroidUpdater.ActionInstallDownloadedUpdate)
+        {
+            return;
+        }
+        preferences?.Edit()?.PutBoolean("update_install_pending", true)?.Apply();
+        intent.SetAction(Intent.ActionMain);
+    }
+
+    private void MaybeInstallPendingUpdate()
+    {
+        if (preferences?.GetBoolean("update_install_pending", false) != true
+            || !CudyAndroidUpdater.HasDownloadedUpdate(this))
+        {
+            return;
+        }
+        PresentDownloadedUpdate();
+    }
+
+    private void PresentDownloadedUpdate()
+    {
+        try
+        {
+            var result = CudyAndroidUpdater.BeginInstall(this);
+            statusText!.Text = result.PermissionRequired ? "Installation permission required" : "Update installation started";
+            outputText!.Text = result.Message;
+        }
+        catch (Exception ex)
+        {
+            statusText!.Text = "Update installation failed";
+            outputText!.Text = ex.Message;
+        }
+    }
+
+    private void RenderUpdateButton()
+    {
+        if (updateButton is null)
+        {
+            return;
+        }
+        var ready = CudyAndroidUpdater.HasDownloadedUpdate(this);
+        var versionName = CudyAndroidUpdater.DownloadedVersionName(this);
+        updateButton.Text = ready
+            ? $"Install update {versionName}".TrimEnd()
+            : "Check for updates";
+        updateButton.Enabled = true;
     }
 
     private long CurrentVersionCode()
@@ -840,6 +890,7 @@ public class MainActivity : Activity
             deviceIdInput!.Text = deviceId;
             enrollmentCodeInput!.Text = "";
             SaveSettingsToPreferences();
+            CudyUpdateJobService.Schedule(this, immediate: true);
             RenderConfiguredSections();
             statusText!.Text = "Device activated";
             outputText!.Text = $"device={deviceId}\nuser={root.GetProperty("user_id").GetString()}";

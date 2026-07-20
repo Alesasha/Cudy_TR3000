@@ -20,6 +20,10 @@ CRITICAL_MONITOR = ROOT / "apps" / "CudyAndroidAgent" / "CudyCriticalServiceMoni
 SING_BOX_CONFIG = ROOT / "apps" / "CudyAndroidAgent" / "CudySingBoxConfig.cs"
 ANDROID_PROBE = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidProbe.cs"
 SSH_CONTROL = ROOT / "apps" / "CudyAndroidAgent" / "CudySshControl.cs"
+UPDATER = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidUpdater.cs"
+UPDATE_JOB = ROOT / "apps" / "CudyAndroidAgent" / "CudyUpdateJobService.cs"
+UPDATE_RECEIVER = ROOT / "apps" / "CudyAndroidAgent" / "CudyUpdateInstallReceiver.cs"
+MANIFEST = ROOT / "apps" / "CudyAndroidAgent" / "AndroidManifest.xml"
 PROJECT = ROOT / "apps" / "CudyAndroidAgent" / "CudyAndroidAgent.csproj"
 
 
@@ -91,11 +95,13 @@ def main() -> int:
             '"/api/agent/user-default-server"',
             '"/api/agent/domain-routes"',
             '"/api/agent/route-lookup?target=',
-            '"/api/agent/app-version?platform=android"',
             '"autostart_enabled"',
             "EnrollDeviceAsync",
             "LoadUserUiAsync",
             "CheckUpdateAsync",
+            "CudyAndroidUpdater.CheckAndDownloadAsync",
+            "CudyAndroidUpdater.BeginInstall",
+            "CudyUpdateJobService.Schedule",
             "typeof(AdminActivity)",
             'EnrollmentBootstrapUser = "cudy-enroll"',
             "EnrollmentBootstrapPort = 8766",
@@ -128,12 +134,51 @@ def main() -> int:
     )
     assert_contains(SSH_CONTROL, ["uint remotePort = 8765", "remotePort)"])
     assert_contains(
+        SSH_CONTROL,
+        [
+            "DownloadWithNewClient",
+            "HttpCompletionOption.ResponseHeadersRead",
+            'new AuthenticationHeaderValue("Bearer", token)',
+        ],
+    )
+    assert_contains(
+        UPDATER,
+        [
+            '"/api/agent/app-version?platform=android"',
+            "DownloadWithNewClient",
+            "HashMatches(tempPath, sha256)",
+            "VerifyPackage(context, tempPath, versionCode)",
+            "SignatureHashes(archive)",
+            "PackageInstaller.SessionParams",
+            "NotifyUpdateReady",
+            "ActionInstallDownloadedUpdate",
+        ],
+    )
+    assert_contains(
+        UPDATE_JOB,
+        [
+            ".SetPeriodic(6 * 60 * 60 * 1000L",
+            ".SetRequiredNetworkType(NetworkType.Unmetered)",
+            ".SetPersisted(true)",
+            "force: parameters?.JobId == ImmediateJobId",
+        ],
+    )
+    assert_contains(
+        UPDATE_RECEIVER,
+        [
+            "PackageInstallStatus.PendingUserAction",
+            "PackageInstallStatus.Success",
+            "Intent.ExtraIntent",
+        ],
+    )
+    assert_contains(MANIFEST, ['android.permission.REQUEST_INSTALL_PACKAGES'])
+    assert_contains(
         PROJECT,
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>31</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.30</ApplicationDisplayVersion>",
+            "<ApplicationVersion>34</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.33</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -145,6 +190,8 @@ def main() -> int:
     ):
         if forbidden in main_text:
             raise AssertionError(f"MainActivity.cs still contains removed provisioning value: {forbidden}")
+    if "Intent.ActionView" in main_text:
+        raise AssertionError("MainActivity.cs must not send authenticated APK downloads to a browser")
     assert_contains(
         ADMIN_SESSION,
         [

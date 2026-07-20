@@ -24,6 +24,51 @@ public static class CudySshControl
         return RunControlRequest(client, method, token, path, body, remotePort);
     }
 
+    public static void DownloadWithNewClient(
+        string host,
+        string user,
+        string privateKey,
+        string expectedHostKeySha256,
+        string token,
+        string path,
+        string destinationPath,
+        CancellationToken cancellationToken,
+        uint remotePort = 8765)
+    {
+        using var client = CreateClient(host, user, privateKey, expectedHostKeySha256);
+        client.Connect();
+        using var forward = new ForwardedPortLocal("127.0.0.1", 0, "127.0.0.1", remotePort);
+        client.AddForwardedPort(forward);
+        forward.Start();
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromMinutes(12) };
+            using var request = new HttpRequestMessage(
+                HttpMethod.Get,
+                $"http://127.0.0.1:{forward.BoundPort}{path}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var response = http.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                cancellationToken).GetAwaiter().GetResult();
+            response.EnsureSuccessStatusCode();
+            var directory = Path.GetDirectoryName(destinationPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            using var source = response.Content.ReadAsStream(cancellationToken);
+            using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
+            source.CopyToAsync(destination, 128 * 1024, cancellationToken).GetAwaiter().GetResult();
+            destination.Flush(flushToDisk: true);
+        }
+        finally
+        {
+            forward.Stop();
+            client.RemoveForwardedPort(forward);
+        }
+    }
+
     public static SshClient CreateClient(
         string host,
         string user,

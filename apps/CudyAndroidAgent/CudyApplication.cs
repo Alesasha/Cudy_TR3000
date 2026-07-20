@@ -20,6 +20,7 @@ public sealed class CudyApplication : Application
         base.OnCreate();
         StoreProcessMarker("process_started", "");
         CudyRecoveryJobService.Schedule(this);
+        CudyUpdateJobService.Schedule(this);
         AndroidEnvironment.UnhandledExceptionRaiser += (_, args) =>
             StoreCrash("android_unhandled", args.Exception);
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>

@@ -64,6 +64,7 @@ public sealed class BootReceiver : BroadcastReceiver
         }
 
         CudyRecoveryJobService.Schedule(context);
+        CudyUpdateJobService.Schedule(context, immediate: action == Intent.ActionMyPackageReplaced);
 
         var controlUrl = preferences?.GetString("control_url", "")?.Trim() ?? "";
         var deviceId = preferences?.GetString("device_id", "")?.Trim() ?? "";

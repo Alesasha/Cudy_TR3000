@@ -60,6 +60,10 @@ Current MVP:
   button for battery optimization and MIUI Autostart setup.
 - guides setup through notification permission, Android VPN permission,
   unrestricted battery mode, and MIUI Autostart/app settings.
+- checks the authenticated control-server update channel every six hours on an
+  unmetered network, downloads a newer APK through the device's private SSH
+  channel, verifies its SHA256, package id, version and signing certificate,
+  and posts an install notification;
 
 Next implementation steps:
 
@@ -69,10 +73,10 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current published release candidate is `1.30 (31)`. Version 1.29 passed physical
-UI, sticky restart, crash/reboot and persisted recovery-job checks. Version 1.30
-also prevents duplicate probe-result reporting and restarts a requested-running
-process whose control loop makes no progress for ten minutes. The routing runtime inherited
+Current published release candidate is `1.33 (34)`. Version 1.30 passed physical
+UI, sticky restart, crash/reboot and persisted recovery-job checks. Version 1.33
+adds authenticated, verified background APK download and an Android install
+notification without interrupting the active VPN. The routing runtime inherited
 from `1.24 (25)` has already passed policy fetch,
 foreground-service, libbox, selective-routing, status, non-disruptive probe and
 real-reboot checks.
@@ -98,7 +102,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.30-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.33-YYYYMMDD.apk
 ```
 
 Manual smoke test:
@@ -197,14 +201,19 @@ python tools\vpn_control_app.py enrollment-create USER_ID --device-id USER_ID-an
 The code is printed once. The Android app sends it to `/api/agent/enroll`,
 receives a device token, saves it locally, and then uses only agent-scoped APIs.
 
-Release update metadata:
+Release update metadata is generated with:
 
 ```powershell
-$env:CUDY_ANDROID_VERSION_NAME = "1.0"
-$env:CUDY_ANDROID_VERSION_CODE = "1"
-$env:CUDY_ANDROID_APK_URL = "https://example.invalid/NashVPN-CudyAgent.apk"
+powershell -ExecutionPolicy Bypass -File tools\Build-AgentUpdateArtifacts.ps1 `
+  -Platforms android `
+  -AndroidApk build\releases\NashVPN-CudyAgent-android-arm64-v1.33-YYYYMMDD.apk
 ```
 
 Android cannot silently replace a side-loaded APK without Play Store, MDM, or
-root. `Check for updates` shows the available version and opens
-`CUDY_ANDROID_APK_URL` when the server reports a newer version code.
+root. Version 1.33 checks every six hours on an unmetered network, downloads the
+APK over the authenticated per-device SSH channel, and verifies SHA256,
+`com.nashvpn.cudyagent`, version code, and the installed signing certificate.
+It then shows a notification. Tapping it opens the Android package installer;
+the user must approve the final installation, and MIUI may require the one-time
+`Install unknown apps` permission. Builds older than 1.33 need one manual 1.33
+installation before they can use this update path.
