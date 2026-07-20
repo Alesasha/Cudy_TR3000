@@ -125,6 +125,7 @@ def main() -> int:
     for marker in (
         "initial_delay_seconds: int = 5",
         "initial_delay_seconds: int = 30",
+        "request_queue_size = 128",
     ):
         if marker not in source:
             raise AssertionError(f"worker startup delay is missing: {marker}")

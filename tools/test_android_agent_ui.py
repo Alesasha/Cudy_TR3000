@@ -177,8 +177,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>35</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.34</ApplicationDisplayVersion>",
+            "<ApplicationVersion>37</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.36</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -202,6 +202,8 @@ def main() -> int:
     assert_contains(
         MAIN_ACTIVITY,
         [
+            "LaunchMode = LaunchMode.SingleTask",
+            "Task.Delay(TimeSpan.FromSeconds(2), token)",
             "Cudy Agent is up to date",
             'SetPositiveButton("OK"',
             "Installed version:",
@@ -265,7 +267,11 @@ def main() -> int:
             'TouchControlLoop("cycle-start")',
             'TouchControlLoop("cycle-complete")',
             'TouchControlLoop("cycle-error")',
+            'RunWithControlHeartbeatAsync(',
+            'TouchControlLoop(stage + "-running")',
+            'TimeSpan.FromSeconds(ok ? 60 : 15)',
             'PutLong("control_loop_heartbeat_ms"',
+            'PutLong("last_successful_control_ms"',
         ],
     )
     assert_contains(
@@ -287,6 +293,9 @@ def main() -> int:
             "RecoveryJobIdB",
             "pendingA.IsPeriodic",
             "ScheduleNextJob",
+            "_ = Task.Run(() => RunRecoveryJob(parameters));",
+            "JobFinished(parameters, wantsReschedule: false);",
+            "private const long RecoveryDelayMilliseconds = 30 * 1000;",
             'GetBoolean("agent_requested_running", false)',
             "StartForegroundService(intent)",
             'PutString("recovery_job_result", "start-requested")',

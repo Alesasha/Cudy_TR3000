@@ -18,7 +18,8 @@ using System.Text.Json;
     Name = "com.nashvpn.cudyagent.MainActivity",
     Label = "@string/app_name",
     MainLauncher = true,
-    Exported = true)]
+    Exported = true,
+    LaunchMode = LaunchMode.SingleTask)]
 public class MainActivity : Activity
 {
     private const int VpnPrepareRequest = 1001;
@@ -380,7 +381,7 @@ public class MainActivity : Activity
             {
                 try
                 {
-                    await Task.Delay(TimeSpan.FromSeconds(1), token);
+                    await Task.Delay(TimeSpan.FromSeconds(2), token);
                     RunOnUiThread(RenderStoredStatus);
                 }
                 catch (System.OperationCanceledException)
@@ -1579,6 +1580,11 @@ public class MainActivity : Activity
                 stopButton.Visibility = ViewStates.Visible;
                 stopButton.Enabled = true;
                 stopButton.Text = "Stop";
+                if (resultTitleText?.Text == "Activate")
+                {
+                    outputText!.Text = "";
+                    resultSection!.Visibility = ViewStates.Gone;
+                }
                 break;
             case "starting":
                 statusText.Text = "Starting...";
@@ -1600,7 +1606,7 @@ public class MainActivity : Activity
                 statusText.Text = "Connection needs attention";
                 statusDetailText.Text = ShortStatus(detail, "The agent will retry automatically");
                 SetPrimaryButton("Connection unstable", "#E67E22", enabled: false);
-                stopButton.Visibility = serviceRunning ? ViewStates.Visible : ViewStates.Gone;
+                stopButton.Visibility = requested || serviceRunning ? ViewStates.Visible : ViewStates.Gone;
                 stopButton.Enabled = true;
                 stopButton.Text = "Stop";
                 break;

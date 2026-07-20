@@ -81,7 +81,7 @@ public static class CudySshControl
         var auth = new PrivateKeyAuthenticationMethod(user, keyFile);
         var connection = new ConnectionInfo(host, 22, user, auth)
         {
-            Timeout = TimeSpan.FromSeconds(60),
+            Timeout = TimeSpan.FromSeconds(20),
         };
         var client = new SshClient(connection);
         client.HostKeyReceived += (_, args) =>
@@ -142,7 +142,7 @@ public static class CudySshControl
         forward.Start();
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(45) };
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
             using var request = new HttpRequestMessage(
                 new HttpMethod(method),
                 $"http://127.0.0.1:{forward.BoundPort}{path}");

@@ -19,7 +19,7 @@ Current MVP:
 - records process, service lifecycle, boot receiver, and recovery-job markers
   for post-failure diagnostics;
 - restores configuration after Android `START_STICKY` restarts and uses chained
-  persisted recovery jobs with a 2-4 minute window as a second recovery path;
+  persisted recovery jobs with a 30-60 second window as a second recovery path;
 - activates a device through `/api/agent/enroll` with a one-time enrollment
   code, then stores the returned device token and unique per-device SSH key;
 - uses the APK's shared `cudy-enroll` key only for the isolated enrollment
@@ -73,11 +73,13 @@ Next implementation steps:
 - add loop-free protected direct outbound for full domain/SNI capture without
   forcing ordinary traffic through a provider exit.
 
-Current published release candidate is `1.34 (35)`. Version 1.30 passed physical
+Current published release candidate is `1.36 (37)`. Version 1.30 passed physical
 UI, sticky restart, crash/reboot and persisted recovery-job checks. Version 1.33
 added authenticated, verified background APK download; version 1.34 keeps the
 installed/latest versions on the main screen and makes manual check results wait
-for explicit acknowledgement. The routing runtime inherited
+for explicit acknowledgement. Version 1.35 keeps the control heartbeat current
+while background route probes are running. Version 1.36 moves recovery-job work
+off the Android main thread and shortens delayed recovery to 30-60 seconds. The routing runtime inherited
 from `1.24 (25)` has already passed policy fetch,
 foreground-service, libbox, selective-routing, status, non-disruptive probe and
 real-reboot checks.
@@ -103,7 +105,7 @@ Release APK:
 
 ```text
 apps\CudyAndroidAgent\bin\Release\net10.0-android\android-arm64\com.nashvpn.cudyagent-Signed.apk
-build\releases\NashVPN-CudyAgent-android-arm64-v1.34-YYYYMMDD.apk
+build\releases\NashVPN-CudyAgent-android-arm64-v1.36-YYYYMMDD.apk
 ```
 
 Manual smoke test:
@@ -207,11 +209,11 @@ Release update metadata is generated with:
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\Build-AgentUpdateArtifacts.ps1 `
   -Platforms android `
-  -AndroidApk build\releases\NashVPN-CudyAgent-android-arm64-v1.34-YYYYMMDD.apk
+  -AndroidApk build\releases\NashVPN-CudyAgent-android-arm64-v1.36-YYYYMMDD.apk
 ```
 
 Android cannot silently replace a side-loaded APK without Play Store, MDM, or
-root. Version 1.34 checks every six hours on an unmetered network, downloads the
+root. Version 1.36 checks every six hours on an unmetered network, downloads the
 APK over the authenticated per-device SSH channel, and verifies SHA256,
 `com.nashvpn.cudyagent`, version code, and the installed signing certificate.
 It then shows a notification. Tapping it opens the Android package installer;

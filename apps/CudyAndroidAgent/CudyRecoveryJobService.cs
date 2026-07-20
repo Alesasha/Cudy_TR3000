@@ -15,8 +15,8 @@ public sealed class CudyRecoveryJobService : JobService
     private const int RecoveryJobIdA = 24062;
     private const int RecoveryJobIdB = 24063;
     private const string LogTag = "CudyAgent";
-    private const long RecoveryDelayMilliseconds = 2 * 60 * 1000;
-    private const long RecoveryDeadlineMilliseconds = 4 * 60 * 1000;
+    private const long RecoveryDelayMilliseconds = 30 * 1000;
+    private const long RecoveryDeadlineMilliseconds = 60 * 1000;
     private const long StalledControlLoopMilliseconds = 10 * 60 * 1000;
 
     public static void Schedule(Context context)
@@ -48,53 +48,65 @@ public sealed class CudyRecoveryJobService : JobService
 
     public override bool OnStartJob(JobParameters? parameters)
     {
-        ScheduleNextJob(parameters?.JobId ?? RecoveryJobIdA);
+        _ = Task.Run(() => RunRecoveryJob(parameters));
+        return true;
+    }
 
-        var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
-        if (preferences?.GetBoolean("agent_requested_running", false) != true)
-        {
-            return false;
-        }
-
-        if (CudyVpnService.IsRunning)
-        {
-            RecoverStalledProcess(preferences);
-            return false;
-        }
-
-        var now = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz");
+    private void RunRecoveryJob(JobParameters? parameters)
+    {
         try
         {
-            var intent = new Intent(this, typeof(CudyVpnService));
-            intent.SetAction(CudyVpnService.ActionStart);
-            if ((int)Build.VERSION.SdkInt >= 26)
+            ScheduleNextJob(parameters?.JobId ?? RecoveryJobIdA);
+
+            var preferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
+            if (preferences?.GetBoolean("agent_requested_running", false) != true)
             {
+                return;
+            }
+
+            if (CudyVpnService.IsRunning)
+            {
+                RecoverStalledProcess(preferences);
+                return;
+            }
+
+            var now = DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz");
+            try
+            {
+                var intent = new Intent(this, typeof(CudyVpnService));
+                intent.SetAction(CudyVpnService.ActionStart);
+                if ((int)Build.VERSION.SdkInt >= 26)
+                {
 #pragma warning disable CA1416
-                StartForegroundService(intent);
+                    StartForegroundService(intent);
 #pragma warning restore CA1416
+                }
+                else
+                {
+                    StartService(intent);
+                }
+                preferences.Edit()
+                    ?.PutString("recovery_job_at", now)
+                    ?.PutString("recovery_job_result", "start-requested")
+                    ?.PutString("service_state", "restarting")
+                    ?.PutString("service_status", "recovery job requested restart")
+                    ?.PutString("service_status_at", now)
+                    ?.Apply();
+                Log.Info(LogTag, "Recovery job requested agent restart.");
             }
-            else
+            catch (Exception ex)
             {
-                StartService(intent);
+                preferences?.Edit()
+                    ?.PutString("recovery_job_at", now)
+                    ?.PutString("recovery_job_result", "start-failed: " + ex.Message)
+                    ?.Apply();
+                Log.Warn(LogTag, "Recovery job failed to restart agent: " + ex.Message);
             }
-            preferences.Edit()
-                ?.PutString("recovery_job_at", now)
-                ?.PutString("recovery_job_result", "start-requested")
-                ?.PutString("service_state", "restarting")
-                ?.PutString("service_status", "recovery job requested restart")
-                ?.PutString("service_status_at", now)
-                ?.Apply();
-            Log.Info(LogTag, "Recovery job requested agent restart.");
         }
-        catch (Exception ex)
+        finally
         {
-            preferences?.Edit()
-                ?.PutString("recovery_job_at", now)
-                ?.PutString("recovery_job_result", "start-failed: " + ex.Message)
-                ?.Apply();
-            Log.Warn(LogTag, "Recovery job failed to restart agent: " + ex.Message);
+            JobFinished(parameters, wantsReschedule: false);
         }
-        return false;
     }
 
     public override bool OnStopJob(JobParameters? parameters) => false;

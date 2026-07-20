@@ -499,24 +499,30 @@ public class CudyVpnService : VpnService
                     engineSummary = libboxEngine?.StartOrReload(stored[0]) ?? "engine=unavailable";
                     if (libboxEngine is not null)
                     {
-                        TouchControlLoop("probe-jobs-start");
+                        SaveServiceStatus("connected; background route checks running", "connected");
+                        UpdateNotification("Connected; checking route quality");
                         var probeRunner = new CudyAndroidProbeRunner(deviceId);
-                        var probes = await probeRunner.RunAsync(
-                            root,
-                            transportPlan,
-                            (path, tokenArg) => GetControlStringAsync(client, controlUrl, token, path, tokenArg),
-                            (path, json, tokenArg) => PostControlJsonAsync(client, controlUrl, token, path, json, tokenArg),
+                        var probes = await RunWithControlHeartbeatAsync(
+                            "probe-jobs",
+                            () => probeRunner.RunAsync(
+                                root,
+                                transportPlan,
+                                (path, tokenArg) => GetControlStringAsync(client, controlUrl, token, path, tokenArg),
+                                (path, json, tokenArg) => PostControlJsonAsync(client, controlUrl, token, path, json, tokenArg),
+                                cancellationToken),
                             cancellationToken);
                         probeSummary = probes.SafeSummary();
-                        TouchControlLoop("probe-jobs-finished");
                         if (debugProbePending)
                         {
                             debugProbePending = false;
-                            var debugResult = await probeRunner.RunDebugAsync(
-                                root,
-                                transportPlan,
-                                debugProbeUrl,
-                                ParseCsv(debugProbeCandidates),
+                            var debugResult = await RunWithControlHeartbeatAsync(
+                                "debug-probe",
+                                () => probeRunner.RunDebugAsync(
+                                    root,
+                                    transportPlan,
+                                    debugProbeUrl,
+                                    ParseCsv(debugProbeCandidates),
+                                    cancellationToken),
                                 cancellationToken);
                             var debugJson = JsonSerializer.Serialize(debugResult);
                             SaveDebugProbeResult(debugJson);
@@ -611,6 +617,13 @@ public class CudyVpnService : VpnService
                 SaveServiceStatus(criticalResult.Ok
                     ? $"ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}"
                     : $"critical services unavailable: {string.Join(", ", criticalResult.FailedServices)}");
+                if (criticalResult.Ok)
+                {
+                    GetSharedPreferences("cudy-agent", FileCreationMode.Private)
+                        ?.Edit()
+                        ?.PutLong("last_successful_control_ms", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
+                        ?.Apply();
+                }
                 Log.Info(LogTag, $"Control loop {(criticalResult.Ok ? "ok" : "degraded")} ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
 
                 if (consecutiveCriticalFailures >= 3)
@@ -680,12 +693,47 @@ public class CudyVpnService : VpnService
 
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(60), cancellationToken);
+                await Task.Delay(TimeSpan.FromSeconds(ok ? 60 : 15), cancellationToken);
             }
             catch (System.OperationCanceledException)
             {
                 break;
             }
+        }
+    }
+
+    private async Task<T> RunWithControlHeartbeatAsync<T>(
+        string stage,
+        Func<Task<T>> action,
+        CancellationToken cancellationToken)
+    {
+        using var heartbeatCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        async Task PulseAsync()
+        {
+            while (!heartbeatCts.IsCancellationRequested)
+            {
+                TouchControlLoop(stage + "-running");
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(15), heartbeatCts.Token);
+                }
+                catch (System.OperationCanceledException) when (heartbeatCts.IsCancellationRequested)
+                {
+                    break;
+                }
+            }
+        }
+
+        var heartbeatTask = PulseAsync();
+        try
+        {
+            return await action();
+        }
+        finally
+        {
+            heartbeatCts.Cancel();
+            await heartbeatTask;
+            TouchControlLoop(stage + "-finished");
         }
     }
 

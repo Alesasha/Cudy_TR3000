@@ -11753,6 +11753,8 @@ class Handler(BaseHTTPRequestHandler):
 
 
 class Server(ThreadingHTTPServer):
+    request_queue_size = 128
+
     def __init__(self, address: tuple[str, int], app: App):
         super().__init__(address, Handler)
         self.app = app
@@ -11798,6 +11800,8 @@ class EnrollmentHandler(Handler):
 
 
 class EnrollmentServer(ThreadingHTTPServer):
+    request_queue_size = 128
+
     def __init__(self, address: tuple[str, int], app: App):
         super().__init__(address, EnrollmentHandler)
         self.app = app
