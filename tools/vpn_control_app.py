@@ -1215,7 +1215,7 @@ ADMIN_HTML = r"""<!doctype html>
     </section>
     <section id="admin-users" data-admin-section="users" data-admin-label="Users">
       <h2>Users</h2>
-      <form id="newUserForm" class="toolbar">
+      <form id="newUserForm" class="toolbar" autocomplete="off">
         <div class="field"><label>ID</label><input id="newUserId" type="text" autocomplete="off"></div>
         <div class="field"><label>Name</label><input id="newUserName" type="text" autocomplete="off"></div>
         <div class="field"><label>Role</label><select id="newUserRole"><option value="user">user</option><option value="admin">admin</option></select></div>
@@ -1223,7 +1223,7 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field">
           <label>Password (optional for user)</label>
           <div class="inline">
-            <input id="newUserPassword" type="password" autocomplete="new-password" placeholder="new password">
+            <input id="newUserPassword" name="cudy-new-user-password" type="password" autocomplete="new-password" data-lpignore="true" data-1p-ignore placeholder="new password">
             <button class="secondary" type="button" data-toggle-password="newUserPassword" title="Show/hide the password typed here. Stored passwords cannot be viewed.">Show typed</button>
           </div>
         </div>
@@ -1231,7 +1231,7 @@ ADMIN_HTML = r"""<!doctype html>
       </form>
       <p id="userStatus" class="status"></p>
       <div class="toolbar">
-        <div class="field"><label>Find user</label><input id="userFilter" type="search" placeholder="ID, name, IP or role" autocomplete="off"></div>
+        <div class="field"><label>Find user</label><input id="userFilter" name="cudy-user-filter" type="search" placeholder="ID, name, IP or role" autocomplete="one-time-code" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore></div>
         <button id="clearUserFilter" class="secondary" type="button">Clear filter</button>
         <span id="userFilterStatus" class="muted"></span>
       </div>
@@ -1470,6 +1470,7 @@ ADMIN_HTML = r"""<!doctype html>
   </main>
   <script>
     const state = { servers: [], users: [], routes: [], globalRoutes: [], autoCache: [], autoCandidates: [], probeJobs: [], agentStatus: [], agentDiagnostics: [], enrollmentCodes: [], agentUpdates: [], transportConfigs: [], serviceAliases: [], criticalServices: [], domainDiscovery: [], systemStatus: null, lastActivationCode: "" };
+    let userFilterQuery = "";
     const ALL_REST = "__all_rest__";
     const autoEditors = { globalDefault: [], userDefault: [], globalRoute: [], adminRoute: [] };
     const adminSections = Array.from(document.querySelectorAll("[data-admin-section]"));
@@ -1829,7 +1830,7 @@ ADMIN_HTML = r"""<!doctype html>
     }
     function renderUsers() {
       const body = document.getElementById("usersBody");
-      const query = document.getElementById("userFilter").value.trim().toLowerCase();
+      const query = userFilterQuery;
       const users = state.users.filter(u => !query || [u.id, u.display_name, u.role, u.client_ip]
         .some(value => String(value || "").toLowerCase().includes(query)));
       document.getElementById("userFilterStatus").textContent = `Showing ${users.length} of ${state.users.length}`;
@@ -1843,7 +1844,7 @@ ADMIN_HTML = r"""<!doctype html>
           <td><input type="checkbox" data-field="enabled" ${u.enabled ? "checked" : ""}></td>
           <td title="Whether a web-panel password is configured">${u.has_login ? "configured" : "not set"}</td>
           <td class="inline">
-            <input type="password" data-field="password" data-password-input="${u.id}" placeholder="new password only">
+            <input type="password" name="cudy-password-${u.id}" data-field="password" data-password-input="${u.id}" autocomplete="new-password" data-lpignore="true" data-1p-ignore placeholder="new password only">
             <button class="secondary" type="button" data-toggle-row-password="${u.id}" title="Show/hide the new password typed here. Stored passwords cannot be viewed.">Show typed</button>
             <button class="secondary" data-password="${u.id}">Set</button>
           </td>
@@ -2335,10 +2336,22 @@ ADMIN_HTML = r"""<!doctype html>
         </tr>
       `).join("") : '<tr><td colspan="9" class="muted">No provider transports.</td></tr>';
     }
-    document.getElementById("userFilter").addEventListener("input", renderUsers);
+    const userFilter = document.getElementById("userFilter");
+    userFilter.value = "";
+    userFilter.addEventListener("input", event => {
+      // Password managers can pair this search field with per-row password inputs
+      // and repeatedly inject the saved admin login. Ignore that replacement.
+      if (event.inputType === "insertReplacementText") {
+        userFilter.value = userFilterQuery;
+        return;
+      }
+      userFilterQuery = userFilter.value.trim().toLowerCase();
+      renderUsers();
+    });
     document.getElementById("agentFilter").addEventListener("input", renderAgentStatus);
     document.getElementById("clearUserFilter").addEventListener("click", () => {
-      document.getElementById("userFilter").value = "";
+      userFilterQuery = "";
+      userFilter.value = "";
       renderUsers();
     });
     document.getElementById("clearAgentFilter").addEventListener("click", () => {
@@ -2867,6 +2880,11 @@ ADMIN_HTML = r"""<!doctype html>
     document.getElementById("logoutButton").addEventListener("click", async () => {
       await api("/api/logout", { method: "POST", body: "{}" });
       location.href = "/login";
+    });
+    window.addEventListener("pageshow", () => {
+      userFilterQuery = "";
+      userFilter.value = "";
+      if (state.users.length) renderUsers();
     });
     load().catch(error => {
       document.getElementById("serverStatus").textContent = error.message;
