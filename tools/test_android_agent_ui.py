@@ -177,8 +177,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>34</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.33</ApplicationDisplayVersion>",
+            "<ApplicationVersion>35</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.34</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -192,6 +192,23 @@ def main() -> int:
             raise AssertionError(f"MainActivity.cs still contains removed provisioning value: {forbidden}")
     if "Intent.ActionView" in main_text:
         raise AssertionError("MainActivity.cs must not send authenticated APK downloads to a browser")
+    assert_contains(
+        LAYOUT,
+        [
+            "updateVersionText",
+            "Installed: - | Latest: not checked yet",
+        ],
+    )
+    assert_contains(
+        MAIN_ACTIVITY,
+        [
+            "Cudy Agent is up to date",
+            'SetPositiveButton("OK"',
+            "Installed version:",
+            "Latest version:",
+            "resultSection!.Visibility = ViewStates.Gone",
+        ],
+    )
     assert_contains(
         ADMIN_SESSION,
         [

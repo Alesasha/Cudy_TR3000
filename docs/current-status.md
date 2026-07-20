@@ -14,7 +14,7 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.33 (34)` published APK; its SHA256 is recorded in
+  - Android `1.34 (35)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
   - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
   - Windows `1.24 (25)`, SHA256
@@ -98,7 +98,7 @@ channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
 
-Android `1.33 (34)` is published for the focused stability soak. It restores
+Android `1.34 (35)` is published for the focused stability soak. It restores
 persisted configuration when Android restarts the sticky VPN service, records
 process/service/boot/recovery markers, retries a native-engine or critical-link
 safety stop instead of remaining permanently off, and schedules a persisted
@@ -110,10 +110,12 @@ deployment, SHA256 verification, `/healthz`, and strict `/readyz` passed. A
 physical reboot, manual stop/start, process-kill recovery, foreground-service,
 VPN validation, and chained recovery-job acceptance passed on the Xiaomi Mi
 Note 10 Lite. A longer locked-screen/network-transition soak and repetition on
-the second enrolled phone remain the acceptance gate. Version 1.33 additionally
+the second enrolled phone remain the acceptance gate. Version 1.34 additionally
 checks the production update channel every six hours on an unmetered network,
 downloads through the device's authenticated SSH channel, verifies the APK hash,
-package, version and signer, and notifies the user to approve installation.
+package, version and signer, and notifies the user to approve installation. The
+main screen always shows installed/latest versions and manual checks remain in
+an acknowledged dialog instead of flashing transient status text.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy
@@ -279,14 +281,14 @@ dataplane.
 
 ## Android Agent
 
-Android `1.33 (34)` is built, signed and published on the production
+Android `1.34 (35)` is built, signed and published on the production
 control-server through the private Cudy management path. The production APK
 and update manifest both have SHA256
-`44aa3e3a95351f83a69149d0a78711c98595ec3dcd73b71a9c15bb90b5845933`.
+`3bf023c53a35d4738f4b1beab1ba7800de1f6698061f8b311e00a70cc92916ff`.
 Fresh-device code-only enrollment and the resulting per-device control channel
 passed against production. The universal APK has now been installed and
 activated successfully on two physical phones. The Xiaomi acceptance phone now
-runs `1.33 (34)` and basic routing works on both devices. Version `1.33 (34)`
+runs `1.34 (35)` and basic routing works on both devices. Version `1.34 (35)`
 keeps the recovery/UI work and adds verified background APK delivery; the
 multi-day acceptance soak remains.
 
@@ -312,7 +314,7 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
-- the current physical-device check confirms version `1.33 (34)`, an active
+- the current physical-device check confirms version `1.34 (35)`, an active
   foreground `CudyVpnService`, and a device-idle whitelist entry for
   `com.nashvpn.cudyagent`; the production package is not debuggable.
 - the Administration activity opens from the main application, is not exported
@@ -321,7 +323,7 @@ Verified acceptance:
   one-time enrollment over the shared restricted SSH connection.
 - a real background update downloaded and verified `1.32 (33)`, notified the
   user, passed Android's package installer, and upgraded the test phone; final
-  `1.33 (34)` then restored the foreground VPN and control loop after package
+  `1.34 (35)` then restored the foreground VPN and control loop after package
   replacement and reported `up-to-date`.
 
 Remaining Android concerns:
@@ -495,7 +497,7 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Continue the Android `1.33 (34)` daily-use soak across Wi-Fi, mobile data, lock,
+Continue the Android `1.34 (35)` daily-use soak across Wi-Fi, mobile data, lock,
 background update download, user-approved installation, and reboot. The fresh
 Cudy main-router preflight completed with no hard failure;
 prepare encrypted Cudy Wi-Fi, VLAN 2 validation and missing static

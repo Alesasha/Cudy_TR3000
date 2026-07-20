@@ -57,6 +57,15 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Check for updates" />
+        <TextView
+            android:id="@+id/updateVersionText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_horizontal"
+            android:paddingTop="2dp"
+            android:paddingBottom="4dp"
+            android:text="Installed: - | Latest: not checked yet"
+            android:textSize="13sp" />
 
         <LinearLayout
             android:id="@+id/activationSection"

@@ -52,6 +52,7 @@ public class MainActivity : Activity
     private TextView? engineStatusText;
     private TextView? permissionStatusText;
     private TextView? permissionGuideText;
+    private TextView? updateVersionText;
     private TextView? outputText;
     private TextView? resultTitleText;
     private LinearLayout? diagnosticsSection;
@@ -103,6 +104,7 @@ public class MainActivity : Activity
         engineStatusText = FindViewById<TextView>(Resource.Id.engineStatusText);
         permissionStatusText = FindViewById<TextView>(Resource.Id.permissionStatusText);
         permissionGuideText = FindViewById<TextView>(Resource.Id.permissionGuideText);
+        updateVersionText = FindViewById<TextView>(Resource.Id.updateVersionText);
         outputText = FindViewById<TextView>(Resource.Id.outputText);
         resultTitleText = FindViewById<TextView>(Resource.Id.resultTitleText);
         diagnosticsSection = FindViewById<LinearLayout>(Resource.Id.diagnosticsSection);
@@ -124,6 +126,7 @@ public class MainActivity : Activity
             || statusText is null || statusDetailText is null || serviceStatusText is null || policyStatusText is null
             || probeStatusText is null || routeStatusText is null || transportStatusText is null
             || engineStatusText is null || permissionStatusText is null || permissionGuideText is null
+            || updateVersionText is null
             || outputText is null || resultTitleText is null || diagnosticsSection is null || activationSection is null
             || routingSection is null || advancedSection is null || resultSection is null
             || startButton is null || stopButton is null || statusButton is null || updateButton is null
@@ -737,23 +740,59 @@ public class MainActivity : Activity
                 this,
                 force: true,
                 CancellationToken.None);
-            statusText!.Text = result.State switch
-            {
-                "up-to-date" => "App is up to date",
-                "ready" => "Update is ready",
-                _ => "Update check failed",
-            };
-            outputText!.Text = $"current={CurrentVersionCode()}\nlatest={result.VersionCode} {result.VersionName}\n{result.Message}";
+            outputText!.Text = "";
+            resultSection!.Visibility = ViewStates.Gone;
+            RenderUpdateButton();
             if (result.ReadyToInstall)
             {
-                PresentDownloadedUpdate();
+                ShowUpdateResultDialog(result, offerInstall: true);
+                return;
             }
+            ShowUpdateResultDialog(result, offerInstall: false);
         }
         catch (Exception ex)
         {
-            statusText!.Text = "Update check failed";
-            outputText!.Text = ex.Message;
+            outputText!.Text = "";
+            resultSection!.Visibility = ViewStates.Gone;
+            RenderUpdateButton();
+            new AlertDialog.Builder(this)
+                .SetTitle("Update check failed")
+                .SetMessage(ex.Message)
+                .SetPositiveButton("OK", (_, _) => { })
+                .Show();
         }
+    }
+
+    private void ShowUpdateResultDialog(CudyUpdateResult result, bool offerInstall)
+    {
+        var currentName = CurrentVersionName();
+        var latestName = string.IsNullOrWhiteSpace(result.VersionName)
+            ? "unavailable"
+            : result.VersionName;
+        var title = result.State switch
+        {
+            "up-to-date" => "Cudy Agent is up to date",
+            "ready" => $"Cudy Agent {latestName} is ready",
+            _ => "Update check finished",
+        };
+        var message = $"Installed version: {currentName}\nLatest version: {latestName}";
+        if (!string.Equals(result.State, "up-to-date", StringComparison.Ordinal))
+        {
+            message += $"\n\n{result.Message}";
+        }
+        var builder = new AlertDialog.Builder(this)
+            .SetTitle(title)
+            .SetMessage(message);
+        if (offerInstall)
+        {
+            builder.SetPositiveButton("Install", (_, _) => PresentDownloadedUpdate());
+            builder.SetNegativeButton("Later", (_, _) => { });
+        }
+        else
+        {
+            builder.SetPositiveButton("OK", (_, _) => { });
+        }
+        builder.Show();
     }
 
     private void HandleUpdateIntent(Intent? intent)
@@ -793,7 +832,7 @@ public class MainActivity : Activity
 
     private void RenderUpdateButton()
     {
-        if (updateButton is null)
+        if (updateButton is null || updateVersionText is null)
         {
             return;
         }
@@ -803,6 +842,21 @@ public class MainActivity : Activity
             ? $"Install update {versionName}".TrimEnd()
             : "Check for updates";
         updateButton.Enabled = true;
+        var latestName = preferences?.GetString("update_latest_version_name", "") ?? "";
+        var latestCode = preferences?.GetLong("update_latest_version_code", 0) ?? 0;
+        var latestDisplay = latestCode > 0 && !string.IsNullOrWhiteSpace(latestName)
+            ? latestName
+            : "not checked yet";
+        updateVersionText.Text = $"Installed: {CurrentVersionName()} | Latest: {latestDisplay}";
+    }
+
+    private string CurrentVersionName()
+    {
+        var packageManager = PackageManager ?? throw new InvalidOperationException("Package manager is unavailable.");
+        var packageName = PackageName ?? throw new InvalidOperationException("Package name is unavailable.");
+#pragma warning disable CA1422
+        return packageManager.GetPackageInfo(packageName, 0)?.VersionName ?? "unknown";
+#pragma warning restore CA1422
     }
 
     private long CurrentVersionCode()

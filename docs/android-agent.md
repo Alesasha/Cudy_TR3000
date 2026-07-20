@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.33 (34)`.
+Latest published release candidate: `1.34 (35)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,14 +49,15 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.33-20260720.apk`;
-- SHA256: `44aa3e3a95351f83a69149d0a78711c98595ec3dcd73b71a9c15bb90b5845933`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.34-20260720.apk`;
+- SHA256: `3bf023c53a35d4738f4b1beab1ba7800de1f6698061f8b311e00a70cc92916ff`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
   process-kill recovery, foreground-service, VPN validation, and compact-UI
-  acceptance on the Xiaomi Mi Note 10 Lite. Version 1.33 adds the authenticated,
-  verified Android self-update download and install notification.
+  acceptance on the Xiaomi Mi Note 10 Lite. Version 1.33 added authenticated,
+  verified Android self-update delivery; version 1.34 adds the persistent
+  installed/latest version summary and acknowledged update-result dialog.
 
 Android update acceptance on 2026-07-20:
 
@@ -68,7 +69,7 @@ Android update acceptance on 2026-07-20:
 - the notification opened Android's unknown-source permission and
   `PackageInstaller` confirmation flow; Android completed the update from the
   test `1.31` package to `1.32`;
-- final `1.33 (34)` was installed, package replacement restarted the VPN and
+- final `1.34 (35)` was installed, package replacement restarted the VPN and
   control loop, and the immediate update job reported `up-to-date`;
 - Android/MIUI still requires user approval for the final sideload install.
 
@@ -173,7 +174,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.33-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.34-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -248,7 +249,7 @@ new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.33 (34)` contains a minimal protected administrator screen. Open
+Android `1.34 (35)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 
@@ -373,7 +374,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add optional rendered probes for services whose geographic decision is made
   by JavaScript rather than the initial HTTP body.
-- Repeat the physical 1.33 reboot/process-kill/update acceptance on the second
+- Repeat the physical 1.34 reboot/process-kill/update acceptance on the second
   enrolled phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).
