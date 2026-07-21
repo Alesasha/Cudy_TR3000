@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.44 (45)`.
+Latest published release candidate: `1.45 (46)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,8 +49,8 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.44-20260721.apk`;
-- SHA256: `af173599343c20e1a87db35442c86b4883e83e3e061415b95654a39b05231643`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.45-20260721.apk`;
+- SHA256: `5068a5660b2d810241764cbad05b9db89b28ddab98237d02849776bed25ce302`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
@@ -102,6 +102,16 @@ state up to date. Both the updater and UI enforce this no-downgrade invariant.
 A physical `1.43 -> 1.44` replacement reproduced the stale cached-version case
 and immediately rendered `Installed: 1.44 | Latest: 1.44` while the VPN stayed
 connected.
+
+Version 1.45 resets the main scroll position whenever the activity is created,
+so devices with a retained `ScrollView` position no longer open with the status
+header clipped above the screen. Critical-service probes now have a bounded
+15-second budget, run at most once per ten minutes for an unchanged service
+set, and report failures as warnings while the control link and TUN remain
+healthy. A blocked direct YouTube probe reproduced the former false recovery
+loop on the physical phone; two subsequent 1.45 control cycles kept
+`engine=running`, performed the expensive check only once and left the UI
+Connected.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 

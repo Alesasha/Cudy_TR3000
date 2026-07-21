@@ -6,8 +6,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <ApplicationId>com.nashvpn.cudyagent</ApplicationId>
-    <ApplicationVersion>45</ApplicationVersion>
-    <ApplicationDisplayVersion>1.44</ApplicationDisplayVersion>
+    <ApplicationVersion>46</ApplicationVersion>
+    <ApplicationDisplayVersion>1.45</ApplicationDisplayVersion>
     <PublishTrimmed>false</PublishTrimmed>
     <EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
     <AndroidEnableFastDeployment>false</AndroidEnableFastDeployment>

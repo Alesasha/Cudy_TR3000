@@ -105,12 +105,33 @@ internal static class CudyCriticalServiceMonitor
         CudyCriticalService service,
         CancellationToken cancellationToken)
     {
+        using var serviceTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        serviceTimeout.CancelAfter(TimeSpan.FromSeconds(15));
         var targets = new List<CudyCriticalTargetResult>();
         foreach (var target in service.Targets)
         {
-            var result = await CheckTargetAsync(client, target, service.SuccessPattern, service.FailurePattern, cancellationToken);
+            CudyCriticalTargetResult result;
+            try
+            {
+                result = await CheckTargetAsync(
+                    client,
+                    target,
+                    service.SuccessPattern,
+                    service.FailurePattern,
+                    serviceTimeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                result = new CudyCriticalTargetResult(
+                    target,
+                    0,
+                    false,
+                    false,
+                    false,
+                    "Service probe exceeded its 15 second budget");
+            }
             targets.Add(result);
-            if (result.Ok)
+            if (result.Ok || serviceTimeout.IsCancellationRequested)
             {
                 break;
             }

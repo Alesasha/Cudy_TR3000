@@ -14,7 +14,7 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `219d198`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.44 (45)` published APK; its SHA256 is recorded in
+  - Android `1.45 (46)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
   - Linux `1.30 (31)`, published from the current source with a manifest-verified package;
   - Windows `1.27 (28)`, SHA256
@@ -98,7 +98,7 @@ channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
 
-Android `1.44 (45)` is published for the focused stability soak. It restores
+Android `1.45 (46)` is published for the focused stability soak. It restores
 persisted configuration when Android restarts the sticky VPN service, records
 process/service/boot/recovery markers, retries a native-engine or critical-link
 safety stop instead of remaining permanently off, and schedules a persisted
@@ -128,6 +128,12 @@ rejects and removes a cached or partial update whose version is not newer than
 the installed package. The physical `1.43 -> 1.44` replacement reproduced this
 stale-cache condition and normalized it to `Installed 1.44 / Latest 1.44`
 without interrupting the connected VPN service.
+Version 1.45 also resets retained main-screen scrolling and separates tunnel
+health from individual protected-service probes. Service probes are bounded,
+cached for ten minutes and remain diagnostic warnings; they no longer stop or
+recreate a healthy TUN. The physical phone reproduced a YouTube probe warning
+and then completed two control cycles with `engine=running`, a Connected UI and
+no recovery restart.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy

@@ -61,6 +61,7 @@ public class MainActivity : Activity
     private LinearLayout? routingSection;
     private LinearLayout? advancedSection;
     private LinearLayout? resultSection;
+    private ScrollView? mainScrollView;
     private Button? startButton;
     private Button? stopButton;
     private Button? statusButton;
@@ -113,6 +114,7 @@ public class MainActivity : Activity
         routingSection = FindViewById<LinearLayout>(Resource.Id.routingSection);
         advancedSection = FindViewById<LinearLayout>(Resource.Id.advancedSection);
         resultSection = FindViewById<LinearLayout>(Resource.Id.resultSection);
+        mainScrollView = FindViewById<ScrollView>(Resource.Id.mainScrollView);
         startButton = FindViewById<Button>(Resource.Id.startButton);
         stopButton = FindViewById<Button>(Resource.Id.stopButton);
         statusButton = FindViewById<Button>(Resource.Id.statusButton);
@@ -129,7 +131,7 @@ public class MainActivity : Activity
             || engineStatusText is null || permissionStatusText is null || permissionGuideText is null
             || updateVersionText is null
             || outputText is null || resultTitleText is null || diagnosticsSection is null || activationSection is null
-            || routingSection is null || advancedSection is null || resultSection is null
+            || routingSection is null || advancedSection is null || resultSection is null || mainScrollView is null
             || startButton is null || stopButton is null || statusButton is null || updateButton is null
             || setupPermissionsButton is null || toggleRoutingButton is null || toggleAdvancedButton is null)
         {
@@ -231,6 +233,7 @@ public class MainActivity : Activity
         RenderStoredStatus();
         RenderPermissionStatus();
         MaybePromptBackgroundPermissions();
+        mainScrollView.Post(() => mainScrollView.ScrollTo(0, 0));
     }
 
     protected override void OnNewIntent(Intent? intent)

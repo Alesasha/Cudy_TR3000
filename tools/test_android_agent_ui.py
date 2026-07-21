@@ -50,6 +50,7 @@ def assert_contains(path: Path, needles: list[str]) -> None:
 def main() -> int:
     ids = layout_ids(LAYOUT)
     required_ids = {
+        "mainScrollView",
         "startButton",
         "stopButton",
         "statusDetailText",
@@ -124,6 +125,7 @@ def main() -> int:
             'SetPrimaryButton("Starting...", "#F2B134"',
             'SetPrimaryButton("Connected", "#1F9D55"',
             "StartUiRefreshLoop",
+            "mainScrollView.ScrollTo(0, 0)",
             "MaybeRecoverRequestedAgent",
             '"Downloading update {latestName}..."',
             '"Downloading {latestName}: {percent}%"',
@@ -205,8 +207,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>45</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.44</ApplicationDisplayVersion>",
+            "<ApplicationVersion>46</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.45</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -265,6 +267,7 @@ def main() -> int:
             'GetString(item, "failure_pattern")',
             "RegexTimeout",
             "CheckAsync",
+            "Service probe exceeded its 15 second budget",
         ],
     )
     assert_contains(
@@ -272,7 +275,12 @@ def main() -> int:
         [
             "consecutiveCriticalFailures",
             "CudyCriticalServiceMonitor.CheckAsync",
-            "restart_vpn_restore_direct_temporarily",
+            "report_only_keep_transport_running",
+            "CriticalServiceCheckInterval",
+            "criticalCheckedNow",
+            ".OrderBy(service => service.Key, StringComparer.OrdinalIgnoreCase)",
+            'coreHealthy ? "connected" : "degraded"',
+            "warnings = criticalResult.FailedServices",
             '"/api/agent/diagnostics"',
             "options.Inet4RouteRange",
             "AddTunDnsServers",

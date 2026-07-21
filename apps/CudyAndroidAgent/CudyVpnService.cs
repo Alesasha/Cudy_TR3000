@@ -27,6 +27,7 @@ public class CudyVpnService : VpnService
     private const int NotificationId = 24061;
     private const string NotificationChannelId = "cudy-agent";
     private const string LogTag = "CudyAgent";
+    private static readonly TimeSpan CriticalServiceCheckInterval = TimeSpan.FromMinutes(10);
     private static readonly object ActiveInstanceLock = new();
     private static WeakReference<CudyVpnService>? activeInstance;
 
@@ -49,6 +50,9 @@ public class CudyVpnService : VpnService
     private bool debugProbePending;
     private bool cachedTransportNeedsRefresh;
     private IReadOnlyList<CudyCriticalService> criticalServices = Array.Empty<CudyCriticalService>();
+    private CudyCriticalCheckResult lastCriticalResult = new(Array.Empty<CudyCriticalServiceResult>());
+    private DateTimeOffset lastCriticalCheckAt = DateTimeOffset.MinValue;
+    private string criticalServicesFingerprint = "";
     private int consecutiveCriticalFailures;
     private string activeStartFingerprint = "";
     private volatile bool explicitStopRequested;
@@ -539,7 +543,18 @@ public class CudyVpnService : VpnService
                 using var doc = JsonDocument.Parse(configJson);
                 var root = doc.RootElement;
                 ApplyAuthenticatedControlEndpoint(root);
-                criticalServices = CudyCriticalServiceMonitor.Parse(root);
+                var parsedCriticalServices = CudyCriticalServiceMonitor.Parse(root);
+                var parsedCriticalFingerprint = string.Join("|", parsedCriticalServices
+                    .OrderBy(service => service.Key, StringComparer.OrdinalIgnoreCase)
+                    .Select(service =>
+                        $"{service.Key}:{string.Join(",", service.Targets.OrderBy(target => target, StringComparer.OrdinalIgnoreCase))}:{service.SuccessPattern}:{service.FailurePattern}"));
+                if (!string.Equals(criticalServicesFingerprint, parsedCriticalFingerprint, StringComparison.Ordinal))
+                {
+                    criticalServicesFingerprint = parsedCriticalFingerprint;
+                    lastCriticalCheckAt = DateTimeOffset.MinValue;
+                    lastCriticalResult = new CudyCriticalCheckResult(Array.Empty<CudyCriticalServiceResult>());
+                }
+                criticalServices = parsedCriticalServices;
                 domainRoutes = ArrayLength(root, "domain_routes");
                 ipRoutes = ArrayLength(root, "ip_routes");
                 cleanupRoutes = ArrayLength(root, "cleanup_ip_routes");
@@ -600,19 +615,33 @@ public class CudyVpnService : VpnService
                     }
                 }
 
-                var criticalResult = controlOnly
-                    ? new CudyCriticalCheckResult(Array.Empty<CudyCriticalServiceResult>())
-                    : await CudyCriticalServiceMonitor.CheckAsync(client, criticalServices, cancellationToken);
-                if (criticalResult.Ok)
+                var criticalResult = new CudyCriticalCheckResult(Array.Empty<CudyCriticalServiceResult>());
+                var criticalCheckedNow = false;
+                if (!controlOnly && criticalServices.Count > 0)
+                {
+                    if (DateTimeOffset.UtcNow - lastCriticalCheckAt >= CriticalServiceCheckInterval)
+                    {
+                        criticalResult = await CudyCriticalServiceMonitor.CheckAsync(client, criticalServices, cancellationToken);
+                        criticalCheckedNow = true;
+                        lastCriticalResult = criticalResult;
+                        lastCriticalCheckAt = DateTimeOffset.UtcNow;
+                    }
+                    else
+                    {
+                        criticalResult = lastCriticalResult;
+                    }
+                }
+                if (criticalCheckedNow && criticalResult.Ok)
                 {
                     consecutiveCriticalFailures = 0;
                 }
-                else
+                else if (criticalCheckedNow)
                 {
                     consecutiveCriticalFailures++;
                     Log.Warn(LogTag, $"Critical connectivity failure {consecutiveCriticalFailures}/3: {string.Join(", ", criticalResult.FailedServices)}");
                 }
 
+                var coreHealthy = controlOnly || (tun is not null && storedTransports > 0);
                 var installedAppVersion = InstalledAppVersion();
                 var lifecyclePreferences = GetSharedPreferences("cudy-agent", FileCreationMode.Private);
                 var status = new
@@ -633,7 +662,7 @@ public class CudyVpnService : VpnService
                     },
                     health = new
                     {
-                        ok = criticalResult.Ok,
+                        ok = coreHealthy,
                         mode = controlOnly ? "android-control-only" : "android-libbox",
                         transports,
                         prepared_transports = preparedTransports,
@@ -660,7 +689,8 @@ public class CudyVpnService : VpnService
                         can_route = !controlOnly && tun is not null,
                         can_manage_transports = !controlOnly && storedTransports > 0,
                     },
-                    errors = criticalResult.FailedServices,
+                    errors = coreHealthy ? Array.Empty<string>() : new[] { "VPN engine is unavailable" },
+                    warnings = criticalResult.FailedServices,
                 };
                 await PostControlJsonAsync(
                     client,
@@ -670,7 +700,7 @@ public class CudyVpnService : VpnService
                     JsonSerializer.Serialize(status),
                     cancellationToken);
                 TouchControlLoop("cycle-complete");
-                ok = criticalResult.Ok;
+                ok = coreHealthy;
                 SaveLoopDetails(
                     domainRoutes,
                     ipRoutes,
@@ -682,17 +712,21 @@ public class CudyVpnService : VpnService
                     probeSummary,
                     useSshControl && sshClient?.IsConnected == true,
                     error: "");
-                SaveServiceStatus(criticalResult.Ok
-                    ? $"ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}"
-                    : $"critical services unavailable: {string.Join(", ", criticalResult.FailedServices)}");
-                if (criticalResult.Ok)
+                SaveServiceStatus(
+                    coreHealthy
+                        ? criticalResult.Ok
+                            ? $"ok ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}"
+                            : $"connected; service probe warnings: {string.Join(", ", criticalResult.FailedServices)}"
+                        : "VPN engine is unavailable",
+                    coreHealthy ? "connected" : "degraded");
+                if (coreHealthy)
                 {
                     GetSharedPreferences("cudy-agent", FileCreationMode.Private)
                         ?.Edit()
                         ?.PutLong("last_successful_control_ms", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
                         ?.Apply();
                 }
-                Log.Info(LogTag, $"Control loop {(criticalResult.Ok ? "ok" : "degraded")} ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
+                Log.Info(LogTag, $"Control loop {(coreHealthy ? "ok" : "degraded")} service_probes={(criticalResult.Ok ? "ok" : "warning")} ip={ipRoutes} cleanup={cleanupRoutes} transports={transports} prepared={preparedTransports} stored={storedTransports} {runtimeSummary} {engineSummary} {probeSummary}");
 
                 if (consecutiveCriticalFailures >= 3)
                 {
@@ -705,7 +739,7 @@ public class CudyVpnService : VpnService
                             consecutive_failures = consecutiveCriticalFailures,
                             failed_services = criticalResult.FailedServices,
                             services = criticalResult.Services,
-                            action = "restart_vpn_restore_direct_temporarily",
+                            action = "report_only_keep_transport_running",
                             reported_at = DateTimeOffset.UtcNow.ToString("O"),
                         }),
                     };
@@ -717,23 +751,8 @@ public class CudyVpnService : VpnService
                     {
                         Log.Warn(LogTag, "Critical diagnostic report failed: " + ex.Message);
                     }
-                    SaveServiceStatus("safety recovery: direct internet restored; retrying", "restarting");
-                    UpdateNotification("Recovering: direct internet restored");
-                    StoreLifecycleMarker("watchdog_recovery", string.Join(", ", criticalResult.FailedServices));
-                    runtimeShuttingDown = true;
-                    try
-                    {
-                        libboxEngine?.Stop();
-                        tun?.Close();
-                        tun = null;
-                    }
-                    finally
-                    {
-                        runtimeShuttingDown = false;
-                    }
+                    StoreLifecycleMarker("service_probe_warning", string.Join(", ", criticalResult.FailedServices));
                     consecutiveCriticalFailures = 0;
-                    await Task.Delay(TimeSpan.FromSeconds(30), cancellationToken);
-                    continue;
                 }
             }
             catch (Exception ex) when (ex is not System.OperationCanceledException)
