@@ -212,8 +212,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>47</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.46</ApplicationDisplayVersion>",
+            "<ApplicationVersion>48</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.47</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -244,6 +244,9 @@ def main() -> int:
             "Installed version:",
             "Latest version:",
             "resultSection!.Visibility = ViewStates.Gone",
+            'GetIdentifier("action_bar_container", "id", "android")',
+            "ApplyMainContentSafeArea()",
+            "actionBarLocation[1] + actionBarContainer.Height - contentLocation[1]",
         ],
     )
     assert_contains(

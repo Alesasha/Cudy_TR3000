@@ -75,6 +75,11 @@ public class MainActivity : Activity
     private string pendingDebugProbeCandidates = "";
     private CancellationTokenSource? uiRefreshCts;
     private bool initialScrollResetPending = true;
+    private bool mainScrollPaddingCaptured;
+    private int mainScrollBasePaddingLeft;
+    private int mainScrollBasePaddingTop;
+    private int mainScrollBasePaddingRight;
+    private int mainScrollBasePaddingBottom;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -240,25 +245,79 @@ public class MainActivity : Activity
     public override void OnWindowFocusChanged(bool hasFocus)
     {
         base.OnWindowFocusChanged(hasFocus);
-        if (hasFocus && initialScrollResetPending)
+        if (hasFocus)
         {
-            ResetMainScrollAfterLayout();
+            ScheduleMainContentLayoutFix(initialScrollResetPending);
         }
     }
 
     private void ResetMainScrollAfterLayout()
     {
+        ScheduleMainContentLayoutFix(resetScroll: true);
+    }
+
+    private void ScheduleMainContentLayoutFix(bool resetScroll)
+    {
         if (mainScrollView is null)
         {
             return;
         }
-        mainScrollView.RequestFocus();
-        mainScrollView.PostDelayed(() =>
+
+        foreach (var delay in new long[] { 0, 250, 750 })
         {
-            mainScrollView.RequestFocus();
-            mainScrollView.ScrollTo(0, 0);
-            initialScrollResetPending = false;
-        }, 250);
+            mainScrollView.PostDelayed(() =>
+            {
+                ApplyMainContentSafeArea();
+                if (resetScroll && initialScrollResetPending)
+                {
+                    mainScrollView.RequestFocus();
+                    mainScrollView.ScrollTo(0, 0);
+                }
+                if (delay == 750 && resetScroll)
+                {
+                    initialScrollResetPending = false;
+                }
+            }, delay);
+        }
+    }
+
+    private void ApplyMainContentSafeArea()
+    {
+        if (mainScrollView is null)
+        {
+            return;
+        }
+
+        if (!mainScrollPaddingCaptured)
+        {
+            mainScrollBasePaddingLeft = mainScrollView.PaddingLeft;
+            mainScrollBasePaddingTop = mainScrollView.PaddingTop;
+            mainScrollBasePaddingRight = mainScrollView.PaddingRight;
+            mainScrollBasePaddingBottom = mainScrollView.PaddingBottom;
+            mainScrollPaddingCaptured = true;
+        }
+
+        var overlap = 0;
+        var actionBarContainerId = Resources?.GetIdentifier("action_bar_container", "id", "android") ?? 0;
+        var actionBarContainer = actionBarContainerId == 0
+            ? null
+            : Window?.DecorView?.FindViewById<View>(actionBarContainerId);
+        if (actionBarContainer is not null && actionBarContainer.Height > 0)
+        {
+            var contentLocation = new int[2];
+            var actionBarLocation = new int[2];
+            mainScrollView.GetLocationOnScreen(contentLocation);
+            actionBarContainer.GetLocationOnScreen(actionBarLocation);
+            overlap = Math.Max(
+                0,
+                actionBarLocation[1] + actionBarContainer.Height - contentLocation[1]);
+        }
+
+        mainScrollView.SetPadding(
+            mainScrollBasePaddingLeft,
+            mainScrollBasePaddingTop + overlap,
+            mainScrollBasePaddingRight,
+            mainScrollBasePaddingBottom);
     }
 
     protected override void OnNewIntent(Intent? intent)
