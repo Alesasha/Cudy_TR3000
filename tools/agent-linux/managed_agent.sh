@@ -222,6 +222,16 @@ restore_direct_dns_baseline() {
   [ -x ./restore_direct.sh ] || return 0
 
   local default_line gw dev identity previous="" prefix route_line stable=1
+  if command -v resolvectl >/dev/null 2>&1; then
+    ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1 | while IFS= read -r link_name; do
+      case "$link_name" in
+        amn*|wg*|awg*|tun*|ppp*|sing*|proxy*|lokvpn*)
+          resolvectl revert "$link_name" >/dev/null 2>&1 || true
+          resolvectl default-route "$link_name" no >/dev/null 2>&1 || true
+          ;;
+      esac
+    done
+  fi
   default_line="$(ip -4 route show default | awk '
     $1 == "default" {
       gw=""; dev="";
@@ -291,10 +301,7 @@ while true; do
       ./update_agent.sh --from-agent
       update_rc=$?
       set -e
-      if [ "$update_rc" -eq 10 ]; then
-        log "self-update started; exiting current agent process"
-        exit 0
-      elif [ "$update_rc" -ne 0 ]; then
+      if [ "$update_rc" -ne 0 ]; then
         log "self-update check failed rc=$update_rc"
       fi
     fi

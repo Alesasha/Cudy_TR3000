@@ -40,7 +40,7 @@ leak, focus-stealing console or manual transport repair.
 
 ### Linux
 
-1. Confirm Dima receives Linux `1.28 (29)` through the control update path and
+1. Confirm Dima receives Linux `1.30 (31)` through the control update path and
    reports the expected non-empty TUN interface set after OFF/ON.
 2. Keep normal operation one-click from the UI; no manual Amnezia interface or
    route commands should be required.

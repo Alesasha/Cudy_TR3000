@@ -39,9 +39,9 @@ def main() -> int:
         )
         with app.connect(db_path) as conn:
             effective = app.effective_critical_services(conn, user_id=USER_ID)
-        assert [item["service_key"] for item in effective] == ["chatgpt"]
-        assert effective[0]["targets"][0] == "https://chatgpt.com/"
-        assert effective[0]["scope"] == "global"
+        chatgpt = next(item for item in effective if item["service_key"] == "chatgpt")
+        assert chatgpt["targets"][0] == "https://chatgpt.com/"
+        assert chatgpt["scope"] == "global"
 
         app.save_critical_service(
             db_path,
@@ -53,7 +53,10 @@ def main() -> int:
             enabled=False,
         )
         with app.connect(db_path) as conn:
-            assert app.effective_critical_services(conn, user_id=USER_ID) == []
+            assert all(
+                item["service_key"] != "chatgpt"
+                for item in app.effective_critical_services(conn, user_id=USER_ID)
+            )
 
         app.save_critical_service(
             db_path,
@@ -77,8 +80,9 @@ def main() -> int:
                 domain="example.com",
                 url="https://example.com/health",
             )
-        assert [item["service_key"] for item in effective] == ["work"]
-        assert config["critical_services"][0]["success_pattern"] == r"status\s*:\s*ok"
+        assert "work" in [item["service_key"] for item in effective]
+        work = next(item for item in config["critical_services"] if item["service_key"] == "work")
+        assert work["success_pattern"] == r"status\s*:\s*ok"
         assert patterns == {"success_pattern": r"status\s*:\s*ok", "failure_pattern": ""}
         with app.connect(db_path) as conn:
             cidr_patterns = app.critical_probe_patterns(

@@ -29,6 +29,12 @@ pid_file="run/${name}.pid"
 hash_file="run/${name}.sha256"
 new_hash="$(sha256sum "$config_path" | awk '{print $1}')"
 
+sanitize_transport_dns() {
+  command -v resolvectl >/dev/null 2>&1 || return 0
+  resolvectl revert "$name" >/dev/null 2>&1 || true
+  resolvectl default-route "$name" no >/dev/null 2>&1 || true
+}
+
 is_managed_transport_pid() {
   local candidate="$1" cmd
   [ -n "$candidate" ] && kill -0 "$candidate" 2>/dev/null || return 1
@@ -53,6 +59,7 @@ fi
 old_hash=""
 [ -f "$hash_file" ] && old_hash="$(cat "$hash_file" 2>/dev/null || true)"
 if [ "$running" = "1" ] && [ "$old_hash" = "$new_hash" ]; then
+  sanitize_transport_dns
   echo "sing-box transport already running: $name pid=$old_pid"
   exit 0
 fi
@@ -91,4 +98,5 @@ if ! ip link show "$name" >/dev/null 2>&1; then
   tail -80 "logs/${name}.err.log" >&2 || true
   exit 1
 fi
+sanitize_transport_dns
 echo "sing-box transport running: $name pid=$pid config=$config_path"

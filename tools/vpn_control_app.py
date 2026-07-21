@@ -255,6 +255,52 @@ MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS = [
         ],
     },
 ]
+MANAGED_CRITICAL_SERVICE_SEEDS = [
+    {
+        "service_key": "chatgpt-openai",
+        "label": "ChatGPT / OpenAI",
+        "targets": [
+            "https://chatgpt.com/",
+            "https://chat.openai.com/",
+            "https://openai.com/",
+            "https://auth.openai.com/",
+            "https://platform.openai.com/",
+            "https://cdn.openai.com/",
+            "https://oaistatic.com/",
+            "https://oaiusercontent.com/",
+        ],
+    },
+    {
+        "service_key": "gemini",
+        "label": "Gemini",
+        "targets": [
+            "https://gemini.google.com/",
+            "https://aistudio.google.com/",
+        ],
+    },
+    {
+        "service_key": "youtube",
+        "label": "YouTube",
+        "targets": [
+            "https://www.youtube.com/",
+            "https://youtube.com/",
+            "https://youtu.be/",
+            "https://googlevideo.com/",
+            "https://ytimg.com/",
+            "https://youtubei.googleapis.com/",
+        ],
+    },
+    {
+        "service_key": "reuters",
+        "label": "Reuters",
+        "targets": [
+            "https://www.reuters.com/",
+            "https://reuters.com/",
+            "https://www.reutersmedia.net/",
+        ],
+    },
+]
+MANAGED_SERVICE_AUTO_CANDIDATES = ["proxyde", "proxynl", "proxyfr", "proxyus", AUTO_ALL_REST]
 GEO_BLOCK_PATTERNS = [
     "gemini isn't currently supported in your country",
     "gemini isn\u2019t currently supported in your country",
@@ -811,8 +857,8 @@ USER_HTML = r"""<!doctype html>
       </table>
     </section>
     <section>
-      <h2>Important Services</h2>
-      <p class="muted">The agent checks these services. A local entry with the same key replaces the global check.</p>
+      <h2>Service Routing Groups</h2>
+      <p class="muted">One service, one tested Auto winner. A local entry with the same key replaces the global group.</p>
       <form id="criticalServiceForm" class="row">
         <input id="criticalServiceKey" type="text" placeholder="key, e.g. chatgpt" autocomplete="off">
         <input id="criticalServiceLabel" type="text" placeholder="label" autocomplete="off">
@@ -929,9 +975,24 @@ USER_HTML = r"""<!doctype html>
           <td data-label="Content checks"><span class="muted">success:</span> ${escapeHtml(item.success_pattern || "-")}<br><span class="muted">failure:</span> ${escapeHtml(item.failure_pattern || "-")}</td>
           <td data-label="Routing">${item.routing_enabled ? `One Auto winner<br><span class="muted">${(item.candidate_server_ids || []).map(escapeHtml).join(" -> ")}</span>` : "health only"}</td>
           <td data-label="Enabled">${item.enabled ? "yes" : "no"}</td>
-          <td>${item.scope === "user" ? `<button class="danger" data-delete-critical="${escapeHtml(item.service_key)}">Delete local</button>` : ""}</td>
+          <td><button class="secondary" data-edit-critical="${escapeHtml(item.service_key)}">${item.scope === "user" ? "Edit local" : "Override"}</button>${item.scope === "user" ? ` <button class="danger" data-delete-critical="${escapeHtml(item.service_key)}">Delete local</button>` : ""}</td>
         </tr>
       `).join("") : '<tr><td colspan="7" class="muted">No important services configured.</td></tr>';
+      body.querySelectorAll("[data-edit-critical]").forEach(button => {
+        button.addEventListener("click", () => {
+          const item = visible.find(entry => entry.service_key === button.dataset.editCritical);
+          if (!item) return;
+          document.getElementById("criticalServiceKey").value = item.service_key || "";
+          document.getElementById("criticalServiceLabel").value = item.label || "";
+          document.getElementById("criticalServiceTargets").value = (item.targets || []).join(", ");
+          document.getElementById("criticalServiceSuccess").value = item.success_pattern || "";
+          document.getElementById("criticalServiceFailure").value = item.failure_pattern || "";
+          document.getElementById("criticalServiceCandidates").value = (item.candidate_server_ids || []).join(", ");
+          document.getElementById("criticalServiceRouting").checked = Boolean(item.routing_enabled);
+          document.getElementById("criticalServiceEnabled").checked = item.enabled !== false;
+          document.getElementById("criticalServiceForm").scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      });
       body.querySelectorAll("[data-delete-critical]").forEach(button => {
         button.addEventListener("click", async () => {
           await api(`/api/critical-services?service_key=${encodeURIComponent(button.dataset.deleteCritical)}`, { method: "DELETE" });
@@ -1265,8 +1326,8 @@ ADMIN_HTML = r"""<!doctype html>
         <thead><tr><th>Alias</th><th>Label</th><th>Lookup Targets</th><th>Routing Effect</th><th></th></tr></thead>
         <tbody id="adminAliasesBody"></tbody>
       </table>
-      <h3>Important Services</h3>
-      <p class="muted">Global checks apply to every agent. A user entry with the same key replaces the global check; a disabled user entry excludes it.</p>
+      <h3>Service Routing Groups</h3>
+      <p class="muted">One service, one tested Auto winner. A user group with the same key replaces the global group.</p>
       <form id="adminCriticalServiceForm" class="toolbar">
         <div class="field"><label>Scope</label><select id="adminCriticalServiceUser"><option value="">Global</option></select></div>
         <div class="field"><label>Key</label><input id="adminCriticalServiceKey" type="text" placeholder="chatgpt" autocomplete="off"></div>
@@ -1982,9 +2043,28 @@ ADMIN_HTML = r"""<!doctype html>
           <td><span class="muted">success:</span> ${escapeHtml(item.success_pattern || "-")}<br><span class="muted">failure:</span> ${escapeHtml(item.failure_pattern || "-")}</td>
           <td>${item.routing_enabled ? `One Auto winner<br><span class="muted">${(item.candidate_server_ids || []).map(escapeHtml).join(" -> ")}</span>` : "health only"}</td>
           <td>${item.enabled ? "yes" : "no"}</td>
-          <td><button class="danger" data-delete-critical-key="${escapeHtml(item.service_key)}" data-delete-critical-user="${escapeHtml(item.user_id || "")}">Delete</button></td>
+          <td><button class="secondary" data-edit-critical-key="${escapeHtml(item.service_key)}" data-edit-critical-user="${escapeHtml(item.user_id || "")}">Edit</button> <button class="danger" data-delete-critical-key="${escapeHtml(item.service_key)}" data-delete-critical-user="${escapeHtml(item.user_id || "")}">Delete</button></td>
         </tr>
       `).join("") : '<tr><td colspan="7" class="muted">No important services configured.</td></tr>';
+      body.querySelectorAll("[data-edit-critical-key]").forEach(button => {
+        button.addEventListener("click", () => {
+          const item = state.criticalServices.find(entry =>
+            entry.service_key === button.dataset.editCriticalKey &&
+            String(entry.user_id || "") === String(button.dataset.editCriticalUser || "")
+          );
+          if (!item) return;
+          document.getElementById("adminCriticalServiceUser").value = item.user_id || "";
+          document.getElementById("adminCriticalServiceKey").value = item.service_key || "";
+          document.getElementById("adminCriticalServiceLabel").value = item.label || "";
+          document.getElementById("adminCriticalServiceTargets").value = (item.targets || []).join(", ");
+          document.getElementById("adminCriticalServiceSuccess").value = item.success_pattern || "";
+          document.getElementById("adminCriticalServiceFailure").value = item.failure_pattern || "";
+          document.getElementById("adminCriticalServiceCandidates").value = (item.candidate_server_ids || []).join(", ");
+          document.getElementById("adminCriticalServiceRouting").checked = Boolean(item.routing_enabled);
+          document.getElementById("adminCriticalServiceEnabled").checked = item.enabled !== false;
+          document.getElementById("adminCriticalServiceForm").scrollIntoView({ behavior: "smooth", block: "center" });
+        });
+      });
       body.querySelectorAll("[data-delete-critical-key]").forEach(button => {
         button.addEventListener("click", async () => {
           const query = new URLSearchParams({ service_key: button.dataset.deleteCriticalKey, user_id: button.dataset.deleteCriticalUser });
@@ -3476,6 +3556,7 @@ def init_db(db_path: Path, inventory_path: Path, *, reset_from_inventory: bool =
         seed_inventory(conn, inventory, reset_from_inventory=reset_from_inventory)
         seed_service_aliases(conn)
         seed_managed_global_domain_routes(conn)
+        seed_managed_critical_services(conn)
         ensure_default_user(conn)
 
 
@@ -3982,6 +4063,32 @@ def seed_managed_global_domain_routes(conn: sqlite3.Connection) -> None:
                 """,
                 (normalized_domain, timestamp, timestamp, note),
             )
+
+
+def seed_managed_critical_services(conn: sqlite3.Connection) -> None:
+    """Install editable service groups without overwriting administrator changes."""
+    if os.environ.get("CUDY_SEED_MANAGED_SERVICE_GROUPS", "1").strip().lower() in {"0", "false", "no", "off"}:
+        return
+    timestamp = now()
+    for seed in MANAGED_CRITICAL_SERVICE_SEEDS:
+        conn.execute(
+            """
+            INSERT INTO critical_services (
+              user_id, service_key, label, targets_json, success_pattern,
+              failure_pattern, routing_enabled, candidate_server_ids,
+              enabled, created_at, updated_at
+            ) VALUES ('', ?, ?, ?, '', '', 1, ?, 1, ?, ?)
+            ON CONFLICT(user_id, service_key) DO NOTHING
+            """,
+            (
+                seed["service_key"],
+                seed["label"],
+                json.dumps(seed["targets"], ensure_ascii=False),
+                json.dumps(MANAGED_SERVICE_AUTO_CANDIDATES),
+                timestamp,
+                timestamp,
+            ),
+        )
 
 
 def ensure_default_user(conn: sqlite3.Connection) -> None:
@@ -5885,6 +5992,15 @@ def auto_probe_domain_rows(
         if target_cidr:
             entry["domain"] = auto_cache_key_for_ip_route(target_cidr)
             entry["url"] = ip_route_probe_url(target_cidr, entry.get("note") or "")
+        elif entry.get("source") != "service_group" and effective_service_group_for_domain(
+            conn,
+            user_id=str(entry.get("user_id") or ""),
+            domain=str(entry.get("domain") or ""),
+        ):
+            # A routed service group owns its dependency domains. Scheduling
+            # member probes as well would duplicate work and could select
+            # mutually incompatible exits for one browser session.
+            continue
         elif not entry.get("url"):
             entry["url"] = service_probe_url_for_domain(str(entry.get("domain") or ""))
         key = (entry.get("user_id") or "", entry["domain"])
@@ -7970,6 +8086,28 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         raise PermissionError("Agent user is disabled or missing")
     effective: dict[str, dict[str, Any]] = {}
 
+    def grouped_auto_route(route: dict[str, Any], *, scope: str | None = None) -> dict[str, Any]:
+        if str(route.get("server_id") or "") != "auto":
+            return route
+        service = effective_service_group_for_domain(
+            conn,
+            user_id=user_id,
+            domain=str(route.get("domain") or ""),
+            scope=scope,
+        )
+        if service is None:
+            return route
+        return {
+            **route,
+            "service_key": service["service_key"],
+            "service_label": service.get("label") or service["service_key"],
+            "auto_cache_key": service_auto_cache_key(
+                str(service.get("user_id") or ""),
+                str(service["service_key"]),
+            ),
+            "auto_candidate_policy": service_group_policy(conn, service),
+        }
+
     def add_service_group_routes(*, scope: str, overwrite: bool) -> None:
         for service in effective_critical_services(conn, user_id=user_id):
             if service.get("scope") != scope or not service.get("routing_enabled"):
@@ -8002,7 +8140,10 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         ORDER BY domain
         """,
     ):
-        effective[route["domain"]] = {**route, "source": "global"}
+        effective[route["domain"]] = grouped_auto_route(
+            {**route, "source": "global"},
+            scope="global",
+        )
     add_service_group_routes(scope="user", overwrite=True)
     for route in rows(
         conn,
@@ -8014,7 +8155,7 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         """,
         (user_id,),
     ):
-        effective[route["domain"]] = {**route, "source": "user"}
+        effective[route["domain"]] = grouped_auto_route({**route, "source": "user"})
 
     domain_routes: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -9665,6 +9806,7 @@ def effective_service_group_for_domain(
     *,
     user_id: str,
     domain: str,
+    scope: str | None = None,
 ) -> dict[str, Any] | None:
     try:
         normalized_domain = normalize_domain(domain)
@@ -9672,6 +9814,8 @@ def effective_service_group_for_domain(
         return None
     for service in effective_critical_services(conn, user_id=user_id):
         if not service.get("routing_enabled"):
+            continue
+        if scope is not None and service.get("scope") != scope:
             continue
         for host in critical_service_target_hosts(service):
             if normalized_domain == host or normalized_domain.endswith("." + host):

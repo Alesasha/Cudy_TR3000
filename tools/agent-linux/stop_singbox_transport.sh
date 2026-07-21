@@ -29,6 +29,10 @@ if command -v pgrep >/dev/null 2>&1; then
 fi
 
 rm -f "$pid_file" "run/${name}.sha256"
+if command -v resolvectl >/dev/null 2>&1; then
+  resolvectl revert "$name" >/dev/null 2>&1 || true
+  resolvectl default-route "$name" no >/dev/null 2>&1 || true
+fi
 if ip link show "$name" >/dev/null 2>&1; then
   ip link delete "$name" 2>/dev/null || true
 fi

@@ -206,7 +206,8 @@ def update_in_progress(status: str) -> bool:
     try:
         marker = json.loads(UPDATE_MARKER_FILE.read_text(encoding="utf-8"))
         marker_age = time.time() - int(marker.get("updated_at_epoch") or 0)
-        if 0 <= marker_age <= 1800:
+        marker_phase = str(marker.get("phase") or "").lower()
+        if 0 <= marker_age <= 1800 and marker_phase not in {"downloading", "staging"}:
             return True
     except (OSError, ValueError, TypeError):
         pass
@@ -216,7 +217,7 @@ def update_in_progress(status: str) -> bool:
     except OSError:
         return False
     lowered = status.lower()
-    return any(token in lowered for token in ("downloading", "applying", "installing", "stopping", "restarting", "apply process started"))
+    return any(token in lowered for token in ("applying", "installing", "stopping", "restarting", "apply process started"))
 
 
 def policy_sync_status() -> str:
@@ -231,9 +232,11 @@ def policy_sync_status() -> str:
 
 def software_update_status(status: str) -> str:
     lowered = status.lower()
+    if "ready_to_install" in lowered:
+        return "Software update: downloaded; waiting for approval"
+    if "downloading" in lowered:
+        return "Software update: downloading in background"
     if update_in_progress(status):
-        if "downloading" in lowered:
-            return "Software update: downloading"
         if "installing" in lowered or "applying" in lowered or "apply process started" in lowered:
             return "Software update: installing"
         if "restarting" in lowered or "stopping" in lowered:
@@ -306,6 +309,7 @@ class AgentUi:
         self.speed_url = StringVar(value="")
         self.current_version_code = 0
         self.latest_version_code = 0
+        self.prompted_staged_version_code = 0
         self.loaded_version_code = current_version()[1]
         self.relaunching = False
         self.traffic_counters = read_managed_traffic_counters()
@@ -479,7 +483,29 @@ class AgentUi:
         latest_name, latest_code = latest
         self.latest_version_code = latest_code
         self.version_status.set(f"Software: installed {current_name or '-'} | latest {latest_name or '-'}")
-        self.update_button.config(state="normal" if latest_code > current_code and not info["updating"] else "disabled")
+        update_ready = "ready_to_install" in str(info["update_status"] or "").lower()
+        self.update_button.config(
+            text="Install Update" if update_ready else "Update",
+            state="normal" if latest_code > current_code and not info["updating"] else "disabled",
+        )
+        if (
+            update_ready
+            and latest_code > current_code
+            and latest_code != self.prompted_staged_version_code
+            and not self.busy
+        ):
+            self.prompted_staged_version_code = latest_code
+            self.root.after(400, lambda: self.prompt_staged_update(latest_name, latest_code))
+
+    def prompt_staged_update(self, latest_name: str, latest_code: int) -> None:
+        if self.busy or latest_code <= self.current_version_code:
+            return
+        if messagebox.askyesno(
+            "Cudy Agent Update",
+            f"Version {latest_name or latest_code} is downloaded and verified.\n\nInstall it now?\n\n"
+            "The current version will keep working until you approve installation.",
+        ):
+            self.run_update(confirmed=True)
 
     def restart_window_after_background_update(self) -> None:
         try:
@@ -519,17 +545,30 @@ class AgentUi:
             self.speed_url.set(url)
         return ["./run_speed_tests.sh", "--only-url", url]
 
-    def run_update(self) -> None:
+    def run_update(self, confirmed: bool = False) -> None:
         if self.busy:
             messagebox.showinfo("Cudy Agent", "Another action is still running.")
             return
         if self.latest_version_code <= self.current_version_code:
             messagebox.showinfo("Cudy Agent", "Agent is already up to date.")
             return
+        if not confirmed:
+            update_ready = "ready_to_install" in read_update_status().lower()
+            prompt = (
+                "Install the downloaded update now?"
+                if update_ready
+                else "Download, verify, and install the latest update now?"
+            )
+            if not messagebox.askyesno(
+                "Cudy Agent Update",
+                f"{prompt}\n\nThe current agent remains active during download. "
+                "Installation may interrupt managed services for up to 30 seconds.",
+            ):
+                return
         self.busy = True
         self.restart_after_update = True
         self.write_output(f"\n[{time.strftime('%H:%M:%S')}] Update Agent...")
-        self.write_output("Update is in progress. Some services may be temporarily unavailable until it finishes.")
+        self.write_output("Installing the approved update. Some services may be briefly unavailable.")
         threading.Thread(target=self.worker, args=("Update Agent", ["./update_agent.sh"], 300), daemon=True).start()
 
     def force_update_command(self) -> list[str] | None:

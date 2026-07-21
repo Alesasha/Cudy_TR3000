@@ -233,6 +233,11 @@ import json, sys
 print(int(json.loads(sys.argv[1]).get("version_code") or 0))
 PY
 )"
+expected_sha256="$(python3 - "$manifest_json" <<'PY'
+import json, sys
+print(str(json.loads(sys.argv[1]).get("sha256") or "").lower())
+PY
+)"
 download_url="$(python3 - "$manifest_json" <<'PY'
 import json, sys
 print(json.loads(sys.argv[1]).get("download_url") or "")
@@ -252,12 +257,37 @@ if [ -z "$download_url" ]; then
   exit 0
 fi
 
-rm -rf -- "$WORK_DIR"
-mkdir -p "$WORK_DIR" logs
 archive="$WORK_DIR/agent-update-${PLATFORM}-${latest_code}.zip"
 stage="$WORK_DIR/stage"
+staged_code="0"
+if [ -f "$stage/agent.version.json" ]; then
+  staged_code="$(python3 - "$stage/agent.version.json" <<'PY'
+import json, sys
+try:
+    print(int(json.load(open(sys.argv[1], encoding="utf-8")).get("version_code") or 0))
+except Exception:
+    print(0)
+PY
+)"
+fi
+if [ "$staged_code" -eq "$latest_code" ] && [ "$FORCE_UPDATE" = "0" ]; then
+  clear_update_marker
+  if [ "$FROM_AGENT" = "1" ]; then
+    write_update_status "ready_to_install current=$current_code latest=$latest_code. Waiting for user approval."
+    echo "Agent update is already downloaded and waiting for user approval: current=$current_code latest=$latest_code"
+    exit 0
+  fi
+  write_update_status "starting approved update current=$current_code latest=$latest_code. Some services may be temporarily unavailable until update finishes."
+  start_apply_staged_update "$stage"
+  write_update_status "apply process started current=$current_code latest=$latest_code. Some services may be temporarily unavailable until update finishes."
+  echo "Approved staged agent update apply process started: current=$current_code latest=$latest_code"
+  exit 10
+fi
+
+rm -rf -- "$WORK_DIR"
+mkdir -p "$WORK_DIR" logs
 write_update_marker "downloading"
-write_update_status "downloading update current=$current_code latest=$latest_code. Some services may be temporarily unavailable until update finishes."
+write_update_status "downloading update current=$current_code latest=$latest_code. The current agent remains active."
 python3 - "$CONTROL_URL" "$download_url" "$archive" "${VPN_AGENT_TOKEN:-}" <<'PY'
 import sys
 import urllib.request
@@ -270,6 +300,13 @@ if token and url.startswith(base.rstrip("/")):
 with urllib.request.urlopen(request, timeout=180) as response, open(output, "wb") as fh:
     fh.write(response.read())
 PY
+if [ -n "$expected_sha256" ]; then
+  actual_sha256="$(sha256sum "$archive" | awk '{print tolower($1)}')"
+  if [ "$actual_sha256" != "$expected_sha256" ]; then
+    echo "ERROR: downloaded update checksum mismatch" >&2
+    exit 1
+  fi
+fi
 rm -rf "$stage"
 mkdir -p "$stage"
 python3 - "$archive" "$stage" <<'PY'
@@ -281,11 +318,15 @@ with zipfile.ZipFile(archive) as zf:
 PY
 printf '%s\n' "$manifest_json" > "$stage/agent.version.json"
 
+if [ "$FROM_AGENT" = "1" ]; then
+  clear_update_marker
+  write_update_status "ready_to_install current=$current_code latest=$latest_code. Waiting for user approval."
+  echo "Agent update downloaded and verified; waiting for user approval: current=$current_code latest=$latest_code"
+  exit 0
+fi
+
 write_update_status "starting update apply current=$current_code latest=$latest_code. Some services may be temporarily unavailable until update finishes."
 start_apply_staged_update "$stage"
 write_update_status "apply process started current=$current_code latest=$latest_code. Some services may be temporarily unavailable until update finishes."
 echo "Agent update downloaded and apply process started: current=$current_code latest=$latest_code"
-if [ "$FROM_AGENT" = "1" ]; then
-  exit 10
-fi
-exit 0
+exit 10

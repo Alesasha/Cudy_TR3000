@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import tempfile
 import gc
@@ -17,6 +18,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
 
 import vpn_control_app as app  # noqa: E402
+
+
+os.environ["CUDY_SEED_MANAGED_SERVICE_GROUPS"] = "0"
 
 
 INVENTORY = ROOT / "config" / "vpn_inventory.json"
@@ -236,6 +240,10 @@ def run_cached_winner_respects_effective_policy_check() -> None:
 
 
 def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
+    with app.connect(db_path) as conn:
+        conn.execute("DELETE FROM critical_services")
+        conn.execute("DELETE FROM agent_probe_jobs")
+        conn.execute("DELETE FROM global_domain_routes")
     for port, server_id in enumerate(["proxyde", "proxynl", "proxyus", "proxyfr"], start=18080):
         app.save_transport_config(
             db_path,
@@ -294,6 +302,8 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
     )
 
     with closing(app.connect(db_path)) as conn:
+        conn.execute("DELETE FROM critical_services")
+        conn.execute("DELETE FROM global_domain_routes")
         config = app.build_agent_config(
             conn,
             user_id=TEST_USER_ID,
@@ -353,6 +363,8 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
             """,
             (android_device_id, old_timestamp, old_timestamp, old_job["id"]),
         )
+        conn.execute("DELETE FROM critical_services")
+        conn.execute("DELETE FROM global_domain_routes")
         android_config = app.build_agent_config(
             conn,
             user_id=TEST_USER_ID,
@@ -908,25 +920,23 @@ def run_auto_worker_cache_ttl_check(tmp: Path) -> None:
 
 def run_service_dependency_probe_url_check(tmp: Path) -> None:
     db_path = tmp / "service-probe-url.db"
-    app.init_db(db_path, INVENTORY)
-    with app.connect(db_path) as conn:
-        entries = app.auto_probe_domain_rows(conn)
-    by_domain = {item["domain"]: item for item in entries}
-    assert_equal(
-        by_domain["googlevideo.com"].get("url"),
-        "https://www.youtube.com/",
-        "YouTube dependency must use the canonical service probe URL",
-    )
-    assert_equal(
-        by_domain["www.reutersmedia.net"].get("url"),
-        "https://www.reuters.com/",
-        "Reuters dependency must use the canonical service probe URL",
-    )
-    assert_equal(
-        by_domain["oaistatic.com"].get("url"),
-        "https://chatgpt.com/",
-        "OpenAI dependency must use the canonical service probe URL",
-    )
+    previous = os.environ.get("CUDY_SEED_MANAGED_SERVICE_GROUPS")
+    os.environ["CUDY_SEED_MANAGED_SERVICE_GROUPS"] = "1"
+    try:
+        app.init_db(db_path, INVENTORY)
+        with app.connect(db_path) as conn:
+            entries = app.auto_probe_domain_rows(conn)
+    finally:
+        if previous is None:
+            os.environ.pop("CUDY_SEED_MANAGED_SERVICE_GROUPS", None)
+        else:
+            os.environ["CUDY_SEED_MANAGED_SERVICE_GROUPS"] = previous
+    by_service = {item.get("service_key"): item for item in entries if item.get("service_key")}
+    assert_equal(by_service["youtube"].get("url"), "https://www.youtube.com/", "YouTube group probe URL")
+    assert_equal(by_service["reuters"].get("url"), "https://www.reuters.com/", "Reuters group probe URL")
+    assert_equal(by_service["chatgpt-openai"].get("url"), "https://chatgpt.com/", "OpenAI group probe URL")
+    member_domains = {"googlevideo.com", "www.reutersmedia.net", "oaistatic.com"}
+    assert_true(not member_domains.intersection(item["domain"] for item in entries), "group members must not schedule duplicate probes")
 
 
 def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
@@ -1050,6 +1060,26 @@ def run_service_group_shares_auto_winner_check(db_path: Path) -> None:
     result = lookup["results"][0]
     assert_equal(result["server_id"], "proxynl", "service group route lookup winner")
     assert_equal(result["matched_rule"]["source"], "global_service_group", "service group route lookup source")
+
+    timestamp = app.now()
+    with closing(app.connect(db_path)) as conn:
+        conn.execute(
+            """
+            INSERT INTO global_domain_routes (domain, server_id, enabled, created_at, updated_at)
+            VALUES ('two.smoke.example', 'auto', 1, ?, ?)
+            ON CONFLICT(domain) DO UPDATE SET server_id = 'auto', enabled = 1, updated_at = excluded.updated_at
+            """,
+            (timestamp, timestamp),
+        )
+        config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={"id": "service-group-device", "display_name": "Service Group", "platform": "windows"},
+        )
+    overlapping = next(route for route in config["domain_routes"] if route["domain"] == "two.smoke.example")
+    assert_equal(overlapping["server_id"], "proxynl", "global Auto route must retain the service-group winner")
+    assert_equal(overlapping["auto_cache_key"], global_key, "global Auto route must retain the service-group cache key")
+    assert_equal(overlapping["service_key"], "smoke-suite", "global Auto route must retain service metadata")
 
     app.save_critical_service(
         db_path,
