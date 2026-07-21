@@ -40,6 +40,13 @@ def main() -> int:
     assert "Archive uploaded in" in source
     assert "Deployment completed in" in source
     assert "install_agent_provisioning_ssh.py" in source
+    assert "vpn-control-provider-refresh.timer" in source
+    assert "systemctl enable --now vpn-control-provider-refresh.timer" in source
+    service_unit = (ROOT / "deploy" / "uswest" / "vpn-control.service").read_text(encoding="utf-8")
+    assert "--no-provider-refresh-worker" in service_unit
+    refresh_service = (ROOT / "deploy" / "uswest" / "vpn-control-provider-refresh.service").read_text(encoding="utf-8")
+    assert "CPUWeight=10" in refresh_service
+    assert "Nice=15" in refresh_service
     assert (ROOT / "config" / "android_enrollment_bootstrap.pub").is_file()
     provisioning_installer = (TOOLS / "install_agent_provisioning_ssh.py").read_text(encoding="utf-8")
     for marker in (

@@ -1,0 +1,17 @@
+[Unit]
+Description=Cudy VPN provider transport refresh
+After=network-online.target vpn-control.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=cudy-control
+Group=cudy-control
+WorkingDirectory=/opt/cudy-control
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONUTF8=1
+ExecStart=/usr/bin/nice -n 15 /usr/bin/python3 /opt/cudy-control/tools/vpn_control_app.py --db /opt/cudy-control/data/vpn_control.db --inventory /opt/cudy-control/config/vpn_inventory.json provider-refresh all --connect-timeout 5 --max-time 12 --json
+Nice=15
+CPUWeight=10
+IOSchedulingClass=idle
+TimeoutStartSec=15min

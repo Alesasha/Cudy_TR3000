@@ -159,8 +159,11 @@ tar -xf {remote_archive}
 chown -R {args.service_user}:{args.service_user} {args.remote_dir}
 python3 {args.remote_dir}/tools/install_agent_provisioning_ssh.py --service-user {args.service_user} --keys-path {args.remote_dir}/data/agent_authorized_keys
 cp {args.remote_dir}/deploy/uswest/vpn-control.service /etc/systemd/system/{args.service_name}.service
+cp {args.remote_dir}/deploy/uswest/vpn-control-provider-refresh.service /etc/systemd/system/vpn-control-provider-refresh.service
+cp {args.remote_dir}/deploy/uswest/vpn-control-provider-refresh.timer /etc/systemd/system/vpn-control-provider-refresh.timer
 systemctl daemon-reload
 systemctl enable --now {args.service_name} >/dev/null
+systemctl enable --now vpn-control-provider-refresh.timer >/dev/null
 systemctl restart {args.service_name}
 for i in $(seq 1 30); do
   curl -fsS http://127.0.0.1:8765/healthz 2>/tmp/vpn-control-health.err && break
