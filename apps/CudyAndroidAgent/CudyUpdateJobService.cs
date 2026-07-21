@@ -44,7 +44,8 @@ public sealed class CudyUpdateJobService : JobService
     {
         runningCts?.Cancel();
         runningCts = new CancellationTokenSource(TimeSpan.FromMinutes(15));
-        _ = RunAsync(parameters, runningCts.Token);
+        var cancellationToken = runningCts.Token;
+        _ = Task.Run(() => RunAsync(parameters, cancellationToken));
         return true;
     }
 

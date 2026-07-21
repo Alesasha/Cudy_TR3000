@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.34 (35)`.
+Latest published release candidate: `1.40 (41)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,8 +49,8 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.34-20260720.apk`;
-- SHA256: `3bf023c53a35d4738f4b1beab1ba7800de1f6698061f8b311e00a70cc92916ff`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.40-20260721.apk`;
+- SHA256: `41fb87efdb97e43bcd160f6301b24955b74ac1bb167f7c029e6da251b5d6b660`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
@@ -72,6 +72,20 @@ Android update acceptance on 2026-07-20:
 - final `1.34 (35)` was installed, package replacement restarted the VPN and
   control loop, and the immediate update job reported `up-to-date`;
 - Android/MIUI still requires user approval for the final sideload install.
+
+The 2026-07-21 `1.38 -> 1.40` production run also verified the current path:
+the app downloaded the 46.9 MB APK over its authenticated SSH channel, checked
+the version, signer and SHA256, and opened `PackageInstaller`. On devices with
+Google Play Protect, a private APK can be stopped at a warning screen. The owner
+must choose `Details`, then `Install anyway`, and confirm the device biometric
+or PIN. The app must not bypass this operating-system security decision.
+
+Version 1.40 restores the cached unified transport before waiting for the first
+remote policy, keeps one persistent SSH forward for control requests, runs the
+periodic updater away from Android's main thread and does not block service
+shutdown on an in-flight SSH request. The control policy excludes the Gosuslugi
+package `ru.rostel` from VpnService so that application stays on the direct
+physical connection.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 
@@ -174,7 +188,7 @@ apps/CudyAndroidAgent/bin/Release/net10.0-android/android-arm64/com.nashvpn.cudy
 The operator-friendly versioned copy is written to:
 
 ```text
-build/releases/NashVPN-CudyAgent-android-arm64-v1.34-YYYYMMDD.apk
+build/releases/NashVPN-CudyAgent-android-arm64-v1.40-YYYYMMDD.apk
 ```
 
 The current release profile intentionally keeps:
@@ -249,7 +263,7 @@ new one. Used and expired codes cannot activate another device.
 
 ## Mobile Administration
 
-Android `1.34 (35)` contains a minimal protected administrator screen. Open
+Android `1.40 (41)` contains a minimal protected administrator screen. Open
 `Cudy Agent -> Administration`, enter an enabled administrator account and use
 the following operations:
 
@@ -374,7 +388,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add optional rendered probes for services whose geographic decision is made
   by JavaScript rather than the initial HTTP body.
-- Repeat the physical 1.34 reboot/process-kill/update acceptance on the second
+- Repeat the physical 1.40 reboot/process-kill/update acceptance on the second
   enrolled phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).

@@ -32,7 +32,7 @@ new_hash="$(sha256sum "$config_path" | awk '{print $1}')"
 is_managed_transport_pid() {
   local candidate="$1" cmd
   [ -n "$candidate" ] && kill -0 "$candidate" 2>/dev/null || return 1
-  cmd="$(tr '\0' ' ' < "/proc/${candidate}/cmdline" 2>/dev/null || true)"
+  cmd="$(cat "/proc/${candidate}/cmdline" 2>/dev/null | tr '\0' ' ' || true)"
   case "$cmd" in
     *sing-box*" run -c ${config_path}"*) return 0 ;;
   esac

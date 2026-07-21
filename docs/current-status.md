@@ -1,6 +1,6 @@
 # Current Status
 
-Snapshot date: 2026-07-20.
+Snapshot date: 2026-07-21.
 
 Baseline tag: `snapshot-2026-07-18-android-code-enrollment-1.25`.
 
@@ -14,9 +14,9 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `683c518`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.34 (35)` published APK; its SHA256 is recorded in
+  - Android `1.40 (41)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
-  - Linux `1.23 (24)`, published from the current source with a manifest-verified package;
+  - Linux `1.25 (26)`, published from the current source with a manifest-verified package;
   - Windows `1.24 (25)`, SHA256
     `e5cd332ef12a3804b189b3f4d2908cf3e1ec28d418be4a554618db6e5ef1602f`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
@@ -98,7 +98,7 @@ channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
 
-Android `1.34 (35)` is published for the focused stability soak. It restores
+Android `1.40 (41)` is published for the focused stability soak. It restores
 persisted configuration when Android restarts the sticky VPN service, records
 process/service/boot/recovery markers, retries a native-engine or critical-link
 safety stop instead of remaining permanently off, and schedules a persisted
@@ -110,7 +110,7 @@ deployment, SHA256 verification, `/healthz`, and strict `/readyz` passed. A
 physical reboot, manual stop/start, process-kill recovery, foreground-service,
 VPN validation, and chained recovery-job acceptance passed on the Xiaomi Mi
 Note 10 Lite. A longer locked-screen/network-transition soak and repetition on
-the second enrolled phone remain the acceptance gate. Version 1.34 additionally
+the second enrolled phone remain the acceptance gate. Version 1.40 additionally
 checks the production update channel every six hours on an unmetered network,
 downloads through the device's authenticated SSH channel, verifies the APK hash,
 package, version and signer, and notifies the user to approve installation. The
@@ -281,14 +281,14 @@ dataplane.
 
 ## Android Agent
 
-Android `1.34 (35)` is built, signed and published on the production
+Android `1.40 (41)` is built, signed and published on the production
 control-server through the private Cudy management path. The production APK
 and update manifest both have SHA256
-`3bf023c53a35d4738f4b1beab1ba7800de1f6698061f8b311e00a70cc92916ff`.
+`41fb87efdb97e43bcd160f6301b24955b74ac1bb167f7c029e6da251b5d6b660`.
 Fresh-device code-only enrollment and the resulting per-device control channel
 passed against production. The universal APK has now been installed and
-activated successfully on two physical phones. The Xiaomi acceptance phone now
-runs `1.34 (35)` and basic routing works on both devices. Version `1.34 (35)`
+activated successfully on two physical phones. The Xiaomi acceptance phone was
+kept on `1.38 (39)` to exercise the real production update path. Version `1.40 (41)`
 keeps the recovery/UI work and adds verified background APK delivery; the
 multi-day acceptance soak remains.
 
@@ -314,17 +314,23 @@ Verified acceptance:
   `4D7F28AF106B` unchanged and no libbox reload;
 - a forced Wi-Fi outage kept the foreground service alive; after Wi-Fi returned
   the agent recreated the TUN and Android reported the VPN `VALIDATED` again.
-- the current physical-device check confirms version `1.34 (35)`, an active
+- the current physical-device check confirms an active
   foreground `CudyVpnService`, and a device-idle whitelist entry for
   `com.nashvpn.cudyagent`; the production package is not debuggable.
 - the Administration activity opens from the main application, is not exported
   to other Android applications, and displays its credential-protected login
   surface. It supports user/device create, edit, enable/disable, delete and
   one-time enrollment over the shared restricted SSH connection.
-- a real background update downloaded and verified `1.32 (33)`, notified the
-  user, passed Android's package installer, and upgraded the test phone; final
-  `1.34 (35)` then restored the foreground VPN and control loop after package
-  replacement and reported `up-to-date`.
+- a real `1.38 -> 1.40` production check downloaded the 46.9 MB APK through the
+  authenticated device channel, verified version, signer and SHA256, and opened
+  Android's installer. Google Play Protect requires the owner to approve the
+  private sideload (`Details -> Install anyway`) and then confirm biometrics;
+  that final owner confirmation is the remaining step of this acceptance run.
+- version 1.40 restores a cached libbox transport before the first remote policy
+  fetch, reuses one persistent SSH local forward, moves periodic update work off
+  Android's main thread, and avoids blocking service shutdown on an active SSH
+  request. The control policy also excludes the Gosuslugi package `ru.rostel`
+  from Android VpnService so its own VPN detection sees a direct connection.
 
 Remaining Android concerns:
 

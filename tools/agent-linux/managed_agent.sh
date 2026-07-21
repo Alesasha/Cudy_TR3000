@@ -102,7 +102,7 @@ cleanup_orphaned_control_tunnels() {
     pid="${proc#/proc/}"
     pid="${pid%/cmdline}"
     [ "$pid" = "$tracked_pid" ] && continue
-    cmd="$(tr '\0' ' ' < "$proc" 2>/dev/null || true)"
+    cmd="$(cat "$proc" 2>/dev/null | tr '\0' ' ' || true)"
     case "$cmd" in
       *"-L ${CONTROL_LOCAL_PORT}:127.0.0.1:${CONTROL_REMOTE_PORT}"*"${CONTROL_USER}@${CONTROL_HOST}"*)
         log "stopping orphaned SSH control tunnel pid=$pid"
@@ -219,9 +219,45 @@ PY
 }
 
 restore_direct_dns_baseline() {
-  if [ -x ./restore_direct.sh ]; then
-    ./restore_direct.sh --keep-transports || true
-  fi
+  [ -x ./restore_direct.sh ] || return 0
+
+  local default_line gw dev identity previous="" prefix route_line stable=1
+  default_line="$(ip -4 route show default | awk '
+    $1 == "default" {
+      gw=""; dev="";
+      for (i=1; i<=NF; i++) {
+        if ($i == "via") gw=$(i+1);
+        if ($i == "dev") dev=$(i+1);
+      }
+      if (dev !~ /^(amn|wg|awg|tun|ppp|sing|proxy|lokvpn)/) {
+        print gw, dev;
+        exit;
+      }
+    }
+  ')"
+  gw="$(printf '%s' "$default_line" | awk '{print $1}')"
+  dev="$(printf '%s' "$default_line" | awk '{print $2}')"
+  [ -n "${dev:-}" ] || stable=0
+  identity="${gw:-on-link}|${dev:-missing}|${DIRECT_BASELINE}"
+  [ -f run/direct-baseline.identity ] && previous="$(cat run/direct-baseline.identity 2>/dev/null || true)"
+  [ "$identity" = "$previous" ] || stable=0
+
+  for prefix in 0.0.0.0/1 128.0.0.0/1; do
+    route_line="$(ip -4 route show "$prefix" 2>/dev/null || true)"
+    if [ "$DIRECT_BASELINE" = "1" ]; then
+      [ "$(printf '%s\n' "$route_line" | grep -c . || true)" = "1" ] || stable=0
+      printf '%s\n' "$route_line" | grep -Eq "(^| )dev ${dev}($| )" || stable=0
+      if [ -n "${gw:-}" ]; then
+        printf '%s\n' "$route_line" | grep -Eq "(^| )via ${gw}($| )" || stable=0
+      fi
+    elif [ -n "$route_line" ]; then
+      stable=0
+    fi
+  done
+
+  [ "$stable" = "1" ] && return 0
+  ./restore_direct.sh --keep-transports || true
+  printf '%s\n' "$identity" > run/direct-baseline.identity
 }
 
 stop_unused_transports() {

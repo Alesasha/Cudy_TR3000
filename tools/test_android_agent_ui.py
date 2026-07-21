@@ -169,6 +169,8 @@ def main() -> int:
             "PackageInstallStatus.PendingUserAction",
             "PackageInstallStatus.Success",
             "Intent.ExtraIntent",
+            "Agent restart requested after successful update.",
+            "CudyRecoveryJobService.Schedule(context)",
         ],
     )
     assert_contains(MANIFEST, ['android.permission.REQUEST_INSTALL_PACKAGES'])
@@ -177,8 +179,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>37</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.36</ApplicationDisplayVersion>",
+            "<ApplicationVersion>41</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.40</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -354,9 +356,38 @@ def main() -> int:
             '["type"] = "fakeip"',
             '["inet4_range"] = "198.18.0.0/15"',
             'CollectTunneledDomainSuffixes(',
-            '["exclude_package"] = new JsonArray { "com.nashvpn.cudyagent" }',
+            '["exclude_package"] = AndroidVpnBypassPackages(root)',
+            '"com.nashvpn.cudyagent"',
+            '"vpn_bypass_packages"',
             "is unavailable on Android and will be blocked",
             'outboundTags[entry.ServerId] = "block"',
+        ],
+    )
+    assert_contains(
+        SSH_CONTROL,
+        [
+            "Timeout = TimeSpan.FromSeconds(12)",
+            "ConnectTimeout = TimeSpan.FromSeconds(2)",
+            "Timeout = TimeSpan.FromSeconds(60)",
+            "IsLocalForwardStarting",
+            "attempt < 5",
+        ],
+    )
+    assert_contains(
+        VPN_SERVICE,
+        [
+            "TryStartCachedTransport()",
+            'Path.Combine(filesPath, "transports", "cudy0.json")',
+            "connected with cached routing; refreshing policy",
+            "forceReload: cachedTransportNeedsRefresh",
+            "Monitor.TryEnter(sshRequestLock, TimeSpan.FromMilliseconds(250))",
+            "SSH request is still active during shutdown; cleanup continues in background.",
+        ],
+    )
+    assert_contains(
+        UPDATE_JOB,
+        [
+            "Task.Run(() => RunAsync(parameters, cancellationToken))",
         ],
     )
     print("Android agent UI static smoke passed.")

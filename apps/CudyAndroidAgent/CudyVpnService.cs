@@ -34,6 +34,7 @@ public class CudyVpnService : VpnService
     private CancellationTokenSource? loopCts;
     private Task? loopTask;
     private SshClient? sshClient;
+    private ForwardedPortLocal? sshForward;
     private readonly object sshRequestLock = new();
     private CudyAndroidLibboxEngine? libboxEngine;
     private bool useSshControl;
@@ -46,6 +47,7 @@ public class CudyVpnService : VpnService
     private string debugProbeUrl = "";
     private string debugProbeCandidates = "";
     private bool debugProbePending;
+    private bool cachedTransportNeedsRefresh;
     private IReadOnlyList<CudyCriticalService> criticalServices = Array.Empty<CudyCriticalService>();
     private int consecutiveCriticalFailures;
     private string activeStartFingerprint = "";
@@ -218,7 +220,11 @@ public class CudyVpnService : VpnService
         libboxEngine ??= new CudyAndroidLibboxEngine(this);
         tun?.Close();
         tun = null;
-        SaveServiceStatus(controlOnly ? "control-only started" : "libbox engine starting");
+        var restoredCachedTransport = !controlOnly && TryStartCachedTransport();
+        if (!restoredCachedTransport)
+        {
+            SaveServiceStatus(controlOnly ? "control-only started" : "libbox engine starting");
+        }
 
         loopCts?.Cancel();
         loopCts = new CancellationTokenSource();
@@ -226,6 +232,45 @@ public class CudyVpnService : VpnService
         loopTask = Task.Run(
             () => RunControlLoopAsync(controlUrl, deviceId, token, controlOnly, startupDelaySeconds, loopCts.Token),
             loopCts.Token);
+    }
+
+    private bool TryStartCachedTransport()
+    {
+        try
+        {
+            var filesPath = FilesDir?.AbsolutePath;
+            if (string.IsNullOrWhiteSpace(filesPath))
+            {
+                return false;
+            }
+            var configPath = Path.Combine(filesPath, "transports", "cudy0.json");
+            if (!File.Exists(configPath))
+            {
+                return false;
+            }
+            var cached = new CudyStoredTransport(
+                "android-unified",
+                "cudy0",
+                "sing-box-unified",
+                configPath);
+            var runtime = CudySingBoxRuntime.Probe(new[] { cached });
+            if (!runtime.Available || !runtime.ConfigChecked || !string.IsNullOrWhiteSpace(runtime.Error))
+            {
+                Log.Warn(LogTag, $"Cached transport is not usable: {runtime.SafeSummary()}");
+                return false;
+            }
+            var engine = libboxEngine?.StartOrReload(cached) ?? "engine=unavailable";
+            cachedTransportNeedsRefresh = true;
+            SaveServiceStatus("connected with cached routing; refreshing policy", "connected");
+            UpdateNotification("Connected; refreshing routing policy");
+            Log.Info(LogTag, $"Cached transport restored before control refresh: {engine}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warn(LogTag, $"Cached transport restore failed: {ex.Message}");
+            return false;
+        }
     }
 
     private static string StartString(Intent? intent, ISharedPreferences? preferences, string key)
@@ -265,18 +310,27 @@ public class CudyVpnService : VpnService
         libboxEngine?.Stop();
         tun?.Close();
         tun = null;
-        lock (sshRequestLock)
+        if (Monitor.TryEnter(sshRequestLock, TimeSpan.FromMilliseconds(250)))
         {
             try
             {
-                sshClient?.Disconnect();
-                sshClient?.Dispose();
+                DisposeSshControl();
             }
-            catch
+            finally
             {
-                // Best effort shutdown.
+                Monitor.Exit(sshRequestLock);
             }
-            sshClient = null;
+        }
+        else
+        {
+            Log.Warn(LogTag, "SSH request is still active during shutdown; cleanup continues in background.");
+            _ = Task.Run(() =>
+            {
+                lock (sshRequestLock)
+                {
+                    DisposeSshControl();
+                }
+            });
         }
         useSshControl = false;
         sshControlHost = "";
@@ -288,6 +342,27 @@ public class CudyVpnService : VpnService
         debugProbePending = false;
         activeStartFingerprint = "";
         runtimeShuttingDown = false;
+    }
+
+    private void DisposeSshControl()
+    {
+        try
+        {
+            sshForward?.Stop();
+            if (sshForward is not null && sshClient is not null)
+            {
+                sshClient.RemoveForwardedPort(sshForward);
+            }
+            sshForward?.Dispose();
+            sshClient?.Disconnect();
+            sshClient?.Dispose();
+        }
+        catch
+        {
+            // Best effort shutdown.
+        }
+        sshForward = null;
+        sshClient = null;
     }
 
     private static string StartFingerprint(
@@ -307,28 +382,6 @@ public class CudyVpnService : VpnService
             sshHostKeySha256,
             controlOnly ? "control-only" : "vpn");
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
-    }
-
-    private void StartSshControl(string host, string user, string privateKey, string hostKeySha256)
-    {
-        lock (sshRequestLock)
-        {
-            sshClient?.Disconnect();
-            sshClient?.Dispose();
-            sshClient = null;
-
-            var client = CudySshControl.CreateClient(host, user, privateKey, hostKeySha256);
-            Log.Info(LogTag, $"SSH control connecting {host}:22");
-            client.Connect();
-
-            sshClient = client;
-            sshControlHost = host;
-            sshControlUser = user;
-            sshControlHostKeySha256 = hostKeySha256;
-            sshControlKey = privateKey;
-            SaveServiceStatus("ssh control ok");
-            Log.Info(LogTag, $"SSH control ok {host}:22 -> 127.0.0.1:8765");
-        }
     }
 
     private string RunSshControlWithRetry(string method, string token, string path, string? body)
@@ -358,12 +411,12 @@ public class CudyVpnService : VpnService
         {
             try
             {
-                if (sshClient?.IsConnected != true)
+                if (sshClient?.IsConnected != true || sshForward?.IsStarted != true)
                 {
                     ReconnectSshControl();
                 }
                 return CudySshControl.RunControlRequestDetailed(
-                    sshClient ?? throw new InvalidOperationException("SSH control client is not connected."),
+                    sshForward ?? throw new InvalidOperationException("SSH control forward is not started."),
                     method,
                     null,
                     cookie,
@@ -375,7 +428,7 @@ public class CudyVpnService : VpnService
                 Log.Warn(LogTag, $"Shared admin request failed, reconnecting once: {firstError.Message}");
                 ReconnectSshControl();
                 return CudySshControl.RunControlRequestDetailed(
-                    sshClient ?? throw new InvalidOperationException("SSH control client is not connected."),
+                    sshForward ?? throw new InvalidOperationException("SSH control forward is not started."),
                     method,
                     null,
                     cookie,
@@ -391,12 +444,12 @@ public class CudyVpnService : VpnService
         {
             throw new InvalidOperationException("SSH control is not enabled.");
         }
-        if (sshClient?.IsConnected != true)
+        if (sshClient?.IsConnected != true || sshForward?.IsStarted != true)
         {
             ReconnectSshControl();
         }
         return CudySshControl.RunControlRequest(
-            sshClient ?? throw new InvalidOperationException("SSH control client is not connected."),
+            sshForward ?? throw new InvalidOperationException("SSH control forward is not started."),
             method,
             token,
             path,
@@ -414,6 +467,12 @@ public class CudyVpnService : VpnService
 
         try
         {
+            sshForward?.Stop();
+            if (sshForward is not null && sshClient is not null)
+            {
+                sshClient.RemoveForwardedPort(sshForward);
+            }
+            sshForward?.Dispose();
             sshClient?.Disconnect();
             sshClient?.Dispose();
         }
@@ -421,6 +480,8 @@ public class CudyVpnService : VpnService
         {
             // Best effort reconnect.
         }
+        sshForward = null;
+        sshClient = null;
 
         var client = CudySshControl.CreateClient(
             sshControlHost,
@@ -428,8 +489,12 @@ public class CudyVpnService : VpnService
             sshControlKey,
             sshControlHostKeySha256);
         client.Connect();
+        var forward = new ForwardedPortLocal("127.0.0.1", 0, "127.0.0.1", 8765);
+        client.AddForwardedPort(forward);
+        forward.Start();
         sshClient = client;
-        Log.Info(LogTag, $"SSH control reconnected {sshControlHost}:22");
+        sshForward = forward;
+        Log.Info(LogTag, $"SSH control reconnected {sshControlHost}:22 local_port={forward.BoundPort}");
     }
 
     private async Task RunControlLoopAsync(
@@ -496,7 +561,10 @@ public class CudyVpnService : VpnService
                 if (!controlOnly && stored.Count > 0)
                 {
                     SetPolicyRoutes(root);
-                    engineSummary = libboxEngine?.StartOrReload(stored[0]) ?? "engine=unavailable";
+                    engineSummary = libboxEngine?.StartOrReload(
+                        stored[0],
+                        forceReload: cachedTransportNeedsRefresh) ?? "engine=unavailable";
+                    cachedTransportNeedsRefresh = false;
                     if (libboxEngine is not null)
                     {
                         SaveServiceStatus("connected; background route checks running", "connected");

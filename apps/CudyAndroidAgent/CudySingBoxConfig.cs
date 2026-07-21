@@ -114,7 +114,7 @@ public static class CudySingBoxConfig
                 ["auto_route"] = true,
                 ["strict_route"] = false,
                 ["stack"] = "gvisor",
-                ["exclude_package"] = new JsonArray { "com.nashvpn.cudyagent" },
+                ["exclude_package"] = AndroidVpnBypassPackages(root),
             },
         };
         AddLocalProbeInbounds(localProbes, inbounds);
@@ -209,6 +209,37 @@ public static class CudySingBoxConfig
             "cudy0",
             "sing-box-unified",
             config.ToJsonString(JsonOptions));
+    }
+
+    private static JsonArray AndroidVpnBypassPackages(JsonElement root)
+    {
+        var packages = new SortedSet<string>(StringComparer.Ordinal)
+        {
+            "com.nashvpn.cudyagent",
+        };
+        if (root.TryGetProperty("platform_settings", out var platformSettings)
+            && platformSettings.ValueKind == JsonValueKind.Object
+            && platformSettings.TryGetProperty("android", out var android)
+            && android.ValueKind == JsonValueKind.Object
+            && android.TryGetProperty("vpn_bypass_packages", out var configured)
+            && configured.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in configured.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.String)
+                {
+                    continue;
+                }
+                var packageName = (item.GetString() ?? "").Trim();
+                if (packageName.Length is > 2 and <= 255
+                    && packageName.Contains('.', StringComparison.Ordinal)
+                    && packageName.All(ch => char.IsLetterOrDigit(ch) || ch is '.' or '_'))
+                {
+                    packages.Add(packageName);
+                }
+            }
+        }
+        return new JsonArray(packages.Select(item => JsonValue.Create(item)).ToArray<JsonNode?>());
     }
 
     private static SortedSet<string> CollectTunneledDomainSuffixes(

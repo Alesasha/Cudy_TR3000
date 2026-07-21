@@ -703,6 +703,14 @@ def main() -> int:
             agent_bootstrap = fetch_json_with_bearer(f"{base_url}/api/agent/bootstrap", device_token)
             if agent_bootstrap.get("user", {}).get("id") != "phone-user":
                 raise AssertionError(f"agent bootstrap returned the wrong user: {agent_bootstrap!r}")
+            agent_config = fetch_json_with_bearer(f"{base_url}/api/agent/config", device_token)
+            bypass_packages = (
+                agent_config.get("platform_settings", {})
+                .get("android", {})
+                .get("vpn_bypass_packages", [])
+            )
+            if "ru.rostel" not in bypass_packages:
+                raise AssertionError(f"Android VPN bypass packages are missing: {agent_config!r}")
             posted_status = post_json_with_bearer(
                 f"{base_url}/api/agent/status",
                 device_token,

@@ -8085,6 +8085,12 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
 
     transport_plan = build_transport_plan(conn, server_ids=referenced_server_ids, warnings=warnings)
 
+    platform_settings: dict[str, Any] = {}
+    if str(device.get("platform") or "").strip().lower() == "android":
+        platform_settings["android"] = {
+            "vpn_bypass_packages": ["ru.rostel"],
+        }
+
     return {
         "schema_version": 1,
         "generated_at": now(),
@@ -8112,6 +8118,7 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         "transport_plan": transport_plan,
         "auto_candidates": auto_candidate_policy_rows(conn),
         "critical_services": effective_critical_services(conn, user_id=user_id),
+        "platform_settings": platform_settings,
         "warnings": warnings,
     }
 

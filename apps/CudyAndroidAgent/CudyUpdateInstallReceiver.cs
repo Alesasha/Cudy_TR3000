@@ -3,6 +3,7 @@ namespace CudyAndroidAgent;
 using Android.App;
 using Android.Content;
 using Android.Content.PM;
+using Android.OS;
 using Android.Util;
 
 [BroadcastReceiver(
@@ -46,6 +47,30 @@ public sealed class CudyUpdateInstallReceiver : BroadcastReceiver
                 ?.PutString("update_error", "")
                 ?.Apply();
             Log.Info(LogTag, "Android update installed successfully.");
+            if (preferences?.GetBoolean("agent_requested_running", false) == true)
+            {
+                try
+                {
+                    var serviceIntent = new Intent(context, typeof(CudyVpnService));
+                    serviceIntent.SetAction(CudyVpnService.ActionStart);
+                    if ((int)Build.VERSION.SdkInt >= 26)
+                    {
+#pragma warning disable CA1416
+                        context.StartForegroundService(serviceIntent);
+#pragma warning restore CA1416
+                    }
+                    else
+                    {
+                        context.StartService(serviceIntent);
+                    }
+                    Log.Info(LogTag, "Agent restart requested after successful update.");
+                }
+                catch (Exception ex)
+                {
+                    Log.Warn(LogTag, "Agent restart after update failed: " + ex.Message);
+                    CudyRecoveryJobService.Schedule(context);
+                }
+            }
             return;
         }
         preferences?.Edit()

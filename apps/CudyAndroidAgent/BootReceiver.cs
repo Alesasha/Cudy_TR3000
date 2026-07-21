@@ -102,7 +102,7 @@ public sealed class BootReceiver : BroadcastReceiver
         serviceIntent.PutExtra("control_only", false);
         if (action == Intent.ActionBootCompleted || action == Intent.ActionUserUnlocked)
         {
-            serviceIntent.PutExtra("startup_delay_seconds", 20);
+            serviceIntent.PutExtra("startup_delay_seconds", 5);
         }
 
         try

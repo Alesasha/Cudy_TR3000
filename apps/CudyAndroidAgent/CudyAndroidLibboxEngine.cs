@@ -37,7 +37,7 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
         clientHandler = new CudyLibboxCommandClientHandler();
     }
 
-    public string StartOrReload(CudyStoredTransport transport)
+    public string StartOrReload(CudyStoredTransport transport, bool forceReload = false)
     {
         EnsureSetup();
         var configJson = File.ReadAllText(transport.ConfigPath);
@@ -55,7 +55,7 @@ public sealed class CudyAndroidLibboxEngine : IDisposable
         {
             var now = DateTimeOffset.UtcNow;
             var reloadAt = activeConfigStartedAt + MinimumReloadInterval;
-            if (!string.IsNullOrEmpty(activeConfigHash) && now < reloadAt)
+            if (!forceReload && !string.IsNullOrEmpty(activeConfigHash) && now < reloadAt)
             {
                 if (string.IsNullOrEmpty(pendingConfigHash))
                 {

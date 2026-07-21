@@ -21,7 +21,7 @@ Current repo status:
 - With `apps/CudyAndroidAgent/Libs/libbox.aar`, the smoke test can load
   `lib/arm64-v8a/libbox.so` and call `Libbox.checkConfig(...)` for the first
   stored config.
-- Current verified release is Android `1.21 (22)` with the unified engine
+- Current published release is Android `1.40 (41)` with the unified engine
   running and the Android VPN network marked `VALIDATED`.
 - Android `VpnService.Builder` uses libbox `Inet4RouteRange` and captures
   `0.0.0.0/0`; DNS is sent to the TUN and hijacked by sing-box.

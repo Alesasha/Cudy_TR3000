@@ -1,5 +1,6 @@
 using Renci.SshNet;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text;
 
 namespace CudyAndroidAgent;
@@ -81,7 +82,7 @@ public static class CudySshControl
         var auth = new PrivateKeyAuthenticationMethod(user, keyFile);
         var connection = new ConnectionInfo(host, 22, user, auth)
         {
-            Timeout = TimeSpan.FromSeconds(20),
+            Timeout = TimeSpan.FromSeconds(12),
         };
         var client = new SshClient(connection);
         client.HostKeyReceived += (_, args) =>
@@ -123,6 +124,22 @@ public static class CudySshControl
         return response.Body;
     }
 
+    public static string RunControlRequest(
+        ForwardedPortLocal forward,
+        string method,
+        string? token,
+        string path,
+        string? body)
+    {
+        var response = RunControlRequestDetailed(forward, method, token, null, path, body);
+        if (response.StatusCode is < 200 or >= 300)
+        {
+            throw new InvalidOperationException(
+                $"control request failed http={response.StatusCode}: {response.Body.Trim()}");
+        }
+        return response.Body;
+    }
+
     public static ControlResponse RunControlRequestDetailed(
         SshClient client,
         string method,
@@ -142,33 +159,79 @@ public static class CudySshControl
         forward.Start();
         try
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
-            using var request = new HttpRequestMessage(
-                new HttpMethod(method),
-                $"http://127.0.0.1:{forward.BoundPort}{path}");
-            if (!string.IsNullOrWhiteSpace(token))
-            {
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            }
-            if (!string.IsNullOrWhiteSpace(cookie))
-            {
-                request.Headers.TryAddWithoutValidation("Cookie", cookie);
-            }
-            if (body is not null)
-            {
-                request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-            }
-            using var response = http.SendAsync(request).GetAwaiter().GetResult();
-            var result = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-            var setCookie = response.Headers.TryGetValues("Set-Cookie", out var cookieValues)
-                ? cookieValues.FirstOrDefault() ?? ""
-                : "";
-            return new ControlResponse((int)response.StatusCode, result, setCookie);
+            return RunControlRequestDetailed(forward, method, token, cookie, path, body);
         }
         finally
         {
             forward.Stop();
             client.RemoveForwardedPort(forward);
         }
+    }
+
+    public static ControlResponse RunControlRequestDetailed(
+        ForwardedPortLocal forward,
+        string method,
+        string? token,
+        string? cookie,
+        string path,
+        string? body)
+    {
+        if (!forward.IsStarted)
+        {
+            throw new InvalidOperationException("SSH control forward is not started.");
+        }
+        using var handler = new SocketsHttpHandler
+        {
+            ConnectTimeout = TimeSpan.FromSeconds(2),
+        };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                using var request = new HttpRequestMessage(
+                    new HttpMethod(method),
+                    $"http://127.0.0.1:{forward.BoundPort}{path}");
+                if (!string.IsNullOrWhiteSpace(token))
+                {
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                }
+                if (!string.IsNullOrWhiteSpace(cookie))
+                {
+                    request.Headers.TryAddWithoutValidation("Cookie", cookie);
+                }
+                if (body is not null)
+                {
+                    request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+                }
+                using var response = http.SendAsync(request).GetAwaiter().GetResult();
+                var result = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                var setCookie = response.Headers.TryGetValues("Set-Cookie", out var cookieValues)
+                    ? cookieValues.FirstOrDefault() ?? ""
+                    : "";
+                return new ControlResponse((int)response.StatusCode, result, setCookie);
+            }
+            catch (HttpRequestException ex) when (attempt < 5 && IsLocalForwardStarting(ex))
+            {
+                Thread.Sleep(TimeSpan.FromMilliseconds(150 * attempt));
+            }
+        }
+    }
+
+    private static bool IsLocalForwardStarting(Exception error)
+    {
+        for (var current = error; current is not null; current = current.InnerException!)
+        {
+            if (current is SocketException socket
+                && socket.SocketErrorCode is SocketError.ConnectionRefused or SocketError.AddressNotAvailable)
+            {
+                return true;
+            }
+            if (current.InnerException is null)
+            {
+                break;
+            }
+        }
+        return false;
     }
 }

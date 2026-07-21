@@ -1328,10 +1328,18 @@ def direct_baseline_commands(plan: dict[str, Any]) -> tuple[list[str], list[str]
                     interface_metric=1,
                 )
             )
-        elif via:
-            commands.append(f"ip route replace {cidr} via {via} dev {dev}")
         else:
-            commands.append(f"ip route replace {cidr} dev {dev}")
+            rc, current = run_text(["ip", "-4", "route", "show", cidr])
+            current_lines = current.splitlines() if rc == 0 else []
+            expected_tokens = {"dev", str(dev)}
+            if via:
+                expected_tokens.update({"via", str(via)})
+            already_correct = len(current_lines) == 1 and expected_tokens.issubset(set(current_lines[0].split()))
+            if not already_correct:
+                if via:
+                    commands.append(f"ip route replace {cidr} via {via} dev {dev}")
+                else:
+                    commands.append(f"ip route replace {cidr} dev {dev}")
     if plan.get("platform") == "windows":
         commands.extend(cleanup_commands)
     return commands, []

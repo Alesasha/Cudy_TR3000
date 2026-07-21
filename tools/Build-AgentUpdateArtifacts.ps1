@@ -2,10 +2,10 @@ param(
     [string]$OutputDir = "$PSScriptRoot\..\build\agent-updates",
     [string]$VersionName = "1.25",
     [int]$VersionCode = 26,
-    [string]$LinuxVersionName = "1.24",
-    [int]$LinuxVersionCode = 25,
-    [string]$AndroidVersionName = "1.36",
-    [int]$AndroidVersionCode = 37,
+    [string]$LinuxVersionName = "1.25",
+    [int]$LinuxVersionCode = 26,
+    [string]$AndroidVersionName = "1.40",
+    [int]$AndroidVersionCode = 41,
     [string]$AndroidApk = "",
     [ValidateSet("windows", "linux", "android")]
     [string[]]$Platforms = @("windows", "linux", "android")
