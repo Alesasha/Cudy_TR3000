@@ -10,6 +10,7 @@ VERSION_FILE="${AGENT_VERSION_FILE:-./agent.version.json}"
 WORK_DIR="${AGENT_UPDATE_DIR:-./updates}"
 SERVICE_NAME="${AGENT_SERVICE_NAME:-cudy-managed-agent.service}"
 UPDATE_STATUS_FILE="${AGENT_UPDATE_STATUS_FILE:-./run/update-status.txt}"
+UPDATE_MARKER_FILE="${AGENT_UPDATE_MARKER_FILE:-./run/update-in-progress.json}"
 FROM_AGENT=0
 FORCE_UPDATE=0
 APPLY_STAGE=""
@@ -20,7 +21,31 @@ write_update_status() {
   printf '[%s] %s\n' "$(date -Is)" "$*" >"$UPDATE_STATUS_FILE" 2>/dev/null || true
 }
 
-trap 'rc=$?; if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then write_update_status "failed rc=$rc. Some services may be unavailable until the agent is restarted or turned off/on."; fi' EXIT
+write_update_marker() {
+  mkdir -p "$(dirname "$UPDATE_MARKER_FILE")" >/dev/null 2>&1 || true
+  python3 - "$UPDATE_MARKER_FILE" "$1" <<'PY' 2>/dev/null || true
+import json, os, sys, time
+path, phase = sys.argv[1:3]
+temp = path + ".tmp"
+with open(temp, "w", encoding="utf-8") as fh:
+    json.dump({"phase": phase, "updated_at_epoch": int(time.time())}, fh)
+    fh.write("\n")
+os.replace(temp, path)
+PY
+}
+
+clear_update_marker() {
+  rm -f -- "$UPDATE_MARKER_FILE" 2>/dev/null || true
+}
+
+on_exit() {
+  rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then
+    write_update_status "failed rc=$rc. Some services may be unavailable until the agent is restarted or turned off/on."
+    clear_update_marker
+  fi
+}
+trap on_exit EXIT
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -115,13 +140,16 @@ apply_staged_update() {
   local stage_path="$1"
   local log_file="logs/update-agent.out.log"
   write_update_status "applying staged update. Some services may be temporarily unavailable until update finishes."
+  write_update_marker "applying"
   echo "Applying staged agent update from $stage_path" >> "$log_file" 2>/dev/null || true
   sleep 3
   if command -v systemctl >/dev/null 2>&1; then
     write_update_status "stopping agent service to apply update. Some services may be temporarily unavailable until update finishes."
+    write_update_marker "stopping-service"
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
   fi
   write_update_status "installing new agent files. Some services may be temporarily unavailable until update finishes."
+  write_update_marker "installing"
   copy_update_files "$stage_path"
   if [ -f "$stage_path/agent.version.json" ]; then
     cp -f "$stage_path/agent.version.json" "$VERSION_FILE"
@@ -130,6 +158,7 @@ apply_staged_update() {
   echo "Installed version code: $(current_version_code)" >> "$log_file" 2>/dev/null || true
   if command -v systemctl >/dev/null 2>&1; then
     write_update_status "restarting agent service after update."
+    write_update_marker "restarting-service"
     if ! ./install_systemd.sh "$SERVICE_NAME" >>"$log_file" 2>&1; then
       echo "install_systemd.sh failed; attempting direct service restart" >>"$log_file"
       systemctl daemon-reload >>"$log_file" 2>&1 || true
@@ -151,6 +180,7 @@ apply_staged_update() {
     write_update_status "completed current=$(current_version_code) service=not-managed."
   fi
   rm -rf -- "$WORK_DIR" 2>/dev/null || true
+  clear_update_marker
   echo "Agent update applied from $stage_path"
 }
 
@@ -211,6 +241,7 @@ PY
 current_code="$(current_version_code)"
 
 if [ "$latest_code" -le "$current_code" ] && [ "$FORCE_UPDATE" = "0" ]; then
+  clear_update_marker
   write_update_status "up_to_date current=$current_code latest=$latest_code."
   echo "Agent is up to date: current=$current_code latest=$latest_code"
   exit 0
@@ -225,6 +256,7 @@ rm -rf -- "$WORK_DIR"
 mkdir -p "$WORK_DIR" logs
 archive="$WORK_DIR/agent-update-${PLATFORM}-${latest_code}.zip"
 stage="$WORK_DIR/stage"
+write_update_marker "downloading"
 write_update_status "downloading update current=$current_code latest=$latest_code. Some services may be temporarily unavailable until update finishes."
 python3 - "$CONTROL_URL" "$download_url" "$archive" "${VPN_AGENT_TOKEN:-}" <<'PY'
 import sys

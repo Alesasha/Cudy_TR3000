@@ -45,6 +45,10 @@ UPDATE_STATUS_RAW = os.environ.get("AGENT_UPDATE_STATUS_FILE") or AGENT_ENV.get(
 UPDATE_STATUS_FILE = Path(UPDATE_STATUS_RAW)
 if not UPDATE_STATUS_FILE.is_absolute():
     UPDATE_STATUS_FILE = ROOT / UPDATE_STATUS_FILE
+UPDATE_MARKER_RAW = os.environ.get("AGENT_UPDATE_MARKER_FILE") or AGENT_ENV.get("AGENT_UPDATE_MARKER_FILE") or "run/update-in-progress.json"
+UPDATE_MARKER_FILE = Path(UPDATE_MARKER_RAW)
+if not UPDATE_MARKER_FILE.is_absolute():
+    UPDATE_MARKER_FILE = ROOT / UPDATE_MARKER_FILE
 
 VPN_INTERFACE_PREFIXES = ("proxy", "lokvpn", "amn", "awg", "wg", "tun", "sing")
 UPDATE_ACTION_LABELS = {"Update Agent", "Update / Repair"}
@@ -114,7 +118,11 @@ def service_info() -> dict[str, str | bool | float | None]:
     active_value = active if active_rc == 0 else active or "unknown"
     enabled_value = enabled if enabled_rc == 0 else enabled or "unknown"
     updating = update_in_progress(update_status) if update_status else False
-    if active_value != "active" and enabled_value == "enabled" and watchdog_recovery_pending():
+    if updating:
+        state = "warn"
+        title = "UPDATING"
+        comment = "Updating agent; internet may be briefly unavailable"
+    elif active_value != "active" and enabled_value == "enabled" and watchdog_recovery_pending():
         state = "warn"
         title = "RECOVERY"
         comment = "Direct internet restored; retrying agent soon"
@@ -126,10 +134,6 @@ def service_info() -> dict[str, str | bool | float | None]:
         state = "off"
         title = "OFF"
         comment = "Agent is stopped"
-    elif updating:
-        state = "warn"
-        title = "APP UPDATE"
-        comment = "Installing agent software"
     elif control_ok:
         state = "ok"
         title = "OK"
@@ -199,6 +203,13 @@ def read_update_status() -> str:
 
 
 def update_in_progress(status: str) -> bool:
+    try:
+        marker = json.loads(UPDATE_MARKER_FILE.read_text(encoding="utf-8"))
+        marker_age = time.time() - int(marker.get("updated_at_epoch") or 0)
+        if 0 <= marker_age <= 1800:
+            return True
+    except (OSError, ValueError, TypeError):
+        pass
     try:
         if time.time() - UPDATE_STATUS_FILE.stat().st_mtime > 600:
             return False
@@ -295,6 +306,8 @@ class AgentUi:
         self.speed_url = StringVar(value="")
         self.current_version_code = 0
         self.latest_version_code = 0
+        self.loaded_version_code = current_version()[1]
+        self.relaunching = False
         self.traffic_counters = read_managed_traffic_counters()
         self.traffic_delta = 0
         self.busy = False
@@ -432,6 +445,7 @@ class AgentUi:
         self.traffic_counters = current_counters
         self.draw_indicator(str(info["state"]), str(info["title"]))
         self.status_line.set(str(info["comment"]))
+        self.listbox.config(state="disabled" if info["updating"] else "normal")
         details = [
             f"Service: {info['active']}",
             f"Autostart: {info['enabled']}",
@@ -446,6 +460,17 @@ class AgentUi:
         current_name, current_code = current_version()
         latest = latest_version()
         self.current_version_code = current_code
+        if (
+            self.loaded_version_code > 0
+            and current_code > 0
+            and current_code != self.loaded_version_code
+            and not info["updating"]
+            and not self.relaunching
+        ):
+            self.relaunching = True
+            self.write_output("Agent software was updated. Restarting this window to load the new UI...")
+            self.root.after(250, self.restart_window_after_background_update)
+            return
         if latest is None:
             self.latest_version_code = 0
             self.version_status.set(f"Software: installed {current_name or '-'} | latest unavailable")
@@ -454,7 +479,15 @@ class AgentUi:
         latest_name, latest_code = latest
         self.latest_version_code = latest_code
         self.version_status.set(f"Software: installed {current_name or '-'} | latest {latest_name or '-'}")
-        self.update_button.config(state="normal" if latest_code > current_code else "disabled")
+        self.update_button.config(state="normal" if latest_code > current_code and not info["updating"] else "disabled")
+
+    def restart_window_after_background_update(self) -> None:
+        try:
+            launch_fresh_ui()
+            self.root.destroy()
+        except Exception as exc:
+            self.relaunching = False
+            self.write_output(f"Automatic UI restart failed: {exc}")
 
     def refresh_status_periodic(self) -> None:
         if not self.busy:

@@ -16,7 +16,7 @@ This document records the verified live state. Planned work belongs in
 - Current agent artifacts:
   - Android `1.42 (43)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
-  - Linux `1.27 (28)`, published from the current source with a manifest-verified package;
+  - Linux `1.28 (29)`, published from the current source with a manifest-verified package;
   - Windows `1.27 (28)`, SHA256
     `e4719300e06ec22b835fdef75266bbabd698c23c8ab7fa75ac387642e576b6e2`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
@@ -383,7 +383,7 @@ Remaining Android concerns:
 
 ## Linux Agent
 
-- Linux `1.27 (28)` is published.
+- Linux `1.28 (29)` is published.
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.
@@ -407,13 +407,17 @@ Remaining Android concerns:
   Auto winners were present. This isolates the immediate failure to agent
   recovery rather than a missing ChatGPT route.
 - Update completion is reported only after the systemd service is active. The
-  `1.27` watchdog no longer disables autostart after failed service probes:
+  `1.28` watchdog no longer disables autostart after failed service probes:
   isolated critical-service failures are reported, while a complete base
   connectivity failure temporarily stops the service, restores direct routing
   and retries the still-enabled agent after a cooldown.
 - The Linux taskbar icon now follows runtime state every five seconds: green
   healthy, yellow starting/recovery/update, red lost control and black only
   for an explicitly disabled agent.
+- Background software replacement has a persistent update marker. `UPDATING`
+  takes precedence over the expected temporary systemd stop, warns that
+  connectivity may briefly disappear, disables conflicting UI actions and
+  automatically relaunches the UI after new code is installed.
 - A long real-world test on Dima's machine is still required for suspend,
   resume, Wi-Fi changes, Zapret, UFW and update behavior.
 
