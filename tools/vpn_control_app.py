@@ -7881,6 +7881,79 @@ def recent_probe_transport_ids(
     return result
 
 
+def ip_route_service_groups(conn: sqlite3.Connection, *, user_id: str) -> dict[str, dict[str, Any]]:
+    """Map related alias CIDRs to one stable Auto selection group."""
+    groups_by_signature: dict[tuple[str, ...], dict[str, Any]] = {}
+    result: dict[str, dict[str, Any]] = {}
+    for alias in effective_service_alias_rows(conn, user_id=user_id):
+        cidrs: list[str] = []
+        for target in alias.get("targets") or []:
+            try:
+                cidr = normalize_ipv4_cidr(str(target))
+            except ValueError:
+                continue
+            if cidr not in cidrs:
+                cidrs.append(cidr)
+        if len(cidrs) < 2:
+            continue
+        signature = tuple(sorted(cidrs))
+        group = groups_by_signature.get(signature)
+        if group is None:
+            digest = hashlib.sha256("\n".join(signature).encode("utf-8")).hexdigest()[:16]
+            group = {
+                "key": f"alias-{digest}.iproute.group.local",
+                "alias": str(alias.get("alias") or ""),
+                "label": str(alias.get("label") or alias.get("alias") or "IP route group"),
+                "targets": list(signature),
+            }
+            groups_by_signature[signature] = group
+        for cidr in signature:
+            result.setdefault(cidr, group)
+    return result
+
+
+def grouped_ip_auto_cache(
+    groups: dict[str, dict[str, Any]],
+    auto_cache: dict[str, dict[str, Any]],
+    servers: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Choose one probed winner for every multi-CIDR service group."""
+    grouped: dict[str, dict[str, Any]] = {}
+    unique_groups = {str(group["key"]): group for group in groups.values()}
+    for group_key, group in unique_groups.items():
+        votes: dict[str, dict[str, Any]] = {}
+        for cidr in group.get("targets") or []:
+            cached = auto_cache.get(auto_cache_key_for_ip_route(str(cidr)))
+            if not cached:
+                continue
+            server_id = str(cached.get("selected_server_id") or "")
+            server = servers.get(server_id) or {}
+            if not server_id or not server.get("enabled") or not server.get("candidate_available", True):
+                continue
+            score = cached.get("score_ms")
+            vote = votes.setdefault(
+                server_id,
+                {"count": 0, "best_score": 2**31 - 1, "cache": cached},
+            )
+            vote["count"] += 1
+            if isinstance(score, int) and score < vote["best_score"]:
+                vote["best_score"] = score
+                vote["cache"] = cached
+        if not votes:
+            continue
+        winner_id, winner = min(
+            votes.items(),
+            key=lambda item: (-int(item[1]["count"]), int(item[1]["best_score"]), item[0]),
+        )
+        selected = dict(winner["cache"])
+        selected["domain"] = group_key
+        selected["selected_server_id"] = winner_id
+        selected["group_label"] = group.get("label") or ""
+        selected["group_vote_count"] = winner["count"]
+        grouped[group_key] = selected
+    return grouped
+
+
 def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[str, Any]) -> dict[str, Any]:
     servers = server_map(conn)
     cached_auto = auto_cache_map(conn)
@@ -8000,6 +8073,8 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
     for route in ip_routes:
         effective_ip_routes[route["target_cidr"]] = route
     ip_routes = sorted(effective_ip_routes.values(), key=lambda item: item["target_cidr"])
+    ip_service_groups = ip_route_service_groups(conn, user_id=user_id)
+    group_cache = grouped_ip_auto_cache(ip_service_groups, cached_auto, servers)
     resolved_ip_routes: list[dict[str, Any]] = []
     cleanup_ip_routes: list[dict[str, Any]] = []
     for route in ip_routes:
@@ -8010,14 +8085,19 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         cache_key = ""
         server_id = requested_server_id
         if requested_server_id == "auto":
-            cache_key = auto_cache_key_for_ip_route(route["target_cidr"])
+            route_cache_key = auto_cache_key_for_ip_route(route["target_cidr"])
+            service_group = ip_service_groups.get(route["target_cidr"])
+            cache_key = str((service_group or {}).get("key") or route_cache_key)
             route_warnings: list[str] = []
-            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=cache_key)
+            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=route_cache_key)
+            effective_auto_cache = cached_auto
+            if service_group:
+                effective_auto_cache = {**cached_auto, **group_cache}
             resolved_server_id, cached = resolve_route_server(
                 domain=cache_key,
                 requested_server_id=requested_server_id,
                 servers=servers,
-                auto_cache=cached_auto,
+                auto_cache=effective_auto_cache,
                 auto_policy=auto_policy,
                 context=f"{user_id}/{route['target_cidr']}",
                 warnings=route_warnings,
@@ -8039,6 +8119,9 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
                 )
                 continue
             server_id = resolved_server_id
+            if service_group:
+                route["service_alias"] = service_group.get("alias") or ""
+                route["service_label"] = service_group.get("label") or ""
         route["requested_server_id"] = requested_server_id
         route["server_id"] = server_id
         route["resolved_server_id"] = resolved_server_id

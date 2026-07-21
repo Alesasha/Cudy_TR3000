@@ -3,8 +3,8 @@ param(
     [string]$AgentSecretsDir = "$PSScriptRoot\..\secrets\agents",
     [string]$SourceDir = "$PSScriptRoot\agent-windows",
     [string]$OutputDir = "$PSScriptRoot\..\secrets\agents",
-    [string]$VersionName = "1.26",
-    [int]$VersionCode = 27,
+    [string]$VersionName = "1.27",
+    [int]$VersionCode = 28,
     [switch]$IncludeRuntime,
     [switch]$SkipZip
 )
@@ -65,6 +65,7 @@ $sourceFiles = @(
     "New-LokVpnConfig.ps1",
     "New-SingBoxHttpProxyConfig.ps1",
     "New-SingBoxVlessRealityConfig.ps1",
+    "Register-CudyAgentInstallation.ps1",
     "README.md",
     "Restore-Direct.ps1",
     "Restart-AgentUi.ps1",
@@ -83,6 +84,7 @@ $sourceFiles = @(
     "Test-ProdAgent.ps1",
     "Uninstall-ManagedAgentTask.ps1",
     "Uninstall-AgentWatchdogTask.ps1",
+    "Uninstall-CudyAgent.ps1",
     "Update-AgentPackage.ps1",
     "Update-LokVpnConfig.ps1",
     "Update-VpnTypeProxyConfig.ps1",

@@ -382,7 +382,11 @@ public class MainActivity : Activity
                 try
                 {
                     await Task.Delay(TimeSpan.FromSeconds(2), token);
-                    RunOnUiThread(RenderStoredStatus);
+                    RunOnUiThread(() =>
+                    {
+                        RenderStoredStatus();
+                        RenderUpdateButton();
+                    });
                 }
                 catch (System.OperationCanceledException)
                 {
@@ -839,16 +843,49 @@ public class MainActivity : Activity
         }
         var ready = CudyAndroidUpdater.HasDownloadedUpdate(this);
         var versionName = CudyAndroidUpdater.DownloadedVersionName(this);
-        updateButton.Text = ready
-            ? $"Install update {versionName}".TrimEnd()
-            : "Check for updates";
-        updateButton.Enabled = true;
         var latestName = preferences?.GetString("update_latest_version_name", "") ?? "";
         var latestCode = preferences?.GetLong("update_latest_version_code", 0) ?? 0;
+        var updateState = preferences?.GetString("update_status", "") ?? "";
+        var currentCode = CurrentVersionCode();
+        if (ready)
+        {
+            updateButton.Text = $"Install update {versionName}".TrimEnd();
+            updateButton.Enabled = true;
+        }
+        else if (string.Equals(updateState, "downloading", StringComparison.Ordinal))
+        {
+            updateButton.Text = $"Downloading update {latestName}...".TrimEnd();
+            updateButton.Enabled = false;
+        }
+        else if (string.Equals(updateState, "checking", StringComparison.Ordinal))
+        {
+            updateButton.Text = "Checking for updates...";
+            updateButton.Enabled = false;
+        }
+        else if (latestCode > currentCode)
+        {
+            updateButton.Text = $"Update to {latestName}".TrimEnd();
+            updateButton.Enabled = true;
+        }
+        else
+        {
+            updateButton.Text = "Check for updates";
+            updateButton.Enabled = true;
+        }
         var latestDisplay = latestCode > 0 && !string.IsNullOrWhiteSpace(latestName)
             ? latestName
             : "not checked yet";
-        updateVersionText.Text = $"Installed: {CurrentVersionName()} | Latest: {latestDisplay}";
+        var progress = updateState switch
+        {
+            "checking" => " | Checking...",
+            "downloading" => " | Downloading...",
+            "ready" => " | Ready to install",
+            "awaiting-confirmation" => " | Waiting for confirmation",
+            "install-requested" => " | Installing...",
+            "failed" or "install-failed" => " | Update failed",
+            _ => "",
+        };
+        updateVersionText.Text = $"Installed: {CurrentVersionName()} | Latest: {latestDisplay}{progress}";
     }
 
     private string CurrentVersionName()

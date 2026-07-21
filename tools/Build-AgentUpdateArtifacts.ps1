@@ -1,11 +1,11 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\..\build\agent-updates",
-    [string]$VersionName = "1.26",
-    [int]$VersionCode = 27,
-    [string]$LinuxVersionName = "1.25",
-    [int]$LinuxVersionCode = 26,
-    [string]$AndroidVersionName = "1.40",
-    [int]$AndroidVersionCode = 41,
+    [string]$VersionName = "1.27",
+    [int]$VersionCode = 28,
+    [string]$LinuxVersionName = "1.27",
+    [int]$LinuxVersionCode = 28,
+    [string]$AndroidVersionName = "1.42",
+    [int]$AndroidVersionCode = 43,
     [string]$AndroidApk = "",
     [ValidateSet("windows", "linux", "android")]
     [string[]]$Platforms = @("windows", "linux", "android")
@@ -82,6 +82,7 @@ function Build-WindowsUpdate {
         "New-LokVpnConfig.ps1",
         "New-SingBoxHttpProxyConfig.ps1",
         "New-SingBoxVlessRealityConfig.ps1",
+        "Register-CudyAgentInstallation.ps1",
         "README.md",
         "Restore-Direct.ps1",
         "Restart-AgentUi.ps1",
@@ -100,6 +101,7 @@ function Build-WindowsUpdate {
         "Test-ProdAgent.ps1",
         "Uninstall-ManagedAgentTask.ps1",
         "Uninstall-AgentWatchdogTask.ps1",
+        "Uninstall-CudyAgent.ps1",
         "Update-AgentPackage.ps1",
         "Update-LokVpnConfig.ps1",
         "Update-VpnTypeProxyConfig.ps1",

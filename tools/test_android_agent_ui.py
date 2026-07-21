@@ -77,7 +77,9 @@ def main() -> int:
 
     admin_ids = layout_ids(ADMIN_LAYOUT)
     required_admin_ids = {
+        "adminLoginContainer",
         "adminLoginButton",
+        "adminLogoutButton",
         "adminUsersList",
         "adminDevicesList",
         "adminSaveUserButton",
@@ -87,6 +89,14 @@ def main() -> int:
     missing_admin = sorted(required_admin_ids - admin_ids)
     if missing_admin:
         raise AssertionError(f"activity_admin.xml is missing ids: {', '.join(missing_admin)}")
+    assert_contains(
+        ADMIN_ACTIVITY,
+        [
+            "loginContainer!.Visibility = Android.Views.ViewStates.Gone",
+            "Administrator session ended.",
+            "Latin and Cyrillic letters can look identical.",
+        ],
+    )
 
     assert_contains(
         MAIN_ACTIVITY,
@@ -115,6 +125,9 @@ def main() -> int:
             'SetPrimaryButton("Connected", "#1F9D55"',
             "StartUiRefreshLoop",
             "MaybeRecoverRequestedAgent",
+            '"Downloading update {latestName}..."',
+            '"Update to {latestName}"',
+            '" | Ready to install"',
         ],
     )
     assert_contains(
@@ -152,6 +165,7 @@ def main() -> int:
             "PackageInstaller.SessionParams",
             "NotifyUpdateReady",
             "ActionInstallDownloadedUpdate",
+            "CleanupInstalledUpdate",
         ],
     )
     assert_contains(
@@ -171,6 +185,7 @@ def main() -> int:
             "Intent.ExtraIntent",
             "Agent restart requested after successful update.",
             "CudyRecoveryJobService.Schedule(context)",
+            "CudyAndroidUpdater.CleanupInstalledUpdate(context)",
         ],
     )
     assert_contains(MANIFEST, ['android.permission.REQUEST_INSTALL_PACKAGES'])
@@ -179,8 +194,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>41</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.40</ApplicationDisplayVersion>",
+            "<ApplicationVersion>43</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.42</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")

@@ -150,6 +150,7 @@ apply_staged_update() {
   else
     write_update_status "completed current=$(current_version_code) service=not-managed."
   fi
+  rm -rf -- "$WORK_DIR" 2>/dev/null || true
   echo "Agent update applied from $stage_path"
 }
 
@@ -220,6 +221,7 @@ if [ -z "$download_url" ]; then
   exit 0
 fi
 
+rm -rf -- "$WORK_DIR"
 mkdir -p "$WORK_DIR" logs
 archive="$WORK_DIR/agent-update-${PLATFORM}-${latest_code}.zip"
 stage="$WORK_DIR/stage"

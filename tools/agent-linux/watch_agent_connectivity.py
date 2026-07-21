@@ -229,35 +229,96 @@ def recover_enabled_service(name: str) -> bool:
     return False
 
 
-def emergency_stop(service_name: str) -> None:
-    subprocess.run(["systemctl", "disable", "--now", service_name], check=False)
+def emergency_suspend(service_name: str, retry_seconds: int) -> None:
+    # Keep the unit enabled. A safety recovery must never silently turn off
+    # autostart; the watchdog will retry the agent after a direct-routing
+    # cooldown.
+    subprocess.run(["systemctl", "stop", service_name], check=False)
     subprocess.run([str(ROOT / "restore_direct.sh")], cwd=ROOT, check=False)
+    trip = read_json(TRIPPED_PATH, {})
+    if not isinstance(trip, dict):
+        trip = {}
+    trip.update(
+        {
+            "tripped_at": str(trip.get("tripped_at") or utc_now()),
+            "retry_after_epoch": int(time.time()) + max(60, retry_seconds),
+            "reason": "base_connectivity_failed",
+        }
+    )
+    write_json(TRIPPED_PATH, trip)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent-service", default="cudy-managed-agent.service")
     parser.add_argument("--failure-threshold", type=int, default=3)
+    parser.add_argument("--retry-seconds", type=int, default=180)
     parser.add_argument("--probe-only", action="store_true")
     args = parser.parse_args()
     RUN_DIR.mkdir(parents=True, exist_ok=True)
-    result = check_connectivity()
     if args.probe_only:
+        result = check_connectivity()
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0 if result["ok"] else 2
     if not service_enabled(args.agent_service):
         write_json(STATE_PATH, {"consecutive_failures": 0, "last_result": "agent_disabled", "updated_at": utc_now()})
         return 0
+
+    trip = read_json(TRIPPED_PATH, {})
+    retry_after = int(trip.get("retry_after_epoch") or 0) if isinstance(trip, dict) else 0
+    if retry_after > int(time.time()):
+        write_json(
+            STATE_PATH,
+            {
+                "consecutive_failures": 0,
+                "last_result": "direct_recovery_cooldown",
+                "retry_after_epoch": retry_after,
+                "updated_at": utc_now(),
+            },
+        )
+        return 0
+    if trip:
+        TRIPPED_PATH.unlink(missing_ok=True)
+        log("Direct-routing cooldown completed; retrying the enabled agent.")
+
     if not recover_enabled_service(args.agent_service):
-        result["ok"] = False
-        result.setdefault("failed_services", []).insert(0, "agent-service")
+        result = {
+            "ok": False,
+            "base_internet_ok": False,
+            "critical_services_ok": False,
+            "failed_services": ["agent-service"],
+            "probes": [],
+        }
+    else:
+        result = check_connectivity()
     state = read_json(STATE_PATH, {})
     failures = int(state.get("consecutive_failures") or 0)
     env = load_env()
-    if result["ok"]:
+    if result["base_internet_ok"]:
         if failures:
-            log("Connectivity recovered before emergency action.")
-        state = {"consecutive_failures": 0, "last_result": "healthy", "last_success_at": utc_now(), "probes": result["probes"]}
+            log("Base connectivity recovered before emergency action.")
+        service_failures = 0 if result["critical_services_ok"] else int(state.get("consecutive_service_failures") or 0) + 1
+        state = {
+            "consecutive_failures": 0,
+            "consecutive_service_failures": service_failures,
+            "last_result": "healthy" if result["critical_services_ok"] else "critical_service_failed",
+            "last_success_at": utc_now(),
+            "failed_services": result["failed_services"],
+            "probes": result["probes"],
+        }
+        if service_failures == max(1, args.failure_threshold):
+            report = {
+                "reported_at": utc_now(),
+                "reason": "critical_service_failed",
+                **state,
+            }
+            if not send_report(report, env):
+                write_json(PENDING_PATH, report)
+            log(
+                "Critical service probe threshold reached; reporting without stopping the agent: "
+                + ",".join(result["failed_services"]),
+                "WARN",
+            )
         if PENDING_PATH.exists():
             pending = read_json(PENDING_PATH, {})
             if pending and send_report(pending, env):
@@ -280,12 +341,12 @@ def main() -> int:
         # systemd oneshot itself remains healthy so the timer is not marked
         # failed on every temporary network interruption.
         return 0
-    trip = {"tripped_at": utc_now(), "reason": "connectivity_failed", **state}
+    trip = {"tripped_at": utc_now(), "reason": "base_connectivity_failed", **state}
     write_json(TRIPPED_PATH, trip)
     if not send_report(trip, env):
         write_json(PENDING_PATH, trip)
-    log("Failure threshold reached; disabling agent and restoring direct routing.", "ERROR")
-    emergency_stop(args.agent_service)
+    log("Base connectivity failure threshold reached; suspending agent and restoring direct routing.", "ERROR")
+    emergency_suspend(args.agent_service, args.retry_seconds)
     return 0
 
 

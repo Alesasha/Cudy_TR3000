@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.40 (41)`.
+Latest published release candidate: `1.42 (43)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,8 +49,8 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.40-20260721.apk`;
-- SHA256: `41fb87efdb97e43bcd160f6301b24955b74ac1bb167f7c029e6da251b5d6b660`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.42-20260721.apk`;
+- SHA256: `2492b9d323a574f3419b6c769b31b05d4d82f34f63177239931ffd9e69d53e4c`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,

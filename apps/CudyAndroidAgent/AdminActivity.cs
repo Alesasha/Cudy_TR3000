@@ -30,6 +30,7 @@ public sealed class AdminActivity : Activity
         string LastSeenAt);
 
     private TextView? statusText;
+    private LinearLayout? loginContainer;
     private EditText? usernameInput;
     private EditText? passwordInput;
     private LinearLayout? managementContainer;
@@ -60,6 +61,7 @@ public sealed class AdminActivity : Activity
         SetContentView(Resource.Layout.activity_admin);
 
         statusText = RequireView<TextView>(Resource.Id.adminStatusText);
+        loginContainer = RequireView<LinearLayout>(Resource.Id.adminLoginContainer);
         usernameInput = RequireView<EditText>(Resource.Id.adminUsernameInput);
         passwordInput = RequireView<EditText>(Resource.Id.adminPasswordInput);
         managementContainer = RequireView<LinearLayout>(Resource.Id.adminManagementContainer);
@@ -85,6 +87,7 @@ public sealed class AdminActivity : Activity
         enrollmentPlatformSpinner.Adapter = StringAdapter(["android", "windows", "linux"]);
 
         RequireView<Button>(Resource.Id.adminLoginButton).Click += async (_, _) => await LoginAsync();
+        RequireView<Button>(Resource.Id.adminLogoutButton).Click += (_, _) => Logout();
         RequireView<Button>(Resource.Id.adminRefreshButton).Click += async (_, _) => await RefreshAsync();
         RequireView<Button>(Resource.Id.adminNewUserButton).Click += (_, _) => ResetUserEditor();
         RequireView<Button>(Resource.Id.adminSaveUserButton).Click += async (_, _) => await SaveUserAsync();
@@ -127,6 +130,7 @@ public sealed class AdminActivity : Activity
                 preferences.GetString("ssh_key", "") ?? "",
                 preferences.GetString("ssh_host_key_sha256", "") ?? "");
             await session.LoginAsync(usernameInput!.Text!.Trim(), password);
+            loginContainer!.Visibility = Android.Views.ViewStates.Gone;
             managementContainer!.Visibility = Android.Views.ViewStates.Visible;
             SetStatus("Administrator session is active.");
             await RefreshAsync();
@@ -135,9 +139,23 @@ public sealed class AdminActivity : Activity
         {
             session?.Dispose();
             session = null;
+            loginContainer!.Visibility = Android.Views.ViewStates.Visible;
             managementContainer!.Visibility = Android.Views.ViewStates.Gone;
-            SetStatus(ex.Message, error: true);
+            var hint = ex.Message.Contains("Invalid user or password", StringComparison.OrdinalIgnoreCase)
+                ? " Check the keyboard layout: Latin and Cyrillic letters can look identical."
+                : "";
+            SetStatus(ex.Message + hint, error: true);
         }
+    }
+
+    private void Logout()
+    {
+        session?.Dispose();
+        session = null;
+        managementContainer!.Visibility = Android.Views.ViewStates.Gone;
+        loginContainer!.Visibility = Android.Views.ViewStates.Visible;
+        passwordInput!.Text = "";
+        SetStatus("Administrator session ended.");
     }
 
     private async Task RefreshAsync()

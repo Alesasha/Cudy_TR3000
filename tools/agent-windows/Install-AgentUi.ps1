@@ -2,17 +2,23 @@ param([switch]$Remove, [switch]$StartNow)
 
 $ErrorActionPreference = "Stop"
 $shell = New-Object -ComObject WScript.Shell
-$desktop = [Environment]::GetFolderPath("Desktop")
-$programs = [Environment]::GetFolderPath("Programs")
+$desktop = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonDesktopDirectory)
+$programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::CommonPrograms)
 $folder = Join-Path $programs "Cudy Agent"
 $links = @(
     (Join-Path $desktop "Cudy Agent.lnk"),
     (Join-Path $folder "Cudy Agent.lnk")
 )
 
+$legacyFolder = Join-Path ([Environment]::GetFolderPath("Programs")) "Cudy Agent"
+$legacyLinks = @(
+    (Join-Path ([Environment]::GetFolderPath("Desktop")) "Cudy Agent.lnk"),
+    (Join-Path $legacyFolder "Cudy Agent.lnk")
+)
+
 if ($Remove) {
-    foreach ($link in $links) { Remove-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue }
-    Remove-Item -LiteralPath $folder -Force -ErrorAction SilentlyContinue
+    foreach ($link in @($links + $legacyLinks)) { Remove-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue }
+    foreach ($path in @($folder, $legacyFolder)) { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue }
     Write-Host "Cudy Agent UI shortcuts removed."
     exit 0
 }

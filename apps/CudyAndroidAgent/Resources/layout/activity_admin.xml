@@ -21,23 +21,29 @@
             android:paddingTop="6dp"
             android:text="Sign in with an administrator account. The password is not stored."
             android:textSize="14sp" />
-        <EditText
-            android:id="@+id/adminUsernameInput"
+        <LinearLayout
+            android:id="@+id/adminLoginContainer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Administrator"
-            android:inputType="text" />
-        <EditText
-            android:id="@+id/adminPasswordInput"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="Password"
-            android:inputType="textPassword" />
-        <Button
-            android:id="@+id/adminLoginButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Sign in" />
+            android:orientation="vertical">
+            <EditText
+                android:id="@+id/adminUsernameInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Administrator"
+                android:inputType="text" />
+            <EditText
+                android:id="@+id/adminPasswordInput"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:hint="Password"
+                android:inputType="textPassword" />
+            <Button
+                android:id="@+id/adminLoginButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sign in" />
+        </LinearLayout>
 
         <LinearLayout
             android:id="@+id/adminManagementContainer"
@@ -50,6 +56,11 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:text="Refresh" />
+            <Button
+                android:id="@+id/adminLogoutButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Sign out" />
 
             <TextView
                 android:layout_width="match_parent"

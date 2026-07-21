@@ -42,6 +42,7 @@ Comment=$comment
 Terminal=$terminal
 Exec=$exec_line
 Categories=Network;
+StartupWMClass=CudyAgent
 EOF
   chmod +x "$target"
   if command -v gio >/dev/null 2>&1; then

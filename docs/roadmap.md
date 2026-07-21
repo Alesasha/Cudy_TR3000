@@ -24,7 +24,7 @@ accepted baseline.
 
 ### Windows
 
-1. Completed: Windows `1.26 (27)` was rebuilt, package contents/hash were
+1. Completed: Windows `1.27 (28)` was rebuilt, package contents/hash were
    verified, and the new desktop UI passed source and packaged runtime smoke.
 2. Run emergency-stop and watchdog tests before enabling the task.
 3. Enable the managed task in a controlled window with the independent recovery path.
@@ -40,7 +40,7 @@ leak, focus-stealing console or manual transport repair.
 
 ### Linux
 
-1. Confirm Dima receives Linux `1.25 (26)` through the control update path and
+1. Confirm Dima receives Linux `1.27 (28)` through the control update path and
    reports the expected non-empty TUN interface set after OFF/ON.
 2. Keep normal operation one-click from the UI; no manual Amnezia interface or
    route commands should be required.
@@ -58,14 +58,14 @@ hours. A live cycle accepted a new probe job without changing the unified
 config hash or reloading libbox; the longer soak below remains required.
 
 1. Continue the multi-day Wi-Fi/mobile-data/background/locked-screen soak on
-   the two physical phones with `1.40 (41)`. Run `android-agent-soak.ps1` during
+   the physical test phones with `1.42 (43)`. Run `android-agent-soak.ps1` during
    focused sessions so a failure retains service, job, package, VPN, and crash
    evidence.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
 3. Soak the implemented MIUI Autostart confirmation. The app now distinguishes
    standard permissions it can verify from the vendor-only setting that Android
    cannot query, and stops repeating the warning after explicit confirmation.
-4. Soak the 1.40 state-aware first screen, cached startup, persistent control
+4. Soak the 1.42 state-aware first screen, cached startup, persistent control
    forward, recovery paths and verified update
    notification/install flow: diagnostics,
    routing details and advanced settings are collapsed until requested; sticky

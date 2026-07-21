@@ -102,11 +102,21 @@ if ($ApplyStaged) {
     if (Test-Path -LiteralPath $manifestPath) {
         Copy-Item -LiteralPath $manifestPath -Destination $VersionFile -Force
     }
+    $standardInstallDir = [IO.Path]::GetFullPath((Join-Path $env:ProgramFiles "Cudy Agent")).TrimEnd('\')
+    $currentInstallDir = [IO.Path]::GetFullPath($PSScriptRoot).TrimEnd('\')
+    if (-not [string]::Equals($currentInstallDir, $standardInstallDir, [StringComparison]::OrdinalIgnoreCase)) {
+        & (Join-Path $PSScriptRoot "Install-UniversalAgent.ps1") -StartNow:$true
+        Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "Agent update applied and migrated to $standardInstallDir"
+        exit 0
+    }
     $uiInstaller = Join-Path $PSScriptRoot "Install-AgentUi.ps1"
     if (Test-Path -LiteralPath $uiInstaller) {
         & $uiInstaller
     }
+    & (Join-Path $PSScriptRoot "Register-CudyAgentInstallation.ps1")
     Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Agent update applied from $StagePath"
     exit 0
 }
@@ -124,6 +134,7 @@ if (-not $manifest.download_url) {
     exit 0
 }
 
+Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
 $archivePath = Join-Path $WorkDir ("agent-update-{0}-{1}.zip" -f $Platform, $latestCode)
 $downloadUrl = [string]$manifest.download_url

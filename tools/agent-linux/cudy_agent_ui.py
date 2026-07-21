@@ -3,14 +3,16 @@
 
 from __future__ import annotations
 
-import os
+import hashlib
 import json
+import os
 import subprocess
 import threading
 import time
 import urllib.request
+from datetime import datetime
 from pathlib import Path
-from tkinter import BOTH, END, LEFT, RIGHT, Y, Canvas, Entry, Listbox, Scrollbar, StringVar, Tk, Text, messagebox
+from tkinter import BOTH, END, LEFT, RIGHT, Y, Canvas, Entry, Listbox, PhotoImage, Scrollbar, StringVar, Tk, Text, messagebox
 from tkinter import ttk
 
 
@@ -94,6 +96,15 @@ def service_active_age_seconds() -> float | None:
     return max(0.0, time.monotonic() - (active_usec / 1_000_000))
 
 
+def watchdog_recovery_pending() -> bool:
+    path = ROOT / "run" / "watchdog-tripped.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return int(payload.get("retry_after_epoch") or 0) > int(time.time())
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def service_info() -> dict[str, str | bool | float | None]:
     active_rc, active = run(["systemctl", "is-active", SERVICE_NAME], timeout=6)
     enabled_rc, enabled = run(["systemctl", "is-enabled", SERVICE_NAME], timeout=6)
@@ -103,14 +114,22 @@ def service_info() -> dict[str, str | bool | float | None]:
     active_value = active if active_rc == 0 else active or "unknown"
     enabled_value = enabled if enabled_rc == 0 else enabled or "unknown"
     updating = update_in_progress(update_status) if update_status else False
-    if active_value != "active":
+    if active_value != "active" and enabled_value == "enabled" and watchdog_recovery_pending():
+        state = "warn"
+        title = "RECOVERY"
+        comment = "Direct internet restored; retrying agent soon"
+    elif active_value != "active" and enabled_value == "enabled":
+        state = "warn"
+        title = "STARTING"
+        comment = "Agent service is waiting for automatic restart"
+    elif active_value != "active":
         state = "off"
         title = "OFF"
         comment = "Agent is stopped"
     elif updating:
         state = "warn"
-        title = "UPDATING"
-        comment = "Services may pause"
+        title = "APP UPDATE"
+        comment = "Installing agent software"
     elif control_ok:
         state = "ok"
         title = "OK"
@@ -136,13 +155,13 @@ def service_info() -> dict[str, str | bool | float | None]:
     }
 
 
-def read_managed_traffic_bytes() -> int:
-    total = 0
+def read_managed_traffic_counters() -> dict[str, int]:
+    counters: dict[str, int] = {}
     proc_net_dev = Path("/proc/net/dev")
     try:
         lines = proc_net_dev.read_text(encoding="utf-8", errors="replace").splitlines()[2:]
     except Exception:
-        return 0
+        return counters
     for line in lines:
         if ":" not in line:
             continue
@@ -154,10 +173,10 @@ def read_managed_traffic_bytes() -> int:
         if len(fields) < 16:
             continue
         try:
-            total += int(fields[0]) + int(fields[8])
+            counters[name] = int(fields[0]) + int(fields[8])
         except ValueError:
             continue
-    return total
+    return counters
 
 
 def format_mb(byte_count: int) -> str:
@@ -180,8 +199,37 @@ def read_update_status() -> str:
 
 
 def update_in_progress(status: str) -> bool:
+    try:
+        if time.time() - UPDATE_STATUS_FILE.stat().st_mtime > 600:
+            return False
+    except OSError:
+        return False
     lowered = status.lower()
-    return any(token in lowered for token in ("checking", "downloading", "applying", "installing", "stopping", "restarting", "apply process started"))
+    return any(token in lowered for token in ("downloading", "applying", "installing", "stopping", "restarting", "apply process started"))
+
+
+def policy_sync_status() -> str:
+    policy_path = ROOT / "run" / "fresh-config.json"
+    try:
+        revision = hashlib.sha256(policy_path.read_bytes()).hexdigest()[:8]
+        stamp = datetime.fromtimestamp(policy_path.stat().st_mtime).strftime("%H:%M:%S")
+        return f"Routing rules: {revision}, synchronized at {stamp}"
+    except OSError:
+        return "Routing rules: waiting for first sync"
+
+
+def software_update_status(status: str) -> str:
+    lowered = status.lower()
+    if update_in_progress(status):
+        if "downloading" in lowered:
+            return "Software update: downloading"
+        if "installing" in lowered or "applying" in lowered or "apply process started" in lowered:
+            return "Software update: installing"
+        if "restarting" in lowered or "stopping" in lowered:
+            return "Software update: restarting service"
+    if "failed" in lowered:
+        return "Software update: failed; open Diagnostics"
+    return ""
 
 
 def current_version() -> tuple[str, int]:
@@ -237,7 +285,7 @@ def update_started(output: str, rc: int) -> bool:
 
 class AgentUi:
     def __init__(self) -> None:
-        self.root = Tk()
+        self.root = Tk(className="CudyAgent")
         self.root.title("Cudy Agent")
         self.root.geometry("900x700")
         self.root.minsize(820, 620)
@@ -247,10 +295,11 @@ class AgentUi:
         self.speed_url = StringVar(value="")
         self.current_version_code = 0
         self.latest_version_code = 0
-        self.traffic_baseline = read_managed_traffic_bytes()
+        self.traffic_counters = read_managed_traffic_counters()
         self.traffic_delta = 0
         self.busy = False
         self.restart_after_update = False
+        self.status_icons = self.build_status_icons()
         self.actions = [
             ("ON", ["./agent_on.sh"], 180),
             ("OFF", ["./agent_off.sh"], 180),
@@ -267,6 +316,31 @@ class AgentUi:
         self.build()
         self.refresh_status()
         self.root.after(15000, self.refresh_status_periodic)
+
+    @staticmethod
+    def build_status_icons() -> dict[str, PhotoImage]:
+        colors = {
+            "ok": "#1f9d55",
+            "warn": "#d97706",
+            "down": "#dc2626",
+            "off": "#111827",
+        }
+        icons: dict[str, PhotoImage] = {}
+        size = 64
+        center = (size - 1) / 2
+        radius_sq = 29 * 29
+        inner_sq = 22 * 22
+        for state, color in colors.items():
+            icon = PhotoImage(width=size, height=size)
+            for y in range(size):
+                for x in range(size):
+                    distance_sq = (x - center) ** 2 + (y - center) ** 2
+                    if distance_sq <= radius_sq:
+                        icon.put(color if distance_sq > inner_sq else "#ffffff", (x, y))
+                    else:
+                        icon.transparency_set(x, y, True)
+            icons[state] = icon
+        return icons
 
     def build(self) -> None:
         outer = ttk.Frame(self.root, padding=14)
@@ -340,6 +414,8 @@ class AgentUi:
             "off": ("#111827", "#ffffff"),
         }
         fill, text_color = colors.get(state, colors["down"])
+        status_icon = self.status_icons.get(state, self.status_icons["down"])
+        self.root.iconphoto(True, status_icon)
         self.indicator.delete("all")
         self.indicator.create_oval(8, 8, 156, 156, fill=fill, outline=fill)
         self.indicator.create_text(82, 62, text=title, fill=text_color, font=("TkDefaultFont", 20, "bold"))
@@ -348,7 +424,12 @@ class AgentUi:
 
     def refresh_status(self) -> None:
         info = service_info()
-        self.traffic_delta = max(0, read_managed_traffic_bytes() - self.traffic_baseline)
+        current_counters = read_managed_traffic_counters()
+        for name, current_value in current_counters.items():
+            previous_value = self.traffic_counters.get(name)
+            if previous_value is not None and current_value >= previous_value:
+                self.traffic_delta += current_value - previous_value
+        self.traffic_counters = current_counters
         self.draw_indicator(str(info["state"]), str(info["title"]))
         self.status_line.set(str(info["comment"]))
         details = [
@@ -357,27 +438,28 @@ class AgentUi:
             f"Control: {'OK' if info['control_ok'] else 'not connected'}",
             f"Traffic: {format_mb(self.traffic_delta)}",
         ]
-        update_status = str(info["update_status"] or "")
+        details.append(policy_sync_status())
+        update_status = software_update_status(str(info["update_status"] or ""))
         if update_status:
-            details.append(f"Update: {update_status}")
+            details.append(update_status)
         self.comment_line.set("  |  ".join(details))
         current_name, current_code = current_version()
         latest = latest_version()
         self.current_version_code = current_code
         if latest is None:
             self.latest_version_code = 0
-            self.version_status.set(f"Version: current {current_name or '-'} ({current_code}), latest unavailable")
+            self.version_status.set(f"Software: installed {current_name or '-'} | latest unavailable")
             self.update_button.config(state="disabled")
             return
         latest_name, latest_code = latest
         self.latest_version_code = latest_code
-        self.version_status.set(f"Version: current {current_name or '-'} ({current_code}), latest {latest_name or '-'} ({latest_code})")
+        self.version_status.set(f"Software: installed {current_name or '-'} | latest {latest_name or '-'}")
         self.update_button.config(state="normal" if latest_code > current_code else "disabled")
 
     def refresh_status_periodic(self) -> None:
         if not self.busy:
             self.refresh_status()
-        self.root.after(15000, self.refresh_status_periodic)
+        self.root.after(5000, self.refresh_status_periodic)
 
     def run_selected(self) -> None:
         if self.busy:

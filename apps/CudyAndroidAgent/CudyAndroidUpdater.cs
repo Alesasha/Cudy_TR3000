@@ -51,6 +51,35 @@ public static class CudyAndroidUpdater
         context.GetSharedPreferences(PreferencesName, FileCreationMode.Private)
             ?.GetString("update_downloaded_version_name", "") ?? "";
 
+    public static void CleanupInstalledUpdate(Context context)
+    {
+        var preferences = context.GetSharedPreferences(PreferencesName, FileCreationMode.Private);
+        var path = preferences?.GetString("update_downloaded_path", "") ?? "";
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            try
+            {
+                File.Delete(path);
+                var directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                {
+                    DeleteOldUpdates(directory, "");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogTag, "Installed update cleanup failed: " + ex.Message);
+            }
+        }
+        preferences?.Edit()
+            ?.Remove("update_downloaded_version_code")
+            ?.Remove("update_downloaded_version_name")
+            ?.Remove("update_downloaded_path")
+            ?.Remove("update_downloaded_sha256")
+            ?.PutBoolean("update_install_pending", false)
+            ?.Apply();
+    }
+
     public static CudyUpdateInstallResult BeginInstall(Activity activity)
     {
         var preferences = activity.GetSharedPreferences(PreferencesName, FileCreationMode.Private);

@@ -962,6 +962,49 @@ def run_user_ip_auto_export_uses_cache_check(db_path: Path, tmp: Path) -> None:
     assert_equal(route["auto_status"], "ok", "cached auto IP route status")
 
 
+def run_alias_ip_routes_share_auto_winner_check(db_path: Path) -> None:
+    cidrs = ["203.0.114.0/24", "203.0.115.0/24", "203.0.116.0/24"]
+    app.save_service_alias(
+        db_path,
+        INVENTORY,
+        alias="smoke-ip-group",
+        label="Smoke IP Group",
+        targets=cidrs,
+    )
+    winners = ["proxynl", "proxynl", "proxyde"]
+    for cidr, winner in zip(cidrs, winners, strict=True):
+        cache_key = app.auto_cache_key_for_ip_route(cidr)
+        save_policy(db_path, user_id=TEST_USER_ID, domain=cache_key, servers=["proxyde", "proxynl"])
+        app.save_auto_cache_entry(
+            db_path,
+            INVENTORY,
+            domain=cache_key,
+            selected_server_id=winner,
+            score_ms=50 if winner == "proxynl" else 10,
+            status="ok",
+            metadata={"user_id": TEST_USER_ID},
+        )
+        app.save_user_ip_route(
+            db_path,
+            INVENTORY,
+            user_id=TEST_USER_ID,
+            target_cidr=cidr,
+            server_id="auto",
+        )
+
+    with closing(app.connect(db_path)) as conn:
+        config = app.build_agent_config(
+            conn,
+            user_id=TEST_USER_ID,
+            device={"id": "ip-group-device", "display_name": "IP Group", "platform": "linux"},
+        )
+    grouped = [route for route in config["ip_routes"] if route.get("target_cidr") in cidrs]
+    assert_equal(len(grouped), len(cidrs), "all alias IP routes should be present")
+    assert_true(all(route["server_id"] == "proxynl" for route in grouped), "alias IP routes should share the majority winner")
+    assert_equal(len({route["auto_cache_key"] for route in grouped}), 1, "alias IP routes should share one cache key")
+    assert_true(all(route.get("service_label") == "Smoke IP Group" for route in grouped), "alias group label should be exposed")
+
+
 def run_service_group_shares_auto_winner_check(db_path: Path) -> None:
     app.save_critical_service(
         db_path,
@@ -1072,6 +1115,7 @@ def main() -> int:
         run_auto_worker_cache_ttl_check(tmp_path)
         run_service_dependency_probe_url_check(tmp_path)
         run_user_ip_auto_export_uses_cache_check(db_path, tmp_path)
+        run_alias_ip_routes_share_auto_winner_check(db_path)
         run_service_group_shares_auto_winner_check(db_path)
         gc.collect()
 

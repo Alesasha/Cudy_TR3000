@@ -14,11 +14,11 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `219d198`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.40 (41)` published APK; its SHA256 is recorded in
+  - Android `1.42 (43)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
-  - Linux `1.25 (26)`, published from the current source with a manifest-verified package;
-  - Windows `1.26 (27)`, SHA256
-    `e92d6c6be4fc181fdbb98ebe7e95845003866ab1baddc4c48df3257e066c8736`.
+  - Linux `1.27 (28)`, published from the current source with a manifest-verified package;
+  - Windows `1.27 (28)`, SHA256
+    `e4719300e06ec22b835fdef75266bbabd698c23c8ab7fa75ac387642e576b6e2`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
   access, bounded fallback retries and the Windows OpenAI-maintenance source.
 
@@ -383,7 +383,7 @@ Remaining Android concerns:
 
 ## Linux Agent
 
-- Linux `1.25 (26)` is published.
+- Linux `1.27 (28)` is published.
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.
@@ -406,12 +406,14 @@ Remaining Android concerns:
   `2026-07-17T12:09:24+00:00`, while the effective ChatGPT rules and current
   Auto winners were present. This isolates the immediate failure to agent
   recovery rather than a missing ChatGPT route.
-- `1.23 (24)` now reports update completion only after the systemd service is
-  active. The independent watchdog restarts an enabled-but-inactive service;
-  explicit user OFF remains disabled and is not restarted.
-- Production acceptance requires Dima to turn the agent ON once, receive
-  `1.23 (24)`, and submit a fresh online status with working ChatGPT/Telegram
-  and non-empty interfaces.
+- Update completion is reported only after the systemd service is active. The
+  `1.27` watchdog no longer disables autostart after failed service probes:
+  isolated critical-service failures are reported, while a complete base
+  connectivity failure temporarily stops the service, restores direct routing
+  and retries the still-enabled agent after a cooldown.
+- The Linux taskbar icon now follows runtime state every five seconds: green
+  healthy, yellow starting/recovery/update, red lost control and black only
+  for an explicitly disabled agent.
 - A long real-world test on Dima's machine is still required for suspend,
   resume, Wi-Fi changes, Zapret, UFW and update behavior.
 
@@ -439,6 +441,10 @@ Remaining Android concerns:
 - Global and per-user aliases are isolated and tested.
 - Important Service dependency groups can share one cache key, candidate list
   and winner; an isolated production staging test passed and was cleaned up.
+- CIDR targets belonging to one service alias now use one grouped Auto winner.
+  All eight Telegram networks therefore switch exits atomically instead of
+  splitting one session across several provider countries. Dima's Telegram
+  group is back in `auto`; `proxynl` is only its seeded current winner.
 - Auto no longer treats known technical dependencies as standalone websites.
   Seeded service groups provide canonical probe URLs for YouTube, Gemini,
   ChatGPT/OpenAI and Reuters. Production assigned `ytimg.com` to an Android

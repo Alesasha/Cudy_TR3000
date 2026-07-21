@@ -42,6 +42,7 @@ public sealed class CudyUpdateInstallReceiver : BroadcastReceiver
         }
         if (status == PackageInstallStatus.Success)
         {
+            CudyAndroidUpdater.CleanupInstalledUpdate(context);
             preferences?.Edit()
                 ?.PutString("update_status", "installed")
                 ?.PutString("update_error", "")
