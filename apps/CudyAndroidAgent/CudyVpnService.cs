@@ -759,6 +759,7 @@ public class CudyVpnService : VpnService
             {
                 TouchControlLoop("cycle-error");
                 error = ex.Message;
+                var cachedTransportHealthy = controlOnly || (tun is not null && storedTransports > 0);
                 SaveLoopDetails(
                     domainRoutes,
                     ipRoutes,
@@ -770,7 +771,15 @@ public class CudyVpnService : VpnService
                     probeSummary,
                     useSshControl && sshClient?.IsConnected == true,
                     error);
-                SaveServiceStatus($"error {error}");
+                if (cachedTransportHealthy)
+                {
+                    ok = true;
+                    SaveServiceStatus($"connected; control refresh delayed: {error}", "connected");
+                }
+                else
+                {
+                    SaveServiceStatus($"error {error}", "degraded");
+                }
                 Log.Warn(LogTag, $"Control loop error: {error}");
             }
 

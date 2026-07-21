@@ -126,6 +126,8 @@ def main() -> int:
             'SetPrimaryButton("Connected", "#1F9D55"',
             "StartUiRefreshLoop",
             "mainScrollView.ScrollTo(0, 0)",
+            "OnWindowFocusChanged",
+            "ResetMainScrollAfterLayout",
             "MaybeRecoverRequestedAgent",
             '"Downloading update {latestName}..."',
             '"Downloading {latestName}: {percent}%"',
@@ -166,6 +168,9 @@ def main() -> int:
         [
             '"/api/agent/app-version?platform=android"',
             "DownloadWithNewClient",
+            "DownloadDirectAsync",
+            "System.Uri.UriSchemeHttps",
+            "System.Uri.UriSchemeHttp",
             "HashMatches(tempPath, sha256)",
             "VerifyPackage(context, tempPath, versionCode)",
             "SignatureHashes(archive)",
@@ -207,8 +212,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>46</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.45</ApplicationDisplayVersion>",
+            "<ApplicationVersion>47</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.46</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -280,6 +285,8 @@ def main() -> int:
             "criticalCheckedNow",
             ".OrderBy(service => service.Key, StringComparer.OrdinalIgnoreCase)",
             'coreHealthy ? "connected" : "degraded"',
+            'connected; control refresh delayed:',
+            'cachedTransportHealthy',
             "warnings = criticalResult.FailedServices",
             '"/api/agent/diagnostics"',
             "options.Inet4RouteRange",

@@ -3,6 +3,8 @@
     android:id="@+id/mainScrollView"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:focusableInTouchMode="true"
+    android:saveEnabled="false"
     android:fillViewport="true">
     <LinearLayout
         android:layout_width="match_parent"

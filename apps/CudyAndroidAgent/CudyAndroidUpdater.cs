@@ -7,6 +7,8 @@ using Android.Net;
 using Android.OS;
 using Android.Provider;
 using Android.Util;
+using System.Net;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 
@@ -300,9 +302,11 @@ public static class CudyAndroidUpdater
             {
                 throw new InvalidOperationException("Update manifest has no valid SHA256");
             }
-            if (!downloadUrl.StartsWith("/", StringComparison.Ordinal))
+            var directDownload = System.Uri.TryCreate(downloadUrl, UriKind.Absolute, out var directUri)
+                && (directUri.Scheme == System.Uri.UriSchemeHttps || directUri.Scheme == System.Uri.UriSchemeHttp);
+            if (!directDownload && !downloadUrl.StartsWith("/", StringComparison.Ordinal))
             {
-                throw new InvalidOperationException("Only authenticated control-server update URLs are accepted");
+                throw new InvalidOperationException("Update URL must be an authenticated control path or an HTTP(S) URL");
             }
 
             var updatesDir = Path.Combine(context.FilesDir?.AbsolutePath ?? throw new InvalidOperationException("App files directory is unavailable."), "updates");
@@ -334,16 +338,23 @@ public static class CudyAndroidUpdater
                         ?.PutString("update_status", "downloading")
                         ?.Apply();
                 }
-                await Task.Run(() => CudySshControl.DownloadWithNewClient(
-                    host,
-                    user,
-                    privateKey,
-                    hostKey,
-                    token,
-                    downloadUrl,
-                    tempPath,
-                    cancellationToken,
-                    SaveProgress), cancellationToken);
+                if (directDownload)
+                {
+                    await DownloadDirectAsync(directUri!, tempPath, cancellationToken, SaveProgress);
+                }
+                else
+                {
+                    await Task.Run(() => CudySshControl.DownloadWithNewClient(
+                        host,
+                        user,
+                        privateKey,
+                        hostKey,
+                        token,
+                        downloadUrl,
+                        tempPath,
+                        cancellationToken,
+                        SaveProgress), cancellationToken);
+                }
                 var length = new FileInfo(tempPath).Length;
                 if (length <= 0 || length > MaximumApkBytes)
                 {
@@ -426,11 +437,83 @@ public static class CudyAndroidUpdater
         return result;
     }
 
-    private static bool HashMatches(string path, string expected) =>
-        string.Equals(
-            Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))),
+    private static bool HashMatches(string path, string expected)
+    {
+        using var stream = File.OpenRead(path);
+        return string.Equals(
+            Convert.ToHexString(SHA256.HashData(stream)),
             expected,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static async Task DownloadDirectAsync(
+        System.Uri uri,
+        string destinationPath,
+        CancellationToken cancellationToken,
+        Action<long, long>? progress)
+    {
+        const int maximumAttempts = 4;
+        using var client = new HttpClient
+        {
+            Timeout = TimeSpan.FromMinutes(12),
+        };
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                var existingLength = File.Exists(destinationPath)
+                    ? new FileInfo(destinationPath).Length
+                    : 0;
+                using var request = new HttpRequestMessage(HttpMethod.Get, uri);
+                if (existingLength > 0)
+                {
+                    request.Headers.Range = new RangeHeaderValue(existingLength, null);
+                }
+                using var response = await client.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    cancellationToken);
+                response.EnsureSuccessStatusCode();
+                var resumed = existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent;
+                if (!resumed)
+                {
+                    existingLength = 0;
+                }
+                var totalLength = response.Content.Headers.ContentRange?.Length
+                    ?? ((response.Content.Headers.ContentLength ?? 0) + existingLength);
+                await using var source = await response.Content.ReadAsStreamAsync(cancellationToken);
+                await using var destination = new FileStream(
+                    destinationPath,
+                    resumed ? FileMode.Append : FileMode.Create,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    128 * 1024,
+                    useAsync: true);
+                var buffer = new byte[128 * 1024];
+                var downloaded = existingLength;
+                progress?.Invoke(downloaded, totalLength);
+                while (true)
+                {
+                    var count = await source.ReadAsync(buffer, cancellationToken);
+                    if (count <= 0)
+                    {
+                        break;
+                    }
+                    await destination.WriteAsync(buffer.AsMemory(0, count), cancellationToken);
+                    downloaded += count;
+                    progress?.Invoke(downloaded, totalLength);
+                }
+                await destination.FlushAsync(cancellationToken);
+                return;
+            }
+            catch (Exception) when (attempt < maximumAttempts && !cancellationToken.IsCancellationRequested)
+            {
+                await Task.Delay(TimeSpan.FromSeconds(attempt), cancellationToken);
+            }
+        }
+        throw new IOException("Direct update download failed after all retry attempts.");
+    }
 
     private static void DeleteOldUpdates(string directory, string keepPath)
     {

@@ -74,6 +74,7 @@ public class MainActivity : Activity
     private string pendingDebugProbeUrl = "";
     private string pendingDebugProbeCandidates = "";
     private CancellationTokenSource? uiRefreshCts;
+    private bool initialScrollResetPending = true;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
@@ -233,7 +234,31 @@ public class MainActivity : Activity
         RenderStoredStatus();
         RenderPermissionStatus();
         MaybePromptBackgroundPermissions();
-        mainScrollView.Post(() => mainScrollView.ScrollTo(0, 0));
+        ResetMainScrollAfterLayout();
+    }
+
+    public override void OnWindowFocusChanged(bool hasFocus)
+    {
+        base.OnWindowFocusChanged(hasFocus);
+        if (hasFocus && initialScrollResetPending)
+        {
+            ResetMainScrollAfterLayout();
+        }
+    }
+
+    private void ResetMainScrollAfterLayout()
+    {
+        if (mainScrollView is null)
+        {
+            return;
+        }
+        mainScrollView.RequestFocus();
+        mainScrollView.PostDelayed(() =>
+        {
+            mainScrollView.RequestFocus();
+            mainScrollView.ScrollTo(0, 0);
+            initialScrollResetPending = false;
+        }, 250);
     }
 
     protected override void OnNewIntent(Intent? intent)
@@ -744,10 +769,12 @@ public class MainActivity : Activity
                 PresentDownloadedUpdate();
                 return;
             }
-            var result = await CudyAndroidUpdater.CheckAndDownloadAsync(
-                this,
-                force: true,
-                CancellationToken.None);
+            var appContext = ApplicationContext ?? this;
+            var result = await Task.Run(async () =>
+                await CudyAndroidUpdater.CheckAndDownloadAsync(
+                    appContext,
+                    force: true,
+                    CancellationToken.None).ConfigureAwait(false));
             outputText!.Text = "";
             resultSection!.Visibility = ViewStates.Gone;
             RenderUpdateButton();
