@@ -126,6 +126,8 @@ def main() -> int:
         "initial_delay_seconds: int = 5",
         "initial_delay_seconds: int = 30",
         "request_queue_size = 128",
+        "mirror_url = agent_update_mirror_url(platform)",
+        "self.send_redirect(mirror_url)",
     ):
         if marker not in source:
             raise AssertionError(f"worker startup delay is missing: {marker}")

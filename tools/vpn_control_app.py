@@ -3061,7 +3061,7 @@ def agent_app_version_manifest(platform: str) -> dict[str, Any]:
     if normalized_platform == "android":
         version_name = (os.environ.get("CUDY_ANDROID_VERSION_NAME") or str(file_version.get("version_name") or "1.0")).strip() or "1.0"
         version_code = int(os.environ.get("CUDY_ANDROID_VERSION_CODE") or str(file_version.get("version_code") or "1") or "1")
-        download_url = os.environ.get("CUDY_ANDROID_APK_URL", "").strip()
+        download_url = ""
         sha256 = (os.environ.get("CUDY_ANDROID_APK_SHA256") or str(file_version.get("sha256") or "")).strip()
         release_notes = os.environ.get("CUDY_ANDROID_RELEASE_NOTES", "").strip()
     else:
@@ -3085,6 +3085,18 @@ def agent_app_version_manifest(platform: str) -> dict[str, Any]:
         "release_notes": release_notes,
         "generated_at": now(),
     }
+
+
+def agent_update_mirror_url(platform: str) -> str:
+    normalized_platform = normalize_platform(platform) or "android"
+    env_name = "CUDY_ANDROID_APK_URL" if normalized_platform == "android" else f"CUDY_{normalized_platform.upper()}_DOWNLOAD_URL"
+    mirror_url = os.environ.get(env_name, "").strip()
+    if not mirror_url:
+        return ""
+    parsed = urlparse(mirror_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        return ""
+    return mirror_url
 
 
 def agent_enrollment_package(platform: str) -> tuple[Path, str, str] | None:
@@ -11051,6 +11063,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.require_agent()
                 query = parse_qs(parsed.query)
                 platform = normalize_platform(query.get("platform", [""])[0]) or "android"
+                mirror_url = agent_update_mirror_url(platform)
+                if mirror_url:
+                    self.send_redirect(mirror_url)
+                    return
                 suffix = ".apk" if platform == "android" else ".zip"
                 artifact = AGENT_UPDATE_DIR / f"{platform}{suffix}"
                 if not artifact.exists() or not artifact.is_file():
