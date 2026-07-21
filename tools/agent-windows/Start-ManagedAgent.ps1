@@ -852,6 +852,14 @@ function Stop-UnusedAwgTransports {
 Assert-Admin
 Rotate-AgentLog
 Write-AgentLine "Managed agent process starting. pid=$PID script=$PSCommandPath"
+try {
+    $uiInstaller = Join-Path $PSScriptRoot "Install-AgentUi.ps1"
+    if (Test-Path -LiteralPath $uiInstaller) {
+        & $uiInstaller | Out-Null
+    }
+} catch {
+    Write-AgentLine "Desktop UI shortcut repair failed: $($_.Exception.Message)" -Level WARN
+}
 
 $directSpecs = if ($NoDirectTransports) { @() } else { Parse-DirectTransport $DirectTransport }
 $vpnTypeSpecs = Parse-VpnTypeTransport $VpnTypeTransport

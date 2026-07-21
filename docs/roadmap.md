@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated: 2026-07-20.
+Updated: 2026-07-21.
 
 This roadmap contains remaining work only. The verified baseline is recorded
 in `docs/current-status.md` and frozen by tag
@@ -24,19 +24,23 @@ accepted baseline.
 
 ### Windows
 
-1. Rebuild the package from the current source and verify its manifest/hash.
+1. Completed: Windows `1.26 (27)` was rebuilt, package contents/hash were
+   verified, and the new desktop UI passed source and packaged runtime smoke.
 2. Run emergency-stop and watchdog tests before enabling the task.
 3. Enable the managed task in a controlled window with the independent recovery path.
 4. Reboot Windows and verify SSH self-heal, cached-policy fallback, selective
    routes and update reporting.
 5. Test Direct, Telegram, ChatGPT, Gemini, Mail.ru and a download/speed target.
+6. Run the new UI on a physical Windows installation: Start, Stop/direct
+   rollback, diagnostics copy, settings, manual update and post-update UI
+   relaunch must all pass without a focus-stealing console.
 
 Exit criteria: one reboot and a 24-hour run without lost LAN/internet, route
 leak, focus-stealing console or manual transport repair.
 
 ### Linux
 
-1. Confirm Dima receives Linux `1.23 (24)` through the control update path and
+1. Confirm Dima receives Linux `1.25 (26)` through the control update path and
    reports the expected non-empty TUN interface set after OFF/ON.
 2. Keep normal operation one-click from the UI; no manual Amnezia interface or
    route commands should be required.

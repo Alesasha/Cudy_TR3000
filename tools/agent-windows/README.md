@@ -148,6 +148,25 @@ Expected after applying routes:
 
 ## Managed Agent
 
+## Desktop UI
+
+The production package includes a small Windows UI that controls the existing
+agent scripts without duplicating routing logic. Install its Desktop and Start
+Menu shortcuts with:
+
+```powershell
+.\Install-AgentUi.ps1
+```
+
+The main action always reflects the current state: `Start agent`, `Starting...`
+or `Stop agent`. Stopping uses the full safe shutdown and restores direct
+routing. Diagnostics can be viewed and copied in the same window. Update checks
+use the authenticated control tunnel; after an update replaces the package the
+UI relaunches itself so the displayed version is current. Closing the UI does
+not stop the background agent.
+
+The universal installer creates these shortcuts automatically.
+
 After the managed transport PoC is verified, use one long-running command
 instead of separate terminals. It starts the AWG transport when needed, keeps
 the SSH tunnel to the control server alive, fetches real policy from the

@@ -102,6 +102,10 @@ if ($ApplyStaged) {
     if (Test-Path -LiteralPath $manifestPath) {
         Copy-Item -LiteralPath $manifestPath -Destination $VersionFile -Force
     }
+    $uiInstaller = Join-Path $PSScriptRoot "Install-AgentUi.ps1"
+    if (Test-Path -LiteralPath $uiInstaller) {
+        & $uiInstaller
+    }
     Start-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Write-Host "Agent update applied from $StagePath"
     exit 0

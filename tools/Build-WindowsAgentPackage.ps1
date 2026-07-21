@@ -3,6 +3,8 @@ param(
     [string]$AgentSecretsDir = "$PSScriptRoot\..\secrets\agents",
     [string]$SourceDir = "$PSScriptRoot\agent-windows",
     [string]$OutputDir = "$PSScriptRoot\..\secrets\agents",
+    [string]$VersionName = "1.26",
+    [int]$VersionCode = 27,
     [switch]$IncludeRuntime,
     [switch]$SkipZip
 )
@@ -46,24 +48,33 @@ $sourceFiles = @(
     "Apply-Routes.ps1",
     "Apply-Test-Routes.ps1",
     "Check-Net.ps1",
+    "Cudy-Agent.ps1",
     "Emergency-Stop-Agent.cmd",
     "Emergency-Stop-Agent.ps1",
+    "Enroll-Agent.ps1",
     "Find-SingBox.ps1",
     "Get-ManagedAgentStatus.ps1",
+    "Get-AgentUpdateStatus.ps1",
+    "Get-AgentUiStatus.ps1",
     "Install-AgentWatchdogTask.ps1",
+    "Install-AgentUi.ps1",
+    "Install-UniversalAgent.ps1",
     "Install-ManagedAgentTask.ps1",
     "Install-SingBoxRuntime.ps1",
+    "Invoke-AgentDiagnostics.ps1",
     "New-LokVpnConfig.ps1",
     "New-SingBoxHttpProxyConfig.ps1",
     "New-SingBoxVlessRealityConfig.ps1",
     "README.md",
     "Restore-Direct.ps1",
+    "Restart-AgentUi.ps1",
     "Run-Plan.ps1",
     "Send-AwgUapi.ps1",
     "Start-AwgTransport.ps1",
     "Start-ManagedAgent.ps1",
     "Start-SingBoxTransport.ps1",
     "Start-Tunnel.ps1",
+    "Set-AgentState.ps1",
     "Stop-AwgTransport.ps1",
     "Stop-SingBoxTransport.ps1",
     "Test-AutoMode.ps1",
@@ -94,8 +105,8 @@ Copy-Item -LiteralPath (Join-Path $agentDir "uswest_control_tunnel_ed25519.pub")
 
 $versionJson = @{
     platform = "windows"
-    version_name = "1.0"
-    version_code = 1
+    version_name = $VersionName
+    version_code = $VersionCode
 } | ConvertTo-Json -Depth 5
 [System.IO.File]::WriteAllText((Join-Path $stageDir "agent.version.json"), $versionJson, [System.Text.UTF8Encoding]::new($false))
 

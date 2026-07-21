@@ -11,14 +11,14 @@ This document records the verified live state. Planned work belongs in
 
 - This source tree defines the Android mobile-admin snapshot. Local secrets,
   APKs, databases, logs and runtime artifacts remain outside version control.
-- Agent stabilization and recovery are committed in `683c518`.
+- Agent stabilization and recovery are committed in `219d198`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
   - Android `1.40 (41)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
   - Linux `1.25 (26)`, published from the current source with a manifest-verified package;
-  - Windows `1.24 (25)`, SHA256
-    `e5cd332ef12a3804b189b3f4d2908cf3e1ec28d418be4a554618db6e5ef1602f`.
+  - Windows `1.26 (27)`, SHA256
+    `e92d6c6be4fc181fdbb98ebe7e95845003866ab1baddc4c48df3257e066c8736`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
   access, bounded fallback retries and the Windows OpenAI-maintenance source.
 
@@ -115,7 +115,9 @@ checks the production update channel every six hours on an unmetered network,
 downloads through the device's authenticated SSH channel, verifies the APK hash,
 package, version and signer, and notifies the user to approve installation. The
 main screen always shows installed/latest versions and manual checks remain in
-an acknowledged dialog instead of flashing transient status text.
+an acknowledged dialog instead of flashing transient status text. The attached
+physical phone completed the user-approved `1.38 -> 1.40` installation and now
+reports version code 41 with the VPN service foreground and requested.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy
@@ -348,9 +350,14 @@ Remaining Android concerns:
 
 ## Windows Agent
 
-- Windows `1.24 (25)` is built for the production update channel.
+- Windows `1.26 (27)` is built and published to the production update channel.
 - Packaging, cached-policy fallback, emergency stop and watchdog regression
   tests exist.
+- The production package now includes a responsive WinForms desktop UI and
+  Desktop/Start Menu shortcuts. Status collection runs outside the UI thread;
+  Start/Stop delegate to the existing elevated task and full direct-route
+  rollback, diagnostics are copyable, and a completed update relaunches the
+  replaced UI automatically. Source and packaged runtime smoke tests pass.
 - The development workstation scheduled task is intentionally disabled.
 - A universal desktop package can now activate a fresh Windows installation
   with the same one-time code used by Android. The bootstrap SSH key is pinned
@@ -376,7 +383,7 @@ Remaining Android concerns:
 
 ## Linux Agent
 
-- Linux `1.23 (24)` is published.
+- Linux `1.25 (26)` is published.
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.

@@ -29,6 +29,7 @@ happ-decryptor/
 **/__pycache__/
 *.pyc
 *.pyo
+/tools/agent-windows/run/
 
 **/node_modules/
 *.log

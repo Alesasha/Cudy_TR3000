@@ -30,8 +30,11 @@ if ($StartNow) {
 }
 & "$PSScriptRoot\Install-ManagedAgentTask.ps1" @taskArgs
 
+Write-Host "`n== install desktop UI =="
+& "$PSScriptRoot\Install-AgentUi.ps1"
+
 if ($StartNow) {
-    Write-Host "`nInstall complete. Cudy Agent is starting."
+    Write-Host "`nInstall complete. Cudy Agent is starting. Open it from the desktop shortcut."
 } else {
-    Write-Host "`nInstall complete. The agent is configured but remains OFF until it is started manually."
+    Write-Host "`nInstall complete. The agent remains OFF. Use the Cudy Agent desktop shortcut to start it."
 }
