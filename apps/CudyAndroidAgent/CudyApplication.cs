@@ -19,6 +19,7 @@ public sealed class CudyApplication : Application
     {
         base.OnCreate();
         StoreProcessMarker("process_started", "");
+        CudyAndroidUpdater.ReconcileInstalledUpdate(this);
         CudyRecoveryJobService.Schedule(this);
         CudyUpdateJobService.Schedule(this);
         AndroidEnvironment.UnhandledExceptionRaiser += (_, args) =>

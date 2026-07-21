@@ -756,6 +756,23 @@ def main() -> int:
                     first_bytes = response.read(2)
                 if first_bytes != b"PK":
                     raise AssertionError(f"admin Android package is not an APK/zip: {first_bytes!r}")
+                android_artifact = ROOT / "build" / "agent-updates" / "android.apk"
+                range_start = max(0, android_artifact.stat().st_size - 172)
+                range_request = urllib.request.Request(
+                    f"{base_url}{app_version['download_url']}",
+                    headers={
+                        "authorization": f"Bearer {device_token}",
+                        "range": f"bytes={range_start}-",
+                    },
+                )
+                with urllib.request.urlopen(range_request, timeout=5) as response:
+                    range_body = response.read()
+                    range_status = response.status
+                    content_range = response.headers.get("content-range", "")
+                if range_status != 206 or not content_range.startswith(f"bytes {range_start}-"):
+                    raise AssertionError(f"Android update range response is malformed: {range_status} {content_range!r}")
+                if range_body != android_artifact.read_bytes()[range_start:]:
+                    raise AssertionError("Android update range response returned the wrong bytes")
             windows_version = fetch_json_with_bearer(f"{base_url}/api/agent/app-version?platform=windows", device_token)
             if windows_version.get("download_url"):
                 request = urllib.request.Request(

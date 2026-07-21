@@ -1,4 +1,5 @@
 using Renci.SshNet;
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Sockets;
 using System.Text;
@@ -34,8 +35,55 @@ public static class CudySshControl
         string path,
         string destinationPath,
         CancellationToken cancellationToken,
+        Action<long, long>? progress = null,
         uint remotePort = 8765)
     {
+        const int maximumAttempts = 4;
+        for (var attempt = 1; attempt <= maximumAttempts; attempt++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            try
+            {
+                DownloadAttempt(
+                    host,
+                    user,
+                    privateKey,
+                    expectedHostKeySha256,
+                    token,
+                    path,
+                    destinationPath,
+                    cancellationToken,
+                    progress,
+                    remotePort);
+                return;
+            }
+            catch (Exception) when (attempt < maximumAttempts && !cancellationToken.IsCancellationRequested)
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(attempt));
+            }
+        }
+
+        throw new IOException("Update download failed after all retry attempts.");
+    }
+
+    private static void DownloadAttempt(
+        string host,
+        string user,
+        string privateKey,
+        string expectedHostKeySha256,
+        string token,
+        string path,
+        string destinationPath,
+        CancellationToken cancellationToken,
+        Action<long, long>? progress,
+        uint remotePort)
+    {
+        var directory = Path.GetDirectoryName(destinationPath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+        var existingLength = File.Exists(destinationPath) ? new FileInfo(destinationPath).Length : 0;
         using var client = CreateClient(host, user, privateKey, expectedHostKeySha256);
         client.Connect();
         using var forward = new ForwardedPortLocal("127.0.0.1", 0, "127.0.0.1", remotePort);
@@ -48,24 +96,50 @@ public static class CudySshControl
                 HttpMethod.Get,
                 $"http://127.0.0.1:{forward.BoundPort}{path}");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            if (existingLength > 0)
+            {
+                request.Headers.Range = new RangeHeaderValue(existingLength, null);
+            }
             using var response = http.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken).GetAwaiter().GetResult();
             response.EnsureSuccessStatusCode();
-            var directory = Path.GetDirectoryName(destinationPath);
-            if (!string.IsNullOrWhiteSpace(directory))
+            var resumed = existingLength > 0 && response.StatusCode == HttpStatusCode.PartialContent;
+            if (!resumed)
             {
-                Directory.CreateDirectory(directory);
+                existingLength = 0;
             }
+            var totalLength = response.Content.Headers.ContentRange?.Length
+                ?? ((response.Content.Headers.ContentLength ?? 0) + existingLength);
             using var source = response.Content.ReadAsStream(cancellationToken);
-            using var destination = new FileStream(destinationPath, FileMode.Create, FileAccess.Write, FileShare.None);
-            source.CopyToAsync(destination, 128 * 1024, cancellationToken).GetAwaiter().GetResult();
+            using var destination = new FileStream(
+                destinationPath,
+                resumed ? FileMode.Append : FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read);
+            var buffer = new byte[128 * 1024];
+            var downloaded = existingLength;
+            progress?.Invoke(downloaded, totalLength);
+            while (true)
+            {
+                var count = source.ReadAsync(buffer, cancellationToken).AsTask().GetAwaiter().GetResult();
+                if (count <= 0)
+                {
+                    break;
+                }
+                destination.Write(buffer, 0, count);
+                downloaded += count;
+                progress?.Invoke(downloaded, totalLength);
+            }
             destination.Flush(flushToDisk: true);
         }
         finally
         {
-            forward.Stop();
+            if (forward.IsStarted)
+            {
+                forward.Stop();
+            }
             client.RemoveForwardedPort(forward);
         }
     }

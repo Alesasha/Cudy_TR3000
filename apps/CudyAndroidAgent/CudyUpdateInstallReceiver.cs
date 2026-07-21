@@ -74,9 +74,12 @@ public sealed class CudyUpdateInstallReceiver : BroadcastReceiver
             }
             return;
         }
+        var friendlyMessage = message.Contains("VERIFICATION_FAILURE", StringComparison.OrdinalIgnoreCase)
+            ? "Play Protect blocked the update. Tap Install update again, then choose Details, Install anyway, and confirm with your fingerprint or PIN."
+            : string.IsNullOrWhiteSpace(message) ? $"installer status={status}" : message;
         preferences?.Edit()
             ?.PutString("update_status", "install-failed")
-            ?.PutString("update_error", string.IsNullOrWhiteSpace(message) ? $"installer status={status}" : message)
+            ?.PutString("update_error", friendlyMessage)
             ?.Apply();
         Log.Warn(LogTag, $"Android update installation failed: status={status} {message}");
     }

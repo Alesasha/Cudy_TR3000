@@ -126,6 +126,9 @@ def main() -> int:
             "StartUiRefreshLoop",
             "MaybeRecoverRequestedAgent",
             '"Downloading update {latestName}..."',
+            '"Downloading {latestName}: {percent}%"',
+            "If Play Protect blocks the update",
+            "ShortUpdateError(updateError)",
             '"Update to {latestName}"',
             '" | Ready to install"',
         ],
@@ -150,6 +153,8 @@ def main() -> int:
         SSH_CONTROL,
         [
             "DownloadWithNewClient",
+            "RangeHeaderValue(existingLength, null)",
+            "FileMode.Append",
             "HttpCompletionOption.ResponseHeadersRead",
             'new AuthenticationHeaderValue("Bearer", token)',
         ],
@@ -166,6 +171,7 @@ def main() -> int:
             "NotifyUpdateReady",
             "ActionInstallDownloadedUpdate",
             "CleanupInstalledUpdate",
+            "ReconcileInstalledUpdate",
         ],
     )
     assert_contains(
@@ -186,6 +192,7 @@ def main() -> int:
             "Agent restart requested after successful update.",
             "CudyRecoveryJobService.Schedule(context)",
             "CudyAndroidUpdater.CleanupInstalledUpdate(context)",
+            "Play Protect blocked the update.",
         ],
     )
     assert_contains(MANIFEST, ['android.permission.REQUEST_INSTALL_PACKAGES'])
@@ -194,8 +201,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>43</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.42</ApplicationDisplayVersion>",
+            "<ApplicationVersion>44</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.43</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -294,6 +301,7 @@ def main() -> int:
     assert_contains(
         ROOT / "apps" / "CudyAndroidAgent" / "CudyApplication.cs",
         [
+            "CudyAndroidUpdater.ReconcileInstalledUpdate(this)",
             "AndroidEnvironment.UnhandledExceptionRaiser",
             "AppDomain.CurrentDomain.UnhandledException",
             "TaskScheduler.UnobservedTaskException",

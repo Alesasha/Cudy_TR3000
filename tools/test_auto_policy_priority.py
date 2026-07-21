@@ -935,7 +935,15 @@ def run_service_dependency_probe_url_check(tmp: Path) -> None:
     assert_equal(by_service["youtube"].get("url"), "https://www.youtube.com/", "YouTube group probe URL")
     assert_equal(by_service["reuters"].get("url"), "https://www.reuters.com/", "Reuters group probe URL")
     assert_equal(by_service["chatgpt-openai"].get("url"), "https://chatgpt.com/", "OpenAI group probe URL")
-    member_domains = {"googlevideo.com", "www.reutersmedia.net", "oaistatic.com"}
+    member_domains = {
+        "googlevideo.com",
+        "www.reutersmedia.net",
+        "oaistatic.com",
+        "cdn.oaistatic.com",
+        "persistent.oaistatic.com",
+        "files.oaiusercontent.com",
+        "api.openai.com",
+    }
     assert_true(not member_domains.intersection(item["domain"] for item in entries), "group members must not schedule duplicate probes")
 
 

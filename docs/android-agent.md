@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.42 (43)`.
+Latest published release candidate: `1.43 (44)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,8 +49,8 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.42-20260721.apk`;
-- SHA256: `2492b9d323a574f3419b6c769b31b05d4d82f34f63177239931ffd9e69d53e4c`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.43-20260721.apk`;
+- SHA256: `7456370ecc3b9377d8170d73a82eb93ef307daa3f7e11c1e303fa6b1f2c55c83`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
@@ -86,6 +86,13 @@ periodic updater away from Android's main thread and does not block service
 shutdown on an in-flight SSH request. The control policy excludes the Gosuslugi
 package `ru.rostel` from VpnService so that application stays on the direct
 physical connection.
+
+Version 1.43 makes the 46.9 MB sideload download observable and resumable. The
+screen shows byte/percentage progress, interrupted SSH downloads resume with an
+authenticated HTTP Range request, and transient control sessions are retried.
+After verification the app explains the Android installer and Play Protect
+confirmation steps. Android still requires the owner to approve a sideloaded
+APK; this cannot be made silent by an ordinary, non-managed application.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 

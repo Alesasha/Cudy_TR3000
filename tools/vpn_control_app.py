@@ -153,9 +153,13 @@ SERVICE_ALIAS_SEEDS = [
             "openai.com",
             "auth.openai.com",
             "platform.openai.com",
+            "api.openai.com",
             "cdn.openai.com",
             "oaistatic.com",
+            "cdn.oaistatic.com",
+            "persistent.oaistatic.com",
             "oaiusercontent.com",
+            "files.oaiusercontent.com",
         ],
     },
     {
@@ -218,9 +222,13 @@ MANAGED_GLOBAL_DOMAIN_ROUTE_SEEDS = [
             "openai.com",
             "auth.openai.com",
             "platform.openai.com",
+            "api.openai.com",
             "cdn.openai.com",
             "oaistatic.com",
+            "cdn.oaistatic.com",
+            "persistent.oaistatic.com",
             "oaiusercontent.com",
+            "files.oaiusercontent.com",
         ],
     },
     {
@@ -265,9 +273,13 @@ MANAGED_CRITICAL_SERVICE_SEEDS = [
             "https://openai.com/",
             "https://auth.openai.com/",
             "https://platform.openai.com/",
+            "https://api.openai.com/",
             "https://cdn.openai.com/",
             "https://oaistatic.com/",
+            "https://cdn.oaistatic.com/",
+            "https://persistent.oaistatic.com/",
             "https://oaiusercontent.com/",
+            "https://files.oaiusercontent.com/",
         ],
     },
     {
@@ -10726,14 +10738,38 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def send_binary_file(self, path: Path, *, download_name: str, content_type: str = "application/octet-stream") -> None:
-        payload = path.read_bytes()
-        self.send_response(HTTPStatus.OK)
+        file_size = path.stat().st_size
+        start = 0
+        range_header = self.headers.get("range", "").strip()
+        if range_header:
+            match = re.fullmatch(r"bytes=(\d+)-", range_header, flags=re.IGNORECASE)
+            if not match:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("content-range", f"bytes */{file_size}")
+                self.send_header("content-length", "0")
+                self.end_headers()
+                return
+            start = int(match.group(1))
+            if start >= file_size:
+                self.send_response(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                self.send_header("content-range", f"bytes */{file_size}")
+                self.send_header("content-length", "0")
+                self.end_headers()
+                return
+        content_length = file_size - start
+        self.send_response(HTTPStatus.PARTIAL_CONTENT if start else HTTPStatus.OK)
         self.send_header("content-type", content_type)
         self.send_header("cache-control", "no-store")
+        self.send_header("accept-ranges", "bytes")
+        if start:
+            self.send_header("content-range", f"bytes {start}-{file_size - 1}/{file_size}")
         self.send_header("content-disposition", f'attachment; filename="{download_name}"')
-        self.send_header("content-length", str(len(payload)))
+        self.send_header("content-length", str(content_length))
         self.end_headers()
-        self.wfile.write(payload)
+        with path.open("rb") as source:
+            source.seek(start)
+            while chunk := source.read(256 * 1024):
+                self.wfile.write(chunk)
 
     def send_json(
         self,

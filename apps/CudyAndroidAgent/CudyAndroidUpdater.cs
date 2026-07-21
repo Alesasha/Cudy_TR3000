@@ -80,6 +80,21 @@ public static class CudyAndroidUpdater
             ?.Apply();
     }
 
+    public static void ReconcileInstalledUpdate(Context context)
+    {
+        var preferences = context.GetSharedPreferences(PreferencesName, FileCreationMode.Private);
+        var downloadedVersionCode = preferences?.GetLong("update_downloaded_version_code", 0) ?? 0;
+        if (downloadedVersionCode <= 0 || downloadedVersionCode > CurrentVersionCode(context))
+        {
+            return;
+        }
+        CleanupInstalledUpdate(context);
+        preferences?.Edit()
+            ?.PutString("update_status", "up-to-date")
+            ?.PutString("update_error", "")
+            ?.Apply();
+    }
+
     public static CudyUpdateInstallResult BeginInstall(Activity activity)
     {
         var preferences = activity.GetSharedPreferences(PreferencesName, FileCreationMode.Private);
@@ -244,8 +259,29 @@ public static class CudyAndroidUpdater
             if (!File.Exists(finalPath) || !HashMatches(finalPath, sha256))
             {
                 var tempPath = finalPath + ".part";
-                File.Delete(tempPath);
-                preferences.Edit()?.PutString("update_status", "downloading")?.Apply();
+                if (File.Exists(tempPath) && new FileInfo(tempPath).Length > MaximumApkBytes)
+                {
+                    File.Delete(tempPath);
+                }
+                preferences.Edit()
+                    ?.PutString("update_status", "downloading")
+                    ?.PutString("update_error", "")
+                    ?.Apply();
+                var lastProgressUpdate = 0L;
+                void SaveProgress(long downloaded, long total)
+                {
+                    var now = System.Environment.TickCount64;
+                    if (downloaded < total && now - lastProgressUpdate < 500)
+                    {
+                        return;
+                    }
+                    lastProgressUpdate = now;
+                    preferences.Edit()
+                        ?.PutLong("update_downloaded_bytes", downloaded)
+                        ?.PutLong("update_total_bytes", total)
+                        ?.PutString("update_status", "downloading")
+                        ?.Apply();
+                }
                 await Task.Run(() => CudySshControl.DownloadWithNewClient(
                     host,
                     user,
@@ -254,7 +290,8 @@ public static class CudyAndroidUpdater
                     token,
                     downloadUrl,
                     tempPath,
-                    cancellationToken), cancellationToken);
+                    cancellationToken,
+                    SaveProgress), cancellationToken);
                 var length = new FileInfo(tempPath).Length;
                 if (length <= 0 || length > MaximumApkBytes)
                 {
@@ -262,6 +299,7 @@ public static class CudyAndroidUpdater
                 }
                 if (!HashMatches(tempPath, sha256))
                 {
+                    File.Delete(tempPath);
                     throw new InvalidOperationException("Downloaded APK SHA256 does not match the signed manifest");
                 }
                 VerifyPackage(context, tempPath, versionCode);
@@ -274,6 +312,8 @@ public static class CudyAndroidUpdater
                 ?.PutString("update_downloaded_version_name", versionName)
                 ?.PutString("update_downloaded_path", finalPath)
                 ?.PutString("update_downloaded_sha256", sha256.ToLowerInvariant())
+                ?.PutLong("update_downloaded_bytes", new FileInfo(finalPath).Length)
+                ?.PutLong("update_total_bytes", new FileInfo(finalPath).Length)
                 ?.PutString("update_status", "ready")
                 ?.PutString("update_status_at", DateTimeOffset.Now.ToString("yyyy-MM-dd HH:mm:ss zzz"))
                 ?.Apply();

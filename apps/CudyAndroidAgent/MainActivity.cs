@@ -785,6 +785,10 @@ public class MainActivity : Activity
         {
             message += $"\n\n{result.Message}";
         }
+        if (offerInstall)
+        {
+            message += "\n\nAndroid will ask you to confirm installation. If Play Protect blocks the update, open Details, choose Install anyway, and confirm with your fingerprint or PIN.";
+        }
         var builder = new AlertDialog.Builder(this)
             .SetTitle(title)
             .SetMessage(message);
@@ -846,6 +850,9 @@ public class MainActivity : Activity
         var latestName = preferences?.GetString("update_latest_version_name", "") ?? "";
         var latestCode = preferences?.GetLong("update_latest_version_code", 0) ?? 0;
         var updateState = preferences?.GetString("update_status", "") ?? "";
+        var updateError = preferences?.GetString("update_error", "") ?? "";
+        var downloadedBytes = preferences?.GetLong("update_downloaded_bytes", 0) ?? 0;
+        var totalBytes = preferences?.GetLong("update_total_bytes", 0) ?? 0;
         var currentCode = CurrentVersionCode();
         if (ready)
         {
@@ -854,7 +861,12 @@ public class MainActivity : Activity
         }
         else if (string.Equals(updateState, "downloading", StringComparison.Ordinal))
         {
-            updateButton.Text = $"Downloading update {latestName}...".TrimEnd();
+            var percent = totalBytes > 0
+                ? Math.Clamp(downloadedBytes * 100 / totalBytes, 0, 100)
+                : 0;
+            updateButton.Text = totalBytes > 0
+                ? $"Downloading {latestName}: {percent}%"
+                : $"Downloading update {latestName}...".TrimEnd();
             updateButton.Enabled = false;
         }
         else if (string.Equals(updateState, "checking", StringComparison.Ordinal))
@@ -878,14 +890,23 @@ public class MainActivity : Activity
         var progress = updateState switch
         {
             "checking" => " | Checking...",
+            "downloading" when totalBytes > 0 => $" | Downloading {Math.Clamp(downloadedBytes * 100 / totalBytes, 0, 100)}%",
             "downloading" => " | Downloading...",
             "ready" => " | Ready to install",
             "awaiting-confirmation" => " | Waiting for confirmation",
             "install-requested" => " | Installing...",
+            "failed" or "install-failed" when !string.IsNullOrWhiteSpace(updateError) =>
+                $" | Update failed: {ShortUpdateError(updateError)}",
             "failed" or "install-failed" => " | Update failed",
             _ => "",
         };
         updateVersionText.Text = $"Installed: {CurrentVersionName()} | Latest: {latestDisplay}{progress}";
+    }
+
+    private static string ShortUpdateError(string value)
+    {
+        var normalized = string.Join(" ", value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length <= 90 ? normalized : normalized[..87] + "...";
     }
 
     private string CurrentVersionName()
