@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.45 (46)`.
+Latest published release candidate: `1.47 (48)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,8 +49,8 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.45-20260721.apk`;
-- SHA256: `5068a5660b2d810241764cbad05b9db89b28ddab98237d02849776bed25ce302`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.47-20260722.apk`;
+- SHA256: `781cfad466ec9cbd69b046c1c4b58bf03f60dd716c5fed471a1b9c3528e3284f`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
@@ -112,6 +112,12 @@ healthy. A blocked direct YouTube probe reproduced the former false recovery
 loop on the physical phone; two subsequent 1.45 control cycles kept
 `engine=running`, performed the expensive check only once and left the UI
 Connected.
+
+Version 1.47 handles Android 15/16 edge-to-edge action-bar overlap. It measures
+the action bar and content bounds after layout and adds only the missing top
+safe area, so older Android layouts are not double-padded. This was reproduced
+and verified on the attached X7 Pro running Android 16 with system font scale
+`1.45`; cold launch and Home/resume both kept the full status heading visible.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 
@@ -414,7 +420,7 @@ The control-server should still treat Android as a foreground/mobile agent:
 - Add broader Android-device smoke coverage outside the current MIUI phone.
 - Add optional rendered probes for services whose geographic decision is made
   by JavaScript rather than the initial HTTP body.
-- Repeat the physical 1.40 reboot/process-kill/update acceptance on the second
+- Repeat the physical 1.47 reboot/process-kill/update acceptance on the second
   enrolled phone.
 
 See also: [Android libbox runtime](android-libbox-runtime.md).

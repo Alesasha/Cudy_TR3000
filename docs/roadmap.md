@@ -1,6 +1,6 @@
 # Roadmap
 
-Updated: 2026-07-21.
+Updated: 2026-07-22.
 
 This roadmap contains remaining work only. The verified baseline is recorded
 in `docs/current-status.md` and frozen by tag
@@ -58,15 +58,15 @@ hours. A live cycle accepted a new probe job without changing the unified
 config hash or reloading libbox; the longer soak below remains required.
 
 1. Continue the multi-day Wi-Fi/mobile-data/background/locked-screen soak on
-   the physical test phones with `1.42 (43)`. Run `android-agent-soak.ps1` during
+   the physical test phones with `1.47 (48)`. Run `android-agent-soak.ps1` during
    focused sessions so a failure retains service, job, package, VPN, and crash
    evidence.
 2. Verify mobile-data/Wi-Fi transitions and provider reconnects.
 3. Soak the implemented MIUI Autostart confirmation. The app now distinguishes
    standard permissions it can verify from the vendor-only setting that Android
    cannot query, and stops repeating the warning after explicit confirmation.
-4. Soak the 1.42 state-aware first screen, cached startup, persistent control
-   forward, recovery paths and verified update
+4. Soak the 1.47 state-aware first screen, Android 16 safe-area handling,
+   cached startup, persistent control forward, recovery paths and verified update
    notification/install flow: diagnostics,
    routing details and advanced settings are collapsed until requested; sticky
    restarts reload persisted settings; the delayed recovery job must restart an

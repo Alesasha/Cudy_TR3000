@@ -1,6 +1,6 @@
 # Current Status
 
-Snapshot date: 2026-07-21.
+Snapshot date: 2026-07-22.
 
 Baseline tag: `snapshot-2026-07-18-android-code-enrollment-1.25`.
 
@@ -14,7 +14,7 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `219d198`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.45 (46)` published APK; its SHA256 is recorded in
+  - Android `1.47 (48)` published APK; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
   - Linux `1.30 (31)`, published from the current source with a manifest-verified package;
   - Windows `1.27 (28)`, SHA256
@@ -98,7 +98,7 @@ channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
 
-Android `1.45 (46)` is published for the focused stability soak. It restores
+Android `1.47 (48)` is published for the focused stability soak. It restores
 persisted configuration when Android restarts the sticky VPN service, records
 process/service/boot/recovery markers, retries a native-engine or critical-link
 safety stop instead of remaining permanently off, and schedules a persisted
@@ -134,6 +134,12 @@ cached for ten minutes and remain diagnostic warnings; they no longer stop or
 recreate a healthy TUN. The physical phone reproduced a YouTube probe warning
 and then completed two control cycles with `engine=running`, a Connected UI and
 no recovery restart.
+Version 1.47 fixes Android 15/16 edge-to-edge enforcement on devices with a
+large system font scale. The main content now measures the real system action
+bar overlap and applies only the missing safe-area padding. On the attached
+X7 Pro running Android 16 with font scale `1.45`, the status heading moved from
+the obscured `y=65` position to `y=377`, below the action bar ending at `y=312`.
+Fresh launch and Home/resume checks retained the corrected layout.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy
@@ -299,15 +305,15 @@ dataplane.
 
 ## Android Agent
 
-Android `1.40 (41)` is built, signed and published on the production
+Android `1.47 (48)` is built, signed and published on the production
 control-server through the private Cudy management path. The production APK
 and update manifest both have SHA256
-`41fb87efdb97e43bcd160f6301b24955b74ac1bb167f7c029e6da251b5d6b660`.
+`781cfad466ec9cbd69b046c1c4b58bf03f60dd716c5fed471a1b9c3528e3284f`.
 Fresh-device code-only enrollment and the resulting per-device control channel
 passed against production. The universal APK has now been installed and
-activated successfully on two physical phones. The Xiaomi acceptance phone was
-kept on `1.38 (39)` to exercise the real production update path. Version `1.40 (41)`
-keeps the recovery/UI work and adds verified background APK delivery; the
+activated successfully on two physical phones. The production update path has
+also completed on physical devices. Version `1.47 (48)` keeps the
+recovery/update work and fixes the Android 16 top-content overlap; the
 multi-day acceptance soak remains.
 
 Verified acceptance:
@@ -357,7 +363,7 @@ Remaining Android concerns:
   notification, VPN and battery permissions remain automatically verified;
 - a longer locked/background soak is still required despite the current
   device-idle whitelist and successful boot recovery;
-- the 1.27 UI hides raw diagnostics, routing and advanced settings by default;
+- the current UI hides raw diagnostics, routing and advanced settings by default;
   the longer-term visual redesign remains a separate UX task;
 - JavaScript-only geographic decisions still require rendered probes.
 - long-running acceptance on the two newly activated phones is now in progress;
@@ -536,7 +542,7 @@ Remaining Android concerns:
 
 ## Immediate Next Step
 
-Continue the Android `1.34 (35)` daily-use soak across Wi-Fi, mobile data, lock,
+Continue the Android `1.47 (48)` daily-use soak across Wi-Fi, mobile data, lock,
 background update download, user-approved installation, and reboot. The fresh
 Cudy main-router preflight completed with no hard failure;
 prepare encrypted Cudy Wi-Fi, VLAN 2 validation and missing static
