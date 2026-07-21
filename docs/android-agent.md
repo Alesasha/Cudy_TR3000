@@ -41,7 +41,7 @@ Verified on the physical test phone:
 - guides first-run setup through notification permission, Android VPN
   permission, battery optimization exemption, and MIUI Autostart/app settings.
 
-Latest published release candidate: `1.43 (44)`.
+Latest published release candidate: `1.44 (45)`.
 
 ```text
 ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jobs=1 completed=1 failed=0
@@ -49,8 +49,8 @@ ok engine=running server=android-unified iface=cudy0 vpn=validated probe_jobs jo
 
 Published release artifact:
 
-- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.43-20260721.apk`;
-- SHA256: `7456370ecc3b9377d8170d73a82eb93ef307daa3f7e11c1e303fa6b1f2c55c83`;
+- artifact: `build/releases/NashVPN-CudyAgent-android-arm64-v1.44-20260721.apk`;
+- SHA256: `af173599343c20e1a87db35442c86b4883e83e3e061415b95654a39b05231643`;
 - the production update manifest and APK have the same SHA256;
 - the production bootstrap and issued per-device SSH channels passed an
   end-to-end test. Version 1.29 passed physical reboot, manual stop/start,
@@ -93,6 +93,15 @@ authenticated HTTP Range request, and transient control sessions are retried.
 After verification the app explains the Android installer and Play Protect
 confirmation steps. Android still requires the owner to approve a sideloaded
 APK; this cannot be made silent by an ordinary, non-managed application.
+
+Version 1.44 fixes package-replacement reconciliation. If the new package
+starts with a cached or partially downloaded manifest whose version is equal to
+or older than the installed package, the agent deletes that stale APK/partial,
+cancels its notification, clamps Latest to the installed version and marks the
+state up to date. Both the updater and UI enforce this no-downgrade invariant.
+A physical `1.43 -> 1.44` replacement reproduced the stale cached-version case
+and immediately rendered `Installed: 1.44 | Latest: 1.44` while the VPN stayed
+connected.
 
 The previous 1.24 runtime smoke on the physical phone confirmed that:
 

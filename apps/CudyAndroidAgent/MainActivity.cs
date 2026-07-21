@@ -845,6 +845,7 @@ public class MainActivity : Activity
         {
             return;
         }
+        CudyAndroidUpdater.ReconcileInstalledUpdate(this);
         var ready = CudyAndroidUpdater.HasDownloadedUpdate(this);
         var versionName = CudyAndroidUpdater.DownloadedVersionName(this);
         var latestName = preferences?.GetString("update_latest_version_name", "") ?? "";

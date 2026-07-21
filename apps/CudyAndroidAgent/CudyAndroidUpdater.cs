@@ -83,16 +83,57 @@ public static class CudyAndroidUpdater
     public static void ReconcileInstalledUpdate(Context context)
     {
         var preferences = context.GetSharedPreferences(PreferencesName, FileCreationMode.Private);
-        var downloadedVersionCode = preferences?.GetLong("update_downloaded_version_code", 0) ?? 0;
-        if (downloadedVersionCode <= 0 || downloadedVersionCode > CurrentVersionCode(context))
+        if (preferences is null)
         {
             return;
         }
-        CleanupInstalledUpdate(context);
-        preferences?.Edit()
+        var currentVersionCode = CurrentVersionCode(context);
+        var currentVersionName = CurrentVersionName(context);
+        var downloadedVersionCode = preferences.GetLong("update_downloaded_version_code", 0);
+        var latestVersionCode = preferences.GetLong("update_latest_version_code", 0);
+        var updateStatus = preferences.GetString("update_status", "") ?? "";
+        var downloadedIsInstalled = downloadedVersionCode > 0 && downloadedVersionCode <= currentVersionCode;
+        var obsoleteTransientState = updateStatus is "checking"
+            or "downloading"
+            or "ready"
+            or "awaiting-confirmation"
+            or "install-requested";
+        var latestIsNotNewer = latestVersionCode > 0
+            && (latestVersionCode < currentVersionCode
+                || (latestVersionCode == currentVersionCode && obsoleteTransientState));
+        if (!downloadedIsInstalled && !latestIsNotNewer)
+        {
+            return;
+        }
+
+        if (downloadedIsInstalled)
+        {
+            CleanupInstalledUpdate(context);
+        }
+        var updatesDir = Path.Combine(context.FilesDir?.AbsolutePath ?? "", "updates");
+        if (latestIsNotNewer && Directory.Exists(updatesDir))
+        {
+            try
+            {
+                DeleteOldUpdates(updatesDir, "");
+            }
+            catch (Exception ex)
+            {
+                Log.Warn(LogTag, "Stale update cleanup failed: " + ex.Message);
+            }
+        }
+        preferences.Edit()
+            ?.PutLong("update_latest_version_code", currentVersionCode)
+            ?.PutString("update_latest_version_name", currentVersionName)
+            ?.Remove("update_latest_sha256")
+            ?.PutLong("update_downloaded_bytes", 0)
+            ?.PutLong("update_total_bytes", 0)
+            ?.PutBoolean("update_install_pending", false)
             ?.PutString("update_status", "up-to-date")
             ?.PutString("update_error", "")
             ?.Apply();
+        (context.GetSystemService(Context.NotificationService) as NotificationManager)
+            ?.Cancel(UpdateNotificationId);
     }
 
     public static CudyUpdateInstallResult BeginInstall(Activity activity)
@@ -189,6 +230,7 @@ public static class CudyAndroidUpdater
         bool force,
         CancellationToken cancellationToken)
     {
+        ReconcileInstalledUpdate(context);
         var preferences = context.GetSharedPreferences(PreferencesName, FileCreationMode.Private)
             ?? throw new InvalidOperationException("Preferences are unavailable.");
         var nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -241,8 +283,18 @@ public static class CudyAndroidUpdater
                 ?.Apply();
             if (versionCode <= CurrentVersionCode(context))
             {
-                preferences.Edit()?.PutString("update_status", "up-to-date")?.Apply();
-                return new CudyUpdateResult("up-to-date", false, false, versionCode, versionName, "App is up to date");
+                if (versionCode < CurrentVersionCode(context))
+                {
+                    Log.Warn(LogTag, $"Ignored stale Android update manifest: {versionName} ({versionCode})");
+                }
+                ReconcileInstalledUpdate(context);
+                return new CudyUpdateResult(
+                    "up-to-date",
+                    false,
+                    false,
+                    CurrentVersionCode(context),
+                    CurrentVersionName(context),
+                    "App is up to date");
             }
             if (string.IsNullOrWhiteSpace(sha256) || sha256.Length != 64)
             {
@@ -334,6 +386,13 @@ public static class CudyAndroidUpdater
         var packageInfo = context.PackageManager?.GetPackageInfo(context.PackageName ?? "", PackageInfoFlags.Signatures)
             ?? throw new InvalidOperationException("Installed package info is unavailable.");
         return (int)Build.VERSION.SdkInt >= 28 ? packageInfo.LongVersionCode : packageInfo.VersionCode;
+    }
+
+    private static string CurrentVersionName(Context context)
+    {
+        var packageInfo = context.PackageManager?.GetPackageInfo(context.PackageName ?? "", 0)
+            ?? throw new InvalidOperationException("Installed package info is unavailable.");
+        return packageInfo.VersionName ?? CurrentVersionCode(context).ToString();
     }
 
     private static void VerifyPackage(Context context, string path, long expectedVersionCode)

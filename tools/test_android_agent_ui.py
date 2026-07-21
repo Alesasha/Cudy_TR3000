@@ -172,6 +172,10 @@ def main() -> int:
             "ActionInstallDownloadedUpdate",
             "CleanupInstalledUpdate",
             "ReconcileInstalledUpdate",
+            'Ignored stale Android update manifest:',
+            'PutLong("update_latest_version_code", currentVersionCode)',
+            'DeleteOldUpdates(updatesDir, "")',
+            'latestVersionCode == currentVersionCode && obsoleteTransientState',
         ],
     )
     assert_contains(
@@ -201,8 +205,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>44</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.43</ApplicationDisplayVersion>",
+            "<ApplicationVersion>45</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.44</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
