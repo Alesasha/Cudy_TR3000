@@ -612,6 +612,7 @@ LOGIN_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cudy VPN Login</title>
+  <link rel="icon" href="data:,">
   <style>
     :root {
       --bg: #f6f7f9;
@@ -714,6 +715,7 @@ USER_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cudy VPN</title>
+  <link rel="icon" href="data:,">
   <style>
     :root {
       color-scheme: light;
@@ -1176,6 +1178,7 @@ ADMIN_HTML = r"""<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Cudy VPN Admin</title>
+  <link rel="icon" href="data:,">
   <style>
     :root {
       --bg: #f6f7f9;

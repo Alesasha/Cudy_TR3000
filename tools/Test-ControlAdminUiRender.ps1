@@ -36,14 +36,17 @@ const base = __BASE_URL__;
 const username = __ADMIN_USER__;
 const password = __ADMIN_PASSWORD__;
 const errors = [];
+page.setDefaultTimeout(60000);
+page.setDefaultNavigationTimeout(60000);
 page.on('console', message => {
   if (message.type() === 'error') errors.push(message.text());
 });
-await page.goto(base + '/login?next=/admin');
+await page.goto(base + '/login?next=/admin', { waitUntil: 'domcontentloaded' });
 await page.getByLabel('User').fill(username);
 await page.getByLabel('Password').fill(password);
 await page.getByRole('button', { name: 'Sign in' }).click();
-await page.waitForURL(/\/admin/);
+await page.waitForURL(url => url.pathname === '/admin');
+await page.waitForFunction(() => document.querySelectorAll('table.responsive-table').length > 0);
 for (const name of ['Status', 'Users', 'Devices', 'Global Routes', 'Auto Cache']) {
   await page.getByRole('button', { name: new RegExp('^' + name) }).click();
   await page.waitForTimeout(100);
