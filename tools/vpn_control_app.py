@@ -1255,6 +1255,39 @@ ADMIN_HTML = r"""<!doctype html>
       .admin-tabs { padding: 10px 14px 0; }
       main { padding: 14px; }
       .summary-grid { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+      section { overflow-x: visible; }
+      table.responsive-table, table.responsive-table tbody, table.responsive-table tr, table.responsive-table td {
+        display: block;
+        width: 100%;
+      }
+      table.responsive-table thead { display: none; }
+      table.responsive-table tr {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        margin: 0 0 12px;
+        padding: 4px 10px;
+      }
+      table.responsive-table td {
+        border-bottom: 1px solid var(--line);
+        display: flex;
+        align-items: flex-start;
+        flex-wrap: wrap;
+        gap: 6px 10px;
+        min-width: 0;
+        padding: 10px 0;
+        overflow-wrap: anywhere;
+      }
+      table.responsive-table td:last-child { border-bottom: 0; }
+      table.responsive-table td::before {
+        content: attr(data-label);
+        color: var(--muted);
+        flex: 0 0 104px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      table.responsive-table td[colspan]::before { display: none; }
+      table.responsive-table td > input:not([type="checkbox"]),
+      table.responsive-table td > select { min-width: 0; max-width: 100%; }
     }
   </style>
 </head>
@@ -1634,6 +1667,19 @@ ADMIN_HTML = r"""<!doctype html>
       const cls = ok === true ? "ok" : ok === false ? "error" : "";
       return `<span class="badge ${cls}">${text}</span>`;
     }
+    function decorateResponsiveTables() {
+      document.querySelectorAll("main table").forEach(table => {
+        table.classList.add("responsive-table");
+        const labels = [...table.querySelectorAll("thead th")].map(cell => cell.textContent.trim());
+        table.querySelectorAll("tbody tr").forEach(row => {
+          [...row.children].forEach((cell, index) => {
+            if (cell.tagName === "TD" && !cell.hasAttribute("data-label") && !cell.hasAttribute("colspan")) {
+              cell.dataset.label = labels[index] || "Details";
+            }
+          });
+        });
+      });
+    }
     function renderSystemStatus() {
       const status = state.systemStatus;
       const text = document.getElementById("systemStatusText");
@@ -1655,6 +1701,9 @@ ADMIN_HTML = r"""<!doctype html>
       const providerResult = providerWorker.last_result || {};
       const fallback = (status.control || {}).cudy_fallback_state || {};
       const backup = ((status.operations || {}).local_backup || {}).latest_archive || {};
+      const providerNewestAge = (status.transports || {}).newest_age_seconds;
+      const providerMode = providerWorker.enabled ? "internal" : "scheduled";
+      const fallbackState = fallback.reachable === false ? "private-only" : (fallback.ok ? "fresh" : "stale");
       grid.innerHTML = [
         ["Service", badge(status.ok, status.ok ? "OK" : "WARN"), `uptime ${fmtAge((status.service || {}).uptime_seconds)}`],
         ["Agents", `${(status.agents || {}).online || 0}/${(status.agents || {}).enabled || 0}`, `recent ${(status.agents || {}).recent_seconds || "-"}s`],
@@ -1662,8 +1711,8 @@ ADMIN_HTML = r"""<!doctype html>
         ["Discovery", `${(status.domain_discovery || {}).pending || 0} pending`, `${(status.domain_discovery || {}).total || 0} total`],
         ["Transports", `${(status.transports || {}).active || 0}/${(status.transports || {}).enabled || 0}`, `active / enabled; stale ${(status.transports || {}).stale_enabled_count || 0}`],
         ["Auto worker", badge(autoWorker.enabled, autoWorker.enabled ? "on" : "off"), `last ${fmtAge(autoWorker.last_finished_age_seconds)}`],
-        ["Provider worker", badge(providerWorker.enabled, providerWorker.enabled ? "on" : "off"), `${providerResult.refreshed ?? "-"} refreshed / ${providerResult.failed ?? "-"} failed`],
-        ["Cudy fallback", fallback.reachable === false ? badge(null, "unreachable") : badge(fallback.ok, fallback.ok ? "fresh" : "stale"), `age ${fmtAge(fallback.age_seconds)}`],
+        ["Provider refresh", badge(null, providerMode), providerWorker.enabled ? `${providerResult.refreshed ?? "-"} refreshed / ${providerResult.failed ?? "-"} failed` : `newest config ${fmtAge(providerNewestAge)} ago`],
+        ["Cudy fallback", badge(fallback.ok, fallbackState), fallback.reachable === false ? "private operator path; VPS inbound check skipped" : `age ${fmtAge(fallback.age_seconds)}`],
         ["VPS backup cache", backup.exists ? "present" : "none", `operator pull is checked separately`],
       ].map(([label, value, detail]) => `
         <div class="summary-item">
@@ -1677,7 +1726,7 @@ ADMIN_HTML = r"""<!doctype html>
         .join("; ");
       const rows = [
         ["Workers", providerWorker.last_error || autoWorker.last_error ? "error" : "ok", `auto ${fmtAge(autoWorker.last_finished_age_seconds)} / provider ${fmtAge(providerWorker.last_finished_age_seconds)}`, `auto=${autoWorker.last_error || "-"}; provider=${providerWorker.last_error || "-"}; refresh=${providerResult.refreshed ?? "-"}/${providerResult.failed ?? "-"}`],
-        ["Fallback", fallback.ok ? "ok" : "warn", fmtAge(fallback.age_seconds), fallback.error || fallback.archive_name || ""],
+        ["Fallback", fallback.reachable === false ? "info" : (fallback.ok ? "ok" : "warn"), fmtAge(fallback.age_seconds), fallback.reachable === false ? "Cudy is verified through the private operator path, not by an inbound VPS request" : (fallback.error || fallback.archive_name || "")],
         ["Providers", "info", fmtAge((status.transports || {}).oldest_age_seconds), providerDetails || "-"],
         ["Probe jobs", (status.probe_jobs || {}).failed_recent ? "warn" : "ok", `updated ${fmtAge((status.probe_jobs || {}).latest_updated_age_seconds)}`, JSON.stringify((status.probe_jobs || {}).by_status || {})],
         ["Domain discovery", "info", `latest ${fmtAge((status.domain_discovery || {}).latest_seen_age_seconds)}`, JSON.stringify((status.domain_discovery || {}).by_status || {})],
@@ -2546,6 +2595,7 @@ ADMIN_HTML = r"""<!doctype html>
       syncAutoEditorFromExisting("userDefault");
       renderAutoEditor("globalRoute");
       renderAutoEditor("adminRoute");
+      decorateResponsiveTables();
       resetFormSaveStates();
     }
     document.getElementById("newUserForm").addEventListener("submit", async event => {

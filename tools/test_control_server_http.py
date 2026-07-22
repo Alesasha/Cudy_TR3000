@@ -345,6 +345,10 @@ def main() -> int:
                 "/api/admin/agent-enrollment-package?platform=",
                 "app_version_name",
                 "app_version_code",
+                "decorateResponsiveTables",
+                "responsive-table",
+                "private operator path",
+                'const providerMode = providerWorker.enabled ? "internal" : "scheduled";',
             ):
                 if snippet not in admin_page:
                     raise AssertionError(f"admin page is missing {snippet!r}")
