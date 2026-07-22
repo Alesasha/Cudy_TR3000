@@ -23,6 +23,7 @@ LOG_PATH="$(strip_cr "${LOG_PATH:-./managed-agent.log}")"
 VPN_AGENT_TOKEN="$(strip_cr "${VPN_AGENT_TOKEN:-}")"
 VPN_AGENT_DEVICE_ID="$(strip_cr "${VPN_AGENT_DEVICE_ID:-}")"
 AGENT_AUTO_UPDATE="$(strip_cr "${AGENT_AUTO_UPDATE:-1}")"
+AGENT_UPDATE_CHECK_SECONDS="$(strip_cr "${AGENT_UPDATE_CHECK_SECONDS:-21600}")"
 export VPN_AGENT_TOKEN VPN_AGENT_DEVICE_ID
 export VPN_CONTROL_URL="http://127.0.0.1:${CONTROL_LOCAL_PORT}"
 
@@ -285,6 +286,31 @@ stop_unused_transports() {
   shopt -u nullglob
 }
 
+schedule_update_check() {
+  [ "$AGENT_AUTO_UPDATE" = "1" ] || return 0
+  [ -x ./update_agent.sh ] || return 0
+
+  local now last=0 stamp="run/update-check.epoch"
+  now="$(date +%s)"
+  [ -f "$stamp" ] && last="$(cat "$stamp" 2>/dev/null || printf '0')"
+  case "$last" in
+    ''|*[!0-9]*) last=0 ;;
+  esac
+  if [ $((now - last)) -lt "$AGENT_UPDATE_CHECK_SECONDS" ]; then
+    return 0
+  fi
+  printf '%s\n' "$now" > "$stamp"
+
+  # Version discovery and package download must never delay route refreshes.
+  # flock also prevents a manual check and the periodic check from racing.
+  (
+    if command -v flock >/dev/null 2>&1; then
+      flock -n 9 || exit 0
+    fi
+    ./update_agent.sh --from-agent >>logs/update-check.out.log 2>>logs/update-check.err.log || true
+  ) 9>run/update-check.lock &
+}
+
 mkdir -p run logs transports
 load_cached_control_endpoint
 log "managed linux agent starting pid=$$ control=${VPN_CONTROL_URL}"
@@ -296,19 +322,11 @@ while true; do
   control_online=0
   if ensure_tunnel; then
     control_online=1
-    if [ "$AGENT_AUTO_UPDATE" = "1" ] && [ -x ./update_agent.sh ]; then
-      set +e
-      ./update_agent.sh --from-agent
-      update_rc=$?
-      set -e
-      if [ "$update_rc" -ne 0 ]; then
-        log "self-update check failed rc=$update_rc"
-      fi
-    fi
     if python3 ./route_agent.py config --json > run/fresh-config.json.tmp; then
       mv run/fresh-config.json.tmp run/fresh-config.json
       cache_authenticated_control_endpoint run/fresh-config.json
       apply_config run/fresh-config.json "$control_online"
+      schedule_update_check
       cycle_ok=1
     else
       log "config fetch failed"

@@ -45,9 +45,9 @@ cat >"/etc/systemd/system/${watchdog_timer}" <<EOF
 Description=Run Cudy Agent Connectivity Safety Watchdog
 
 [Timer]
-OnBootSec=120
-OnUnitActiveSec=60
-AccuracySec=10
+OnBootSec=60
+OnUnitActiveSec=30
+AccuracySec=5
 Persistent=true
 Unit=${watchdog_service}
 

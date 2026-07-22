@@ -142,7 +142,6 @@ apply_staged_update() {
   write_update_status "applying staged update. Some services may be temporarily unavailable until update finishes."
   write_update_marker "applying"
   echo "Applying staged agent update from $stage_path" >> "$log_file" 2>/dev/null || true
-  sleep 3
   if command -v systemctl >/dev/null 2>&1; then
     write_update_status "stopping agent service to apply update. Some services may be temporarily unavailable until update finishes."
     write_update_marker "stopping-service"
@@ -288,17 +287,51 @@ rm -rf -- "$WORK_DIR"
 mkdir -p "$WORK_DIR" logs
 write_update_marker "downloading"
 write_update_status "downloading update current=$current_code latest=$latest_code. The current agent remains active."
-python3 - "$CONTROL_URL" "$download_url" "$archive" "${VPN_AGENT_TOKEN:-}" <<'PY'
+python3 - "$CONTROL_URL" "$download_url" "$archive" "${VPN_AGENT_TOKEN:-}" "$UPDATE_STATUS_FILE" "$current_code" "$latest_code" <<'PY'
+import os
 import sys
+import time
 import urllib.request
-base, url, output, token = sys.argv[1:5]
+from datetime import datetime
+
+base, url, output, token, status_path, current_code, latest_code = sys.argv[1:8]
 if url.startswith("/"):
     url = base.rstrip("/") + url
 request = urllib.request.Request(url)
 if token and url.startswith(base.rstrip("/")):
     request.add_header("Authorization", "Bearer " + token)
+
+def write_status(message):
+    os.makedirs(os.path.dirname(status_path) or ".", exist_ok=True)
+    temp = status_path + ".tmp"
+    with open(temp, "w", encoding="utf-8") as fh:
+        fh.write(f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] {message}\n")
+    os.replace(temp, status_path)
+
 with urllib.request.urlopen(request, timeout=180) as response, open(output, "wb") as fh:
-    fh.write(response.read())
+    total = int(response.headers.get("Content-Length") or 0)
+    received = 0
+    last_percent = -1
+    last_update = 0.0
+    while True:
+        chunk = response.read(256 * 1024)
+        if not chunk:
+            break
+        fh.write(chunk)
+        received += len(chunk)
+        percent = int(received * 100 / total) if total > 0 else -1
+        now = time.monotonic()
+        if percent >= 0 and (percent >= last_percent + 5 or now - last_update >= 3):
+            write_status(
+                f"downloading update current={current_code} latest={latest_code} progress={min(percent, 100)}%. "
+                "The current agent remains active."
+            )
+            last_percent = percent
+            last_update = now
+    write_status(
+        f"staging downloaded update current={current_code} latest={latest_code}. "
+        "The current agent remains active."
+    )
 PY
 if [ -n "$expected_sha256" ]; then
   actual_sha256="$(sha256sum "$archive" | awk '{print tolower($1)}')"

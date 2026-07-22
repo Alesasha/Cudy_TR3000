@@ -252,7 +252,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--agent-service", default="cudy-managed-agent.service")
     parser.add_argument("--failure-threshold", type=int, default=3)
-    parser.add_argument("--retry-seconds", type=int, default=180)
+    parser.add_argument("--retry-seconds", type=int, default=60)
     parser.add_argument("--probe-only", action="store_true")
     args = parser.parse_args()
     RUN_DIR.mkdir(parents=True, exist_ok=True)

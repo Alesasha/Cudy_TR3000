@@ -16,7 +16,7 @@ This document records the verified live state. Planned work belongs in
 - Current agent artifacts:
   - Android `1.48 (49)` release candidate; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
-  - Linux `1.30 (31)`, published from the current source with a manifest-verified package;
+  - Linux `1.31 (32)`, built from the current source with a manifest-verified package;
   - Windows `1.27 (28)`, SHA256
     `e4719300e06ec22b835fdef75266bbabd698c23c8ab7fa75ac387642e576b6e2`.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
@@ -413,7 +413,11 @@ Remaining Android concerns:
 
 ## Linux Agent
 
-- Linux `1.30 (31)` is published. Background checks stage and verify the package while the current service keeps running; installation requires explicit UI approval.
+- Linux `1.31 (32)` is built. Policy refresh now runs before update discovery;
+  update checks/downloads are detached from the one-minute routing loop and
+  rate-limited to once per six hours. The current service keeps running while
+  the package is downloaded and verified, and installation still requires
+  explicit UI approval.
 - The wrapper now explicitly reports transport-management capability.
 - The one-click package contains service install, status, diagnostics,
   rollback and bundled sing-box support.
@@ -437,10 +441,12 @@ Remaining Android concerns:
   Auto winners were present. This isolates the immediate failure to agent
   recovery rather than a missing ChatGPT route.
 - Update completion is reported only after the systemd service is active. The
-  `1.30` watchdog no longer disables autostart after failed service probes and continuously removes managed TUN interfaces from `systemd-resolved` default DNS selection:
+  watchdog no longer disables autostart after failed service probes and continuously removes managed TUN interfaces from `systemd-resolved` default DNS selection:
   isolated critical-service failures are reported, while a complete base
   connectivity failure temporarily stops the service, restores direct routing
-  and retries the still-enabled agent after a cooldown.
+  and retries the still-enabled agent after a one-minute cooldown. Its timer
+  now runs every 30 seconds, so this recovery is not presented as a prolonged
+  user-requested OFF state.
 - The Linux taskbar icon now follows runtime state every five seconds: green
   healthy, yellow starting/recovery/update, red lost control and black only
   for an explicitly disabled agent.
