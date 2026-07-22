@@ -92,9 +92,10 @@ try {
     }
 }
 finally {
-    Invoke-Adb logcat -d -v threadtime CudyAgent:I AndroidRuntime:E '*:S' |
+    & $adb -s $Serial logcat -d -v threadtime "CudyAgent:I" "AndroidRuntime:E" "*:S" |
         Set-Content -LiteralPath $logcatPath
-    Invoke-Adb logcat -b crash -d -v threadtime | Set-Content -LiteralPath $crashPath
+    & $adb -s $Serial logcat -b crash -d -v threadtime |
+        Set-Content -LiteralPath $crashPath
     Add-Sample
     Write-Host "Soak diagnostics saved: $sessionDir"
 }

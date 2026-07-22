@@ -90,6 +90,10 @@ ANDROID_PROBE_TRANSPORT_WARM_SECONDS = int(
 )
 ANDROID_PROBE_TRANSPORT_WARM_LIMIT = int(os.environ.get("ANDROID_PROBE_TRANSPORT_WARM_LIMIT", "64"))
 ANDROID_SUPPORTED_TRANSPORT_TYPES = {"http-proxy-tun", "vless-reality-tun", "sing-box-json"}
+AUTO_WINNER_MIN_IMPROVEMENT_PERCENT = max(
+    0,
+    min(100, int(os.environ.get("AUTO_WINNER_MIN_IMPROVEMENT_PERCENT", "15"))),
+)
 WORKER_STATUS_LOCK = threading.Lock()
 FALLBACK_STATUS_CACHE_LOCK = threading.Lock()
 FALLBACK_STATUS_CACHE: dict[str, Any] = {"checked_at": 0.0, "value": None}
@@ -5232,6 +5236,7 @@ def resolve_auto_candidate_policy(
     *,
     user_id: str,
     domain: str,
+    servers: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     candidates = [
         (user_id, domain),
@@ -5256,7 +5261,7 @@ def resolve_auto_candidate_policy(
         except json.JSONDecodeError:
             server_ids = []
         item["candidate_server_ids"] = server_ids
-        item["expanded_candidate_server_ids"] = expand_auto_candidate_ids(server_map(conn), server_ids)
+        item["expanded_candidate_server_ids"] = expand_auto_candidate_ids(servers or server_map(conn), server_ids)
         item["scope"] = auto_policy_scope(item.get("user_id") or "", item.get("domain") or "")
         return item
     return None
@@ -5793,6 +5798,51 @@ def claim_agent_probe_jobs(
     return claimed
 
 
+def stabilize_probe_winner(
+    conn: sqlite3.Connection,
+    *,
+    domain: str,
+    result: dict[str, Any],
+    proposed_winner: dict[str, Any] | None,
+) -> tuple[dict[str, Any] | None, str]:
+    """Avoid route flapping when the current winner remains nearly as fast."""
+    if proposed_winner is None or AUTO_WINNER_MIN_IMPROVEMENT_PERCENT <= 0:
+        return proposed_winner, ""
+    cached = row(
+        conn,
+        "SELECT selected_server_id FROM domain_auto_cache WHERE domain = ?",
+        (domain,),
+    )
+    current_server_id = str((cached or {}).get("selected_server_id") or "")
+    proposed_server_id = str(proposed_winner.get("server_id") or "")
+    if not current_server_id or current_server_id == proposed_server_id:
+        return proposed_winner, ""
+
+    current_check: dict[str, Any] | None = None
+    for value in result.get("checks") or []:
+        if not isinstance(value, dict):
+            continue
+        if str(value.get("server_id") or "") != current_server_id or value.get("ok") is not True:
+            continue
+        current_check = value
+        break
+    if current_check is None:
+        return proposed_winner, "current_winner_failed_or_not_tested"
+
+    try:
+        proposed_score = float(proposed_winner.get("time_total_ms") or proposed_winner.get("elapsed_ms"))
+        current_score = float(current_check.get("time_total_ms") or current_check.get("elapsed_ms"))
+    except (TypeError, ValueError):
+        return proposed_winner, "missing_comparable_scores"
+    if proposed_score < 0 or current_score <= 0:
+        return proposed_winner, "missing_comparable_scores"
+
+    improvement_percent = ((current_score - proposed_score) / current_score) * 100.0
+    if improvement_percent >= AUTO_WINNER_MIN_IMPROVEMENT_PERCENT:
+        return proposed_winner, f"switched_improvement={improvement_percent:.1f}%"
+    return dict(current_check), f"kept_current_improvement={improvement_percent:.1f}%"
+
+
 def complete_agent_probe_job(
     db_path: Path,
     inventory_path: Path,
@@ -5809,7 +5859,20 @@ def complete_agent_probe_job(
             raise ValueError(f"Unknown probe job: {job_id}")
         if job.get("claimed_by_device_id") not in ("", device["id"]):
             raise PermissionError("Probe job is claimed by another device")
-        winner = result.get("winner") if isinstance(result.get("winner"), dict) else None
+        proposed_winner = result.get("winner") if isinstance(result.get("winner"), dict) else None
+        winner, selection_reason = stabilize_probe_winner(
+            conn,
+            domain=str(job.get("domain") or ""),
+            result=result,
+            proposed_winner=proposed_winner,
+        )
+        if winner is not proposed_winner or selection_reason:
+            result = {
+                **result,
+                "probe_fastest": proposed_winner,
+                "winner": winner,
+                "selection_reason": selection_reason,
+            }
         winner_server_id = str((winner or {}).get("server_id") or "")
         score_ms_raw = (winner or {}).get("time_total_ms") or (winner or {}).get("elapsed_ms")
         score_ms = int(score_ms_raw) if score_ms_raw not in (None, "") else None
@@ -8109,16 +8172,27 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
     if not user:
         raise PermissionError("Agent user is disabled or missing")
     effective: dict[str, dict[str, Any]] = {}
+    effective_services = effective_critical_services(conn, user_id=user_id)
+
+    def cached_service_group_for_domain(domain: str, *, scope: str | None = None) -> dict[str, Any] | None:
+        try:
+            normalized_domain = normalize_domain(domain)
+        except ValueError:
+            return None
+        for service in effective_services:
+            if not service.get("routing_enabled"):
+                continue
+            if scope is not None and service.get("scope") != scope:
+                continue
+            for host in critical_service_target_hosts(service):
+                if normalized_domain == host or normalized_domain.endswith("." + host):
+                    return service
+        return None
 
     def grouped_auto_route(route: dict[str, Any], *, scope: str | None = None) -> dict[str, Any]:
         if str(route.get("server_id") or "") != "auto":
             return route
-        service = effective_service_group_for_domain(
-            conn,
-            user_id=user_id,
-            domain=str(route.get("domain") or ""),
-            scope=scope,
-        )
+        service = cached_service_group_for_domain(str(route.get("domain") or ""), scope=scope)
         if service is None:
             return route
         return {
@@ -8129,15 +8203,15 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
                 str(service.get("user_id") or ""),
                 str(service["service_key"]),
             ),
-            "auto_candidate_policy": service_group_policy(conn, service),
+            "auto_candidate_policy": service_group_policy(conn, service, servers=servers),
         }
 
     def add_service_group_routes(*, scope: str, overwrite: bool) -> None:
-        for service in effective_critical_services(conn, user_id=user_id):
+        for service in effective_services:
             if service.get("scope") != scope or not service.get("routing_enabled"):
                 continue
             cache_key = service_auto_cache_key(str(service.get("user_id") or ""), str(service["service_key"]))
-            policy = service_group_policy(conn, service)
+            policy = service_group_policy(conn, service, servers=servers)
             for domain in critical_service_target_hosts(service):
                 route = {
                     "domain": domain,
@@ -8190,7 +8264,12 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
         cache_key = str(route.get("auto_cache_key") or route["domain"])
         auto_policy = route.get("auto_candidate_policy")
         if requested_server_id == "auto" and auto_policy is None:
-            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=route["domain"])
+            auto_policy = resolve_auto_candidate_policy(
+                conn,
+                user_id=user_id,
+                domain=route["domain"],
+                servers=servers,
+            )
         resolved_server_id, cached = resolve_route_server(
             domain=cache_key,
             requested_server_id=requested_server_id,
@@ -8254,7 +8333,12 @@ def build_agent_config(conn: sqlite3.Connection, *, user_id: str, device: dict[s
             service_group = ip_service_groups.get(route["target_cidr"])
             cache_key = str((service_group or {}).get("key") or route_cache_key)
             route_warnings: list[str] = []
-            auto_policy = resolve_auto_candidate_policy(conn, user_id=user_id, domain=route_cache_key)
+            auto_policy = resolve_auto_candidate_policy(
+                conn,
+                user_id=user_id,
+                domain=route_cache_key,
+                servers=servers,
+            )
             effective_auto_cache = cached_auto
             if service_group:
                 effective_auto_cache = {**cached_auto, **group_cache}
@@ -9812,13 +9896,18 @@ def service_auto_cache_key(user_id: str, service_key: str) -> str:
     return f"service-{digest}.group.local"
 
 
-def service_group_policy(conn: sqlite3.Connection, service: dict[str, Any]) -> dict[str, Any]:
+def service_group_policy(
+    conn: sqlite3.Connection,
+    service: dict[str, Any],
+    *,
+    servers: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     candidates = list(service.get("candidate_server_ids") or [])
     return {
         "user_id": service.get("user_id") or "",
         "domain": service_auto_cache_key(str(service.get("user_id") or ""), str(service["service_key"])),
         "candidate_server_ids": candidates,
-        "expanded_candidate_server_ids": expand_auto_candidate_ids(server_map(conn), candidates),
+        "expanded_candidate_server_ids": expand_auto_candidate_ids(servers or server_map(conn), candidates),
         "scope": "user_service_group" if service.get("user_id") else "global_service_group",
         "service_key": service["service_key"],
         "label": service.get("label") or service["service_key"],

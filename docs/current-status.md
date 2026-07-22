@@ -14,7 +14,7 @@ This document records the verified live state. Planned work belongs in
 - Agent stabilization and recovery are committed in `219d198`.
 - `secrets/`, APKs, local databases, logs and runtime output remain ignored.
 - Current agent artifacts:
-  - Android `1.47 (48)` published APK; its SHA256 is recorded in
+  - Android `1.48 (49)` release candidate; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
   - Linux `1.30 (31)`, published from the current source with a manifest-verified package;
   - Windows `1.27 (28)`, SHA256
@@ -98,7 +98,7 @@ channels and removed its temporary user afterward. Android `1.25 (26)` also
 keeps the protected mobile-admin user/device CRUD screen. The admin password is
 held only for the login request and is not persisted.
 
-Android `1.47 (48)` is published for the focused stability soak. It restores
+Android `1.48 (49)` is built for the focused stability soak. It restores
 persisted configuration when Android restarts the sticky VPN service, records
 process/service/boot/recovery markers, retries a native-engine or critical-link
 safety stop instead of remaining permanently off, and schedules a persisted
@@ -140,6 +140,14 @@ bar overlap and applies only the missing safe-area padding. On the attached
 X7 Pro running Android 16 with font scale `1.45`, the status heading moved from
 the obscured `y=65` position to `y=377`, below the action bar ending at `y=312`.
 Fresh launch and Home/resume checks retained the corrected layout.
+Version 1.48 shortens a stalled SSH-forwarded control request from 60 to 20
+seconds and keeps the already validated TUN active while control reconnects.
+The production control-server now applies 15% winner hysteresis, so small probe
+timing differences do not replace a still-working Auto winner and trigger an
+Android unified-config reload. A five-minute physical soak across a production
+control-server restart retained one foreground service and a
+`CONNECTED/VALIDATED` TUN in all 20 samples. The soak collector itself now
+terminates reliably and preserves app/crash logcat evidence.
 
 A later direct audit on 2026-07-16 reached TCP/22 but did not complete the SSH
 banner/session. The Cudy restricted control tunnel and live fallback policy

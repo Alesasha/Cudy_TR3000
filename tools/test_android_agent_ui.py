@@ -212,8 +212,8 @@ def main() -> int:
         [
             "android_enrollment_bootstrap_ed25519",
             "EnsureEnrollmentBootstrapKey",
-            "<ApplicationVersion>48</ApplicationVersion>",
-            "<ApplicationDisplayVersion>1.47</ApplicationDisplayVersion>",
+            "<ApplicationVersion>49</ApplicationVersion>",
+            "<ApplicationDisplayVersion>1.48</ApplicationDisplayVersion>",
         ],
     )
     main_text = MAIN_ACTIVITY.read_text(encoding="utf-8")
@@ -413,7 +413,7 @@ def main() -> int:
         [
             "Timeout = TimeSpan.FromSeconds(12)",
             "ConnectTimeout = TimeSpan.FromSeconds(2)",
-            "Timeout = TimeSpan.FromSeconds(60)",
+            "Timeout = TimeSpan.FromSeconds(20)",
             "IsLocalForwardStarting",
             "attempt < 5",
         ],

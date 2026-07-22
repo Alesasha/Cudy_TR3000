@@ -380,6 +380,48 @@ def run_agent_transport_plan_is_minimal_check(db_path: Path) -> None:
     assert_true("proxyfr" not in android_transport_ids, "Android should prune an expired probe transport")
 
 
+def run_probe_winner_hysteresis_check(db_path: Path) -> None:
+    domain = "stable-winner.example"
+    with app.connect(db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO domain_auto_cache (domain, selected_server_id, score_ms, status, checked_at, metadata_json)
+            VALUES (?, 'proxyde', 1000, 'test', ?, '{}')
+            ON CONFLICT(domain) DO UPDATE SET selected_server_id = 'proxyde', score_ms = 1000
+            """,
+            (domain, app.now()),
+        )
+        small_gain = {
+            "checks": [
+                {"server_id": "proxyde", "ok": True, "time_total_ms": 1000},
+                {"server_id": "proxynl", "ok": True, "time_total_ms": 920},
+            ],
+        }
+        selected, reason = app.stabilize_probe_winner(
+            conn,
+            domain=domain,
+            result=small_gain,
+            proposed_winner=small_gain["checks"][1],
+        )
+        assert_equal(selected["server_id"], "proxyde", "small probe gain should not flap the route")
+        assert_true(reason.startswith("kept_current"), "hysteresis should explain retained winner")
+
+        large_gain = {
+            "checks": [
+                {"server_id": "proxyde", "ok": True, "time_total_ms": 1000},
+                {"server_id": "proxynl", "ok": True, "time_total_ms": 700},
+            ],
+        }
+        selected, reason = app.stabilize_probe_winner(
+            conn,
+            domain=domain,
+            result=large_gain,
+            proposed_winner=large_gain["checks"][1],
+        )
+        assert_equal(selected["server_id"], "proxynl", "material probe gain should change the route")
+        assert_true(reason.startswith("switched"), "hysteresis should explain changed winner")
+
+
 def run_auto_worker_prefers_domain_agent_check(db_path: Path) -> None:
     for port, server_id in enumerate(["proxyde", "proxynl"], start=19080):
         app.save_transport_config(
@@ -1143,6 +1185,7 @@ def main() -> int:
         run_uncached_auto_domain_uses_first_available_candidate_check(db_path)
         run_cached_winner_respects_effective_policy_check()
         run_agent_transport_plan_is_minimal_check(db_path)
+        run_probe_winner_hysteresis_check(db_path)
         run_auto_worker_prefers_domain_agent_check(db_path)
         run_probe_claim_requires_transport_capability_check(db_path)
         run_probe_jobs_are_user_isolated_check(db_path)

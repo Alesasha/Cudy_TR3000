@@ -258,7 +258,9 @@ public static class CudySshControl
         {
             ConnectTimeout = TimeSpan.FromSeconds(2),
         };
-        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(60) };
+        // A working VPN must not wait a full minute on a stalled control request.
+        // The caller reconnects SSH once and keeps the last applied policy active.
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(20) };
         for (var attempt = 1; ; attempt++)
         {
             try
