@@ -45,6 +45,8 @@ def main() -> int:
     assert_contains(starter, "Update-AgentPackage.ps1", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "-FromAgent", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "exit=$exitCode", label="Start-ManagedAgent.ps1")
+    assert_contains(starter, "UpdateCheckSeconds", label="Start-ManagedAgent.ps1")
+    assert_contains(starter, "background self-update check started", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "Save-AuthenticatedControlEndpoint", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "run\\control-endpoint.json", label="Start-ManagedAgent.ps1")
     assert_contains(starter, "ExpectedHostKeySha256", label="Start-ManagedAgent.ps1")
@@ -61,12 +63,14 @@ def main() -> int:
     assert_contains(updater, "Copy-UpdateFiles", label="Update-AgentPackage.ps1")
     assert_contains(updater, "agent.env.ps1", label="Update-AgentPackage.ps1")
     assert_contains(updater, "uswest_control_tunnel_ed25519", label="Update-AgentPackage.ps1")
-    assert_contains(updater, "exit 10", label="Update-AgentPackage.ps1")
+    assert_contains(updater, "waiting for user approval", label="Update-AgentPackage.ps1")
+    assert_contains(updater, "Get-FileHash", label="Update-AgentPackage.ps1")
     assert_contains(updater, "Install-AgentUi.ps1", label="Update-AgentPackage.ps1")
     assert_contains(updater, "migrated to", label="Update-AgentPackage.ps1")
     assert_contains(updater, "Remove-Item -LiteralPath $WorkDir", label="Update-AgentPackage.ps1")
 
     assert_contains(env_example, "AGENT_AUTO_UPDATE", label="agent.env.ps1.example")
+    assert_contains(env_example, "AGENT_UPDATE_CHECK_SECONDS", label="agent.env.ps1.example")
     assert_contains(env_example, "AGENT_VERSION_CODE", label="agent.env.ps1.example")
     assert_contains(env_example, "VPN_CONTROL_PRIMARY_SSH_HOST_KEY_SHA256", label="agent.env.ps1.example")
     assert_contains(starter, "Write-AgentHeartbeat", label="Start-ManagedAgent.ps1")
@@ -170,6 +174,11 @@ def main() -> int:
     assert_contains(builder, '"Install-UniversalAgent.ps1"', label="Build-WindowsAgentPackage.ps1")
     assert_contains(builder, '"Register-CudyAgentInstallation.ps1"', label="Build-WindowsAgentPackage.ps1")
     assert_contains(builder, '"Uninstall-CudyAgent.ps1"', label="Build-WindowsAgentPackage.ps1")
+
+    version_file_check = updater.index('if (Test-Path -LiteralPath $VersionFile)')
+    env_version_check = updater.index('if ($env:AGENT_VERSION_CODE)')
+    if version_file_check > env_version_check:
+        raise AssertionError("Update-AgentPackage.ps1 must prefer agent.version.json over AGENT_VERSION_CODE")
 
     print("Windows agent packaging regression passed.")
     return 0

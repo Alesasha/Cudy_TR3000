@@ -3,8 +3,8 @@ param(
     [string]$AgentSecretsDir = "$PSScriptRoot\..\secrets\agents",
     [string]$SourceDir = "$PSScriptRoot\agent-windows",
     [string]$OutputDir = "$PSScriptRoot\..\secrets\agents",
-    [string]$VersionName = "1.27",
-    [int]$VersionCode = 28,
+    [string]$VersionName = "1.28",
+    [int]$VersionCode = 29,
     [switch]$IncludeRuntime,
     [switch]$SkipZip
 )

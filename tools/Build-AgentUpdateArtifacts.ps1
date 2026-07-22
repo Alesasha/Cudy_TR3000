@@ -1,7 +1,7 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\..\build\agent-updates",
-    [string]$VersionName = "1.27",
-    [int]$VersionCode = 28,
+    [string]$VersionName = "1.28",
+    [int]$VersionCode = 29,
     [string]$LinuxVersionName = "1.31",
     [int]$LinuxVersionCode = 32,
     [string]$AndroidVersionName = "1.48",

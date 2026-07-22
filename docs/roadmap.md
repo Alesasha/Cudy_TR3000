@@ -24,7 +24,7 @@ accepted baseline.
 
 ### Windows
 
-1. Completed: Windows `1.27 (28)` was rebuilt, package contents/hash were
+1. Completed: Windows `1.28 (29)` was rebuilt, package contents/hash were
    verified, and the new desktop UI passed source and packaged runtime smoke.
 2. Run emergency-stop and watchdog tests before enabling the task.
 3. Enable the managed task in a controlled window with the independent recovery path.

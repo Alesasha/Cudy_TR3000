@@ -17,8 +17,7 @@ This document records the verified live state. Planned work belongs in
   - Android `1.48 (49)` release candidate; its SHA256 is recorded in
     `docs/android-agent.md` and the production update manifest;
   - Linux `1.31 (32)`, built from the current source with a manifest-verified package;
-  - Windows `1.27 (28)`, SHA256
-    `e4719300e06ec22b835fdef75266bbabd698c23c8ab7fa75ac387642e576b6e2`.
+  - Windows `1.28 (29)`, staged for production with a manifest-verified package.
 - The recovery checkpoint includes Cudy PBR/rollback safety, private backup/SSH
   access, bounded fallback retries and the Windows OpenAI-maintenance source.
 
@@ -380,7 +379,10 @@ Remaining Android concerns:
 
 ## Windows Agent
 
-- Windows `1.26 (27)` is built and published to the production update channel.
+- Windows `1.28 (29)` is built. Its update check runs after a successful policy
+  cycle in a detached process and no more than once per six hours. Automatic
+  discovery only downloads and verifies the package; file replacement waits
+  for explicit user action in the desktop UI.
 - Packaging, cached-policy fallback, emergency stop and watchdog regression
   tests exist.
 - The production package now includes a responsive WinForms desktop UI and
@@ -388,6 +390,9 @@ Remaining Android concerns:
   Start/Stop delegate to the existing elevated task and full direct-route
   rollback, diagnostics are copyable, and a completed update relaunches the
   replaced UI automatically. Source and packaged runtime smoke tests pass.
+- Update packages now verify the control-server SHA256, prefer the installed
+  `agent.version.json` over stale environment defaults, preserve activation,
+  and remove old staged data after a successful or already-current update.
 - The development workstation scheduled task is intentionally disabled.
 - A universal desktop package can now activate a fresh Windows installation
   with the same one-time code used by Android. The bootstrap SSH key is pinned

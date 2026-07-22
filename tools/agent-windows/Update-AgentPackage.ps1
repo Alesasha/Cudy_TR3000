@@ -13,9 +13,6 @@ param(
 $ErrorActionPreference = "Stop"
 
 function Read-AgentVersionCode {
-    if ($env:AGENT_VERSION_CODE) {
-        return [int64]$env:AGENT_VERSION_CODE
-    }
     if (Test-Path -LiteralPath $VersionFile) {
         try {
             $payload = Get-Content -Raw -LiteralPath $VersionFile | ConvertFrom-Json
@@ -23,6 +20,9 @@ function Read-AgentVersionCode {
         } catch {
             return 0
         }
+    }
+    if ($env:AGENT_VERSION_CODE) {
+        return [int64]$env:AGENT_VERSION_CODE
     }
     return 0
 }
@@ -95,7 +95,6 @@ if ($ApplyStaged) {
     if (-not $StagePath -or -not (Test-Path -LiteralPath $StagePath)) {
         throw "StagePath is required for -ApplyStaged."
     }
-    Start-Sleep -Seconds 3
     Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     Copy-UpdateFiles -SourceDir $StagePath
     $manifestPath = Join-Path $StagePath "agent.version.json"
@@ -126,6 +125,7 @@ $manifest = Get-UpdateManifest
 $currentCode = Read-AgentVersionCode
 $latestCode = [int64]($manifest.version_code)
 if (-not $Force -and $latestCode -le $currentCode) {
+    Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
     Write-Host "Agent is up to date: current=$currentCode latest=$latestCode"
     exit 0
 }
@@ -134,33 +134,53 @@ if (-not $manifest.download_url) {
     exit 0
 }
 
-Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
-$archivePath = Join-Path $WorkDir ("agent-update-{0}-{1}.zip" -f $Platform, $latestCode)
 $downloadUrl = [string]$manifest.download_url
 if ($downloadUrl.StartsWith("/")) {
     $downloadUrl = ($ControlUrl.TrimEnd("/")) + $downloadUrl
 }
+$stageRoot = Join-Path $WorkDir "stage"
+$stagedManifestPath = Join-Path $stageRoot "agent.version.json"
+$stagedCode = 0
+if (Test-Path -LiteralPath $stagedManifestPath) {
+    try {
+        $stagedCode = [int64]((Get-Content -Raw -LiteralPath $stagedManifestPath | ConvertFrom-Json).version_code)
+    } catch {
+        $stagedCode = 0
+    }
+}
+if (-not $Force -and $stagedCode -eq $latestCode) {
+    if ($FromAgent) {
+        Write-Host "Agent update is downloaded and waiting for user approval: current=$currentCode latest=$latestCode"
+        exit 0
+    }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath `
+        -ApplyStaged -StagePath $stageRoot -TaskName $TaskName -VersionFile $VersionFile
+    exit $LASTEXITCODE
+}
+
+Remove-Item -LiteralPath $WorkDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $WorkDir | Out-Null
+$archivePath = Join-Path $WorkDir ("agent-update-{0}-{1}.zip" -f $Platform, $latestCode)
 $downloadHeaders = @{}
 if ($env:VPN_AGENT_TOKEN -and $downloadUrl.StartsWith($ControlUrl.TrimEnd("/"))) {
     $downloadHeaders["Authorization"] = "Bearer $($env:VPN_AGENT_TOKEN)"
 }
 Invoke-WebRequest -UseBasicParsing -Uri $downloadUrl -Headers $downloadHeaders -OutFile $archivePath -TimeoutSec 120
+$expectedSha256 = ([string]$manifest.sha256).Trim().ToLowerInvariant()
+if ($expectedSha256) {
+    $actualSha256 = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualSha256 -ne $expectedSha256) {
+        throw "Downloaded update checksum mismatch."
+    }
+}
 $stage = Expand-UpdateArchive -ArchivePath $archivePath
 ($manifest | ConvertTo-Json -Depth 10) | Set-Content -Encoding UTF8 -LiteralPath (Join-Path $stage "agent.version.json")
 
-$script = Join-Path $PSScriptRoot "Update-AgentPackage.ps1"
-Start-Process -WindowStyle Hidden -FilePath "powershell.exe" -ArgumentList @(
-    "-NoProfile",
-    "-ExecutionPolicy", "Bypass",
-    "-File", "`"$script`"",
-    "-ApplyStaged",
-    "-StagePath", "`"$stage`"",
-    "-TaskName", "`"$TaskName`"",
-    "-VersionFile", "`"$VersionFile`""
-) | Out-Null
-Write-Host "Agent update downloaded and apply process started: latest=$latestCode current=$currentCode"
 if ($FromAgent) {
-    exit 10
+    Write-Host "Agent update downloaded and verified; waiting for user approval: current=$currentCode latest=$latestCode"
+    exit 0
 }
-exit 0
+
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath `
+    -ApplyStaged -StagePath $stage -TaskName $TaskName -VersionFile $VersionFile
+exit $LASTEXITCODE

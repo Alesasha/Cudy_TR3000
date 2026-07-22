@@ -13,6 +13,7 @@ param(
     [string]$ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS,
     [string]$TaskName = "Cudy Managed Route Agent",
     [int]$PollSeconds = 60,
+    [int]$UpdateCheckSeconds = 21600,
     [int]$LocalPort = 18765,
     [string]$LogPath = "$PSScriptRoot\managed-agent.log",
     [switch]$VerboseRoutes,
@@ -23,7 +24,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 $script:LastSharedAwgSelections = @{}
+$script:UpdateCheckProcess = $null
+$script:NextUpdateCheckAt = [datetime]::MinValue
 . "$PSScriptRoot\agent.env.ps1"
+if ($env:AGENT_UPDATE_CHECK_SECONDS) {
+    $UpdateCheckSeconds = [Math]::Max(300, [int]$env:AGENT_UPDATE_CHECK_SECONDS)
+}
 if (-not $ControlEndpointManifestUrls -and $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS) {
     $ControlEndpointManifestUrls = $env:VPN_CONTROL_ENDPOINT_MANIFEST_URLS
 }
@@ -505,27 +511,39 @@ function Invoke-AgentSelfUpdate {
     if (-not (Test-Path -LiteralPath $script)) {
         return $false
     }
+    if ($script:UpdateCheckProcess) {
+        if (-not $script:UpdateCheckProcess.HasExited) {
+            return $false
+        }
+        $exitCode = $script:UpdateCheckProcess.ExitCode
+        $script:UpdateCheckProcess.Dispose()
+        $script:UpdateCheckProcess = $null
+        if ($exitCode -ne 0) {
+            Write-AgentLine "background self-update check failed exit=$exitCode" -Level WARN
+        }
+    }
+    if ((Get-Date) -lt $script:NextUpdateCheckAt) {
+        return $false
+    }
+    $script:NextUpdateCheckAt = (Get-Date).AddSeconds($UpdateCheckSeconds)
     $env:VPN_CONTROL_URL = "http://127.0.0.1:$LocalPort"
-    $result = Invoke-ExternalCommand -FilePath "powershell.exe" -Arguments @(
+    $stdout = Join-Path $PSScriptRoot "logs\update-check.out.log"
+    $stderr = Join-Path $PSScriptRoot "logs\update-check.err.log"
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $stdout) | Out-Null
+    try {
+        $script:UpdateCheckProcess = Start-Process -FilePath "powershell.exe" -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -ArgumentList @(
         "-NoProfile",
         "-ExecutionPolicy", "Bypass",
-        "-File", $script,
+        "-File", "`"$script`"",
         "-ControlUrl", "http://127.0.0.1:$LocalPort",
         "-Platform", "windows",
-        "-TaskName", $TaskName,
+        "-TaskName", "`"$TaskName`"",
         "-FromAgent"
-    ) -TimeoutSeconds 300
-    $exitCode = $result.ExitCode
-    $text = $result.Output
-    if ($text) {
-        Write-AgentLine "self-update: $text"
-    }
-    if ($exitCode -eq 10) {
-        Write-AgentLine "self-update started; exiting current agent process."
-        return $true
-    }
-    if ($exitCode -ne 0) {
-        Write-AgentLine "self-update check failed exit=$exitCode $text" -Level WARN
+    )
+        Write-AgentLine "background self-update check started; next check in ${UpdateCheckSeconds}s"
+    } catch {
+        Write-AgentLine "background self-update check could not start: $($_.Exception.Message)" -Level WARN
     }
     return $false
 }
@@ -905,13 +923,6 @@ do {
         } catch {
             Write-AgentLine "control unavailable; trying cached policy: $($_.Exception.Message)" -Level WARN
         }
-        if ($controlOnline) {
-            if (Invoke-AgentSelfUpdate) {
-                break
-            }
-        } else {
-            Write-AgentLine "self-update skipped because control is unavailable" -Level WARN
-        }
         $cycleInterfaceMaps = New-Object System.Collections.Generic.List[string]
         foreach ($map in $baseInterfaceMaps) {
             $cycleInterfaceMaps.Add($map) | Out-Null
@@ -1019,6 +1030,9 @@ do {
         $result = Apply-PolicyRoutes -InterfaceMaps $cycleInterfaceMaps.ToArray() -Cached -PostStatus:$controlOnline
         Write-AgentLine "routes applied: ip_routes=$($result.IpRoutes) domain_routes=$($result.DomainRoutes) commands=$($result.Commands) status_posted=$($result.StatusPosted)"
         Write-AgentHeartbeat -RouteResult $result -ControlOnline:$controlOnline
+        if ($controlOnline) {
+            Invoke-AgentSelfUpdate | Out-Null
+        }
         if ($controlOnline) {
             $probeResult = Run-ProbeJobs -InterfaceMaps $cycleInterfaceMaps.ToArray()
             if ($probeResult.Jobs -gt 0) {

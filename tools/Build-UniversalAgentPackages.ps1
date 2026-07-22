@@ -1,9 +1,9 @@
 param(
     [string]$OutputDir = "$PSScriptRoot\..\build\universal-agents",
-    [string]$WindowsVersionName = "1.27",
-    [int]$WindowsVersionCode = 28,
-    [string]$LinuxVersionName = "1.26",
-    [int]$LinuxVersionCode = 27,
+    [string]$WindowsVersionName = "1.28",
+    [int]$WindowsVersionCode = 29,
+    [string]$LinuxVersionName = "1.31",
+    [int]$LinuxVersionCode = 32,
     [ValidateSet("windows", "linux")]
     [string[]]$Platforms = @("windows", "linux")
 )
